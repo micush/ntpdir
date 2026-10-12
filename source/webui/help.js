@@ -481,14 +481,14 @@ const NTPDIR_HELP = {
       ["h", "Every node"],
       "Choose **Cluster** in the Node menu. **Capture on all nodes** runs the same capture on every node at the same moment for 5, 10, 30 or 60 seconds, then **Download .tgz** gives one `.pcap` per node (this node's is marked `-this-node`), a `summary.txt`, and an `errors.txt` naming any node that could not capture and why. Each node keeps its newest packets (about 4 MB). This does not touch what anyone has on a node's own Capture page. It is the way to see whether what one node sent is what another received.",
       ["h", "Filter"],
-      "The filter is a small version of the tcpdump language, applied on the node before a packet is kept: `host 10.0.0.5`, `src host`, `dst host`, `net 10.0.0.0/24`, `port 123`, `src port`, `dst port`, `portrange 50-60`, `tcp`, `udp`, `icmp`, `icmp6`, `arp`, `ip`, `ip6`, `ntp` (port 123), `ether host 00:1a:7c:01:02:00` (also `src`, `dst`), joined with `and`, `or`, `not` and brackets. A protocol before host, net or port narrows it (`tcp port 53`). A mistake is reported when you press Start. Names are not looked up: give addresses. An empty filter keeps everything, which on a busy NTP relay fills the buffer in moments, so filter.",
+      "The filter is a small version of the tcpdump language, applied on the node before a packet is kept: `host 10.0.0.5`, `src host`, `dst host`, `net 10.0.0.0/24`, `port 123`, `src port`, `dst port`, `portrange 50-60`, `tcp`, `udp`, `icmp`, `icmp6`, `arp`, `ip`, `ip6`, `ntp` (port 123), `ether host 00:1a:7c:01:02:00` (also `src`, `dst`), joined with `and`, `or`, `not` and brackets. A protocol before host, net or port narrows it (`tcp port 123`). A mistake is reported when you press Start. Names are not looked up: give addresses. An empty filter keeps everything, which on a busy NTP relay fills the buffer in moments, so filter.",
       ["h", "Fields"],
       ["fields", [
         ["Interface", "The interface to listen on. In Cluster mode every node must have an interface of that name (the list is this node's); a node without it is reported in the result."],
         ["Filter", "Optional, up to 300 characters, as above. Press Enter to start."],
         ["How long", "Cluster mode only: 5, 10 (default), 30 or 60 seconds."],
       ]],
-      ["cli", "ntpdir --capture-interfaces\nntpdir --capture eth0 --capture-seconds 10 --capture-filter \"host 10.20.0.205 and port 53\"\nntpdir --capture eth0 --capture-file /tmp/eth0.pcap\nntpdir --capture eth0 --capture-seconds 30 --all-nodes --capture-file /tmp/cluster.tgz\n(without --capture-file the packets are printed, the first 500; with --all-nodes a file is needed)"],
+      ["cli", "ntpdir --capture-interfaces\nntpdir --capture eth0 --capture-seconds 10 --capture-filter \"host 10.20.0.205 and port 123\"\nntpdir --capture eth0 --capture-file /tmp/eth0.pcap\nntpdir --capture eth0 --capture-seconds 30 --all-nodes --capture-file /tmp/cluster.tgz\n(without --capture-file the packets are printed, the first 500; with --all-nodes a file is needed)"],
     ],
   },
   log: {

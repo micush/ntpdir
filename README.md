@@ -102,7 +102,11 @@ Every gateway serves NTP on its VIP; there is no switch for it. Give the gateway
 
 The NTP page (Monitor ▸ NTP, or `ntpdir --show-ntp`) shows the ranking, health, round trip, offset, stratum and counters of every pool.
 
+![Monitor ▸ NTP: each gateway's upstream servers, ranked, with state, stratum, offset, root distance and round trip](snaps/ntp.png)
+
 In the GUI, the settings are under Configure ▸ NTP relay, on four tabs: **Servers**, **Health & balancing**, **Listener** and **Clients**. In the file they are the top-level `ntp` block (shared by the cluster) and, per gateway, an optional `ntp` block inside the group.
+
+![Configure ▸ NTP relay: the shared upstream servers and, on other tabs, health, balancing, listener and client limits](snaps/ntp-relay.png)
 
 **Relay caveat.** The upstream servers see the relay's address for every client, so a server that rate-limits by source address limits all your clients together. Give the relay's address a generous limit on your own servers, or list several servers.
 
@@ -283,7 +287,7 @@ Groups without their own `ntp` block use the top-level one.
 
 A gateway can carry extra addresses of **any subnet** next to its shared address (`extra_vips`). In the GUI, right-click the gateway circle ▸ *Add anycast address*; each address becomes a pill beside the circle with its own menu. On the command line, use `--canvas-add anycast --group 1 --address 203.0.113.123`, `--canvas-del anycast …`, or `--canvas-set gateway --group 1 --anycast A,B` to replace the whole list.
 
-Anycast addresses are not checked against the interface and do not take part in the election. **Every** node running the gateway puts them on `lo` and answers NTP on them, with the same servers and failover as the shared address, on `listen_port`. They are shared across the cluster and need DNS servers on the gateway.
+Anycast addresses are not checked against the interface and do not take part in the election. **Every** node running the gateway puts them on `lo` and answers NTP on them, with the same servers and failover as the shared address, on `listen_port`. They are shared across the cluster and need NTP servers on the gateway.
 
 An address is held only while this node can answer on it: the gateway is running and not paused, the listener is up, and at least one NTP server is healthy. Otherwise it is taken off `lo`, so the route disappears from your routing daemon. It is added with a 10-second lifetime that AnyTime renews every 3 seconds, so if AnyTime crashes or hangs, the kernel removes the address by itself within about 10 seconds instead of leaving a route that nothing answers.
 
@@ -809,7 +813,7 @@ A node that is not clustered, is the only member, or serves nothing is never hel
 
 After building, the node does not restart until another member has been serving each of its gateways for at least 15 seconds (the same check that gates a rolling update; `--update-apply --yes` skips it). A stopping node says so: a controller announces that it is leaving and the best remaining node becomes controller at once, and a forwarder tells the controller, which covers its virtual MAC immediately instead of a hold time later.
 
-Whoever covers a MAC also announces it on the wire (an ARP probe or IPv6 DAD solicitation from that MAC, which changes no host's neighbour cache). A switch or a Linux bridge keeps a MAC on its old port until something transmits from the new one, and clients cached on that MAC would lose their answers for about 3 seconds. A returning node announces its MAC once it can answer, and the controller hands the MAC back a moment later. Forwarders, and a controller for the MACs it covers, repeat the announcement every 2 seconds, so a switch entry that went stale is corrected in seconds. On start-up a gateway joins only after its DNS pool answers.
+Whoever covers a MAC also announces it on the wire (an ARP probe or IPv6 DAD solicitation from that MAC, which changes no host's neighbour cache). A switch or a Linux bridge keeps a MAC on its old port until something transmits from the new one, and clients cached on that MAC would lose their answers for about 3 seconds. A returning node announces its MAC once it can answer, and the controller hands the MAC back a moment later. Forwarders, and a controller for the MACs it covers, repeat the announcement every 2 seconds, so a switch entry that went stale is corrected in seconds. On start-up a gateway joins only after its NTP pool answers.
 
 Measured with two real nodes in network namespaces on a bridge and a client sending NTP requests to the VIP every 100 ms, pinned to the restarting node's MAC: restarting the controller or a forwarder caused no failed requests.
 

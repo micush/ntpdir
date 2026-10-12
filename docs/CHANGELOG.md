@@ -1,5 +1,24 @@
 # Changelog
 
+## [v6] - 2026-10-12 — README and screenshots refreshed for NTP
+
+### Changed
+- All 18 screenshots in `snaps/` regenerated from a live two-node NTP cluster (anycast, capture, cluster, gateway-stats, gateways, history, host, log, login, node, ntp-relay, ntp, statistics, topology-menu, topology, upgrade, users, web-certificate).
+- README gained two images: `snaps/ntp.png` (Monitor ▸ NTP) and `snaps/ntp-relay.png` (Configure ▸ NTP relay).
+
+### Fixed
+- Leftover DNS wording: the cluster-join prompts in `cli.go` ("NTP block" not "DNS block"), two README sentences ("NTP servers", "NTP pool"), the capture filter and anycast address placeholders in `app.js`, and the capture examples in `help.js` (`port 123` not `port 53`).
+
+### Verified
+- Screenshots taken in Chromium (dark, 1280x760) against a two-node cluster with stub NTP servers, generated client traffic, real PAM users and a real update push.
+- gofmt, build, vet, `go test -race -count=1`, cross-compile amd64/arm64/arm/386/riscv64, `CGO_ENABLED=0` vet and test, `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The screenshots were taken from a build with the `cli.go` fix but before the final `app.js`/`help.js` placeholder edits.
+- The Upgrade shot's newest event is a "cancelled" entry from a mistaken demo command; History shows setup BGP entries; the NTP page's right-hand columns clip at 1280px.
+- The first `go test -race` run failed once (failing test not captured); the rerun passed. Timing-sensitive tests have been flaky before (`TestLogServerFlips`, `TestSpreadSharesRealQueries`).
+- dnsdir on a real host.
+
 ## [v5] - 2026-10-12 — Fix: pausing a server could pause the whole node; controller mark on a paused node
 
 ### Fixed

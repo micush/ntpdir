@@ -306,9 +306,9 @@ func (f *cliFlags) run(sock string) bool {
 		}
 		decode(op(sock, "cluster.token", nil), &r)
 		fmt.Printf("Join code (single use, valid until %s):\n\n%s\n\nOn the new node:  ntpdir --cluster-join '%s'\n", lt(r.Expires), r.Code, r.Code)
-		fmt.Println("\nThe new node's shared settings (DNS, VIPs, keys) will be replaced by this cluster's; its interface, priority and weight stay its own.")
+		fmt.Println("\nThe new node's shared settings (NTP block, VIPs, keys) will be replaced by this cluster's; its interface, priority and weight stay its own.")
 	case *f.clusterJoin != "":
-		askYes("Join this node to the cluster? Its shared settings (DNS block, VIPs, keys, timers) will be replaced by the cluster's; a snapshot of the current config is saved first.", *f.yes)
+		askYes("Join this node to the cluster? Its shared settings (NTP block, VIPs, keys, timers) will be replaced by the cluster's; a snapshot of the current config is saved first.", *f.yes)
 		var v ClusterView
 		decode(op(sock, "cluster.join", map[string]any{"code": *f.clusterJoin}), &v)
 		fmt.Println("Joined.")

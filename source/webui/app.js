@@ -1556,7 +1556,7 @@
 
     function anycastForm(g, edit) {
       form(edit ? "Edit anycast address" : "Add anycast address", [
-        { k: "addr", l: "Anycast address", v: edit || "", ph: "203.0.113.53 or 2001:db8:53::1",
+        { k: "addr", l: "Anycast address", v: edit || "", ph: "203.0.113.123 or 2001:db8:123::1",
           hint: "Any subnet. Held on every node while an NTP server answers. Other gateways may carry it too." },
       ], (v) => {
         const a = (v.addr || "").trim().replace(/\/(32|128)$/, "").toLowerCase();
@@ -3416,7 +3416,7 @@
         cursor = 0; shown = 0; last = null; running = false; job = null; ifs = null;
         status = h("div", { "aria-live": "polite" });
         iface = ifaceSelect();
-        filter = h("input", { type: "text", class: "grow", placeholder: "Filter, e.g. host 10.20.0.205 and port 53", "aria-label": "Capture filter", spellcheck: "false", autocomplete: "off", maxlength: "300",
+        filter = h("input", { type: "text", class: "grow", placeholder: "Filter, e.g. host 10.20.0.205 and port 123", "aria-label": "Capture filter", spellcheck: "false", autocomplete: "off", maxlength: "300",
           onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); (cluster() ? goAll : start)(); } } });
         if (cluster()) {
           durSel = h("select", { "aria-label": "How long" }, [["5", "5 seconds"], ["10", "10 seconds"], ["30", "30 seconds"], ["60", "60 seconds"]].map(([v, t]) => h("option", { value: v }, t)));
