@@ -1,5 +1,16 @@
 # Changelog
 
+## [v15] - 2026-10-12 — Statistics: outcome card
+
+### Changed
+- Monitor ▸ Statistics: the "NTP versions" card always read 100% Other, because chrony reports a client's address and packet counts but not the NTP version. It is replaced by an **Outcome** card (answered, refused, kiss-o'-death, failed). The screenshots under `snaps/` are still the old ones.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The card in a browser (checked by reading the code only).
+
 ## [v14] - 2026-10-12 — A red gateway answers nobody
 
 ### Changed

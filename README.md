@@ -630,7 +630,7 @@ Monitor ▸ Statistics (or `ntpdir --stats`) shows what chrony has done (read fr
 - donuts for the NTP version (v1 to v4) and the IP family, and
 - the top clients (with the reverse-DNS name once it is known). The top-servers list shows one entry, `chrony`. The NTP version donut shows "Other" because chrony does not report versions.
 
-![Monitor ▸ Statistics: request rates, outcomes, NTP versions, IP families and top clients](snaps/statistics.png)
+![Monitor ▸ Statistics: request rates, outcomes, IP families and top clients](snaps/statistics.png)
 
 The range is Last Hour, Last Day, Last Week, Last Month, or a custom start and end.
 

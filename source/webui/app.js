@@ -2588,6 +2588,7 @@
     ];
     // an NTP version / IP family keeps its colour whatever its rank
     const TYPE_CLS = { "NTPv4": "t1", "NTPv3": "t2", "NTPv2": "t3", "NTPv1": "t4" };
+    const OUTCOME_CLS = Object.fromEntries(SERIES.filter((x) => x.key !== "total").map((x) => [x.label, x.cls]));   // chrony cannot tell the NTP version of a client, so the card shows how the requests ended
     const PROTO_CLS = { IPv4: "t1", IPv6: "t2" };
     const RANGES = [["1h", "Last Hour"], ["1d", "Last Day"], ["7d", "Last Week"], ["30d", "Last Month"], ["custom", "Custom"]];
     const REFRESH_MS = 10000;
@@ -2933,7 +2934,7 @@
       clear(status);
       drawTiles(d);
       drawChart(d);
-      clear(pies).append(donut("NTP versions" + kindLabel(), d.versions, TYPE_CLS, 4), donut("IP family" + kindLabel(), d.families, PROTO_CLS, 2));
+      clear(pies).append(donut("Outcome" + kindLabel(), SERIES.filter((x) => x.key !== "total").map((x) => ({ name: x.label, count: d.sums[x.key] || 0 })).filter((x) => x.count > 0), OUTCOME_CLS, 4), donut("IP family" + kindLabel(), d.families, PROTO_CLS, 2));
       const sumOf = (l) => l.reduce((a, e) => a + e.count, 0);
       fill(tops,
         topTable("Top clients" + kindLabel(), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), clientsMore, () => { clientsMore = !clientsMore; draw(last); }, true,
