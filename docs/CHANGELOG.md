@@ -1,5 +1,16 @@
 # Changelog
 
+## [v16] - 2026-10-12 — Topology: the servers chrony uses are blue
+
+### Fixed
+- The links from the gateway to its servers were never blue any more: the highlight belonged to the old relay and nothing set it after chrony replaced it. A link is now blue (with a "used for time" entry in the legend) when chrony on the node being viewed has that server as its selected (`*`) or combined (`+`) source, and the server's tooltip says so. Servers chrony has but does not use (not combined, falseticker, unreachable) stay grey.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The drawing in a browser, and against a real chronyd (the marks come from `chronyc sources` as before).
+
 ## [v15] - 2026-10-12 — Statistics: outcome card
 
 ### Changed

@@ -30,6 +30,9 @@ type CanvasServer struct {
 	Falseticker bool      `json:"falseticker,omitempty"`
 	Uptime      *UpInfo   `json:"uptime,omitempty"`
 	Paused      string    `json:"paused,omitempty"` // "node" or "all" when the server is paused
+	// Chrony is chrony's mark for the server when it is one of this node's sources: * selected, + combined (those two are the ones the
+	// time comes from), - not combined, ? unreachable, x falseticker, ~ too variable.
+	Chrony string `json:"chrony,omitempty"`
 }
 
 // CanvasFamily is the state of one address family of a gateway (a gateway with
@@ -125,6 +128,7 @@ func membersOf(rows []SnapshotRow, gid int) []CanvasMember {
 // the probe pools currently report.
 func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []CanvasGateway {
 	out := make([]CanvasGateway, 0, len(dc.Groups))
+	chronyNow := chrony.State()
 	for i := range dc.Groups {
 		g := &dc.Groups[i]
 		cg := CanvasGateway{Name: g.Name, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
@@ -162,6 +166,12 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 					cs.Status, cs.Detail = "ok", fmt.Sprintf("healthy, %.2f ms", st.EWMAMS)
 					if t := st.Time; t != nil {
 						cs.Detail = fmt.Sprintf("stratum %d, offset %+.2f ms, round trip %.2f ms", t.Stratum, t.OffsetMS, st.EWMAMS)
+					}
+				}
+				if !cfg.isPaused(addr) {
+					cs.Chrony = chronyNow.stateOf(addr)
+					if cs.Status == "ok" && (cs.Chrony == "*" || cs.Chrony == "+") {
+						cs.Detail += " — chrony takes the time from it"
 					}
 				}
 				cg.Servers = append(cg.Servers, cs)
