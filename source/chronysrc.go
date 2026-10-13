@@ -217,6 +217,7 @@ type chronyMgr struct {
 	pending  bool     // the file was written but chrony has not yet taken it
 	state    ChronyState
 	confBody string                  // the client file as last written, "" before the first look
+	muted    bool                    // no server is in service: chrony is told to answer nobody
 	allowed  bool                    // the allow rules were put into the running chrony at least once
 	keyFile  string                  // where the port and rate limit chrony runs with are remembered ("": not kept)
 	seen     map[string]chronyClient // chrony's totals per client at the last look (nil before the first)
@@ -285,7 +286,10 @@ func serverNames(body string) []string {
 }
 
 // chronyConfBody is the file for chrony's confdir: the port, who may ask and how often.
-func chronyConfBody(d NTPConfig) (string, error) {
+func chronyConfBody(d NTPConfig) (string, error) { return chronyConfBodyMuted(d, false) }
+
+// chronyConfBodyMuted is the same file; muted leaves out every allow line, so chrony answers nobody, also after a restart.
+func chronyConfBodyMuted(d NTPConfig, muted bool) (string, error) {
 	var b strings.Builder
 	b.WriteString(chronyHeader)
 	port := d.ListenPort
@@ -293,16 +297,18 @@ func chronyConfBody(d NTPConfig) (string, error) {
 		port = 123
 	}
 	fmt.Fprintf(&b, "port %d\n", port)
-	b.WriteString("allow 127.0.0.0/8\nallow ::1\n")
-	if len(d.AllowedClients) == 0 {
-		b.WriteString("allow all\n")
-	} else {
-		nets, err := parseClientNets(d.AllowedClients)
-		if err != nil {
-			return "", err
-		}
-		for _, n := range nets {
-			fmt.Fprintf(&b, "allow %s\n", n.String())
+	if !muted {
+		b.WriteString("allow 127.0.0.0/8\nallow ::1\n")
+		if len(d.AllowedClients) == 0 {
+			b.WriteString("allow all\n")
+		} else {
+			nets, err := parseClientNets(d.AllowedClients)
+			if err != nil {
+				return "", err
+			}
+			for _, n := range nets {
+				fmt.Fprintf(&b, "allow %s\n", n.String())
+			}
 		}
 	}
 	if d.ClientRate > 0 {
@@ -341,9 +347,14 @@ func restartKey(body string) string {
 }
 
 // allowLive puts the allow rules into the running chrony: who may ask can change without a restart.
-func allowLive(d NTPConfig) error {
+func allowLive(d NTPConfig) error { return allowLiveMuted(d, false) }
+
+func allowLiveMuted(d NTPConfig, muted bool) error {
 	if _, err := chronyc("deny", "all"); err != nil { // forgets every earlier rule, whatever its family
 		return err
+	}
+	if muted {
+		return nil
 	}
 	rules := []string{"127.0.0.0/8", "::1"}
 	if len(d.AllowedClients) == 0 {
@@ -413,7 +424,10 @@ func (m *chronyMgr) needsRestart() bool {
 // chrony: the port and the rate limit are read only at start, so a change of either is left for the rolling restart
 // (chronyroll.go), which takes the nodes one at a time and out of service while chrony starts.
 func (m *chronyMgr) applyClients(d NTPConfig) error {
-	body, err := chronyConfBody(d)
+	m.mu.Lock()
+	muted := m.muted
+	m.mu.Unlock()
+	body, err := chronyConfBodyMuted(d, muted)
 	if err != nil {
 		return err
 	}
@@ -428,7 +442,7 @@ func (m *chronyMgr) applyClients(d NTPConfig) error {
 	if !changed && !first {
 		return nil
 	}
-	if err := allowLive(d); err != nil {
+	if err := allowLiveMuted(d, muted); err != nil {
 		// chrony is not running: it reads the file when it starts
 		m.warnEvery("allow", "chrony: could not apply the allowed clients now ("+err.Error()+"); chrony reads them when it starts")
 		return nil
@@ -440,6 +454,25 @@ func (m *chronyMgr) applyClients(d NTPConfig) error {
 		infof("chrony: allowed clients applied without a restart")
 	}
 	return nil
+}
+
+// setServing says whether any server is in service.  With none, chrony is told to answer nobody (the gateway is red: clients
+// are not to get a time from a source that is gone), and the allowed clients come back as soon as one is.  Reports a change.
+func (m *chronyMgr) setServing(serve bool, d NTPConfig) bool {
+	m.mu.Lock()
+	if m.muted == !serve {
+		m.mu.Unlock()
+		return false
+	}
+	m.muted = !serve
+	m.mu.Unlock()
+	if serve {
+		infof("chrony: a server is in service again; answering clients")
+	} else {
+		warnf("chrony: no server is in service; not answering clients until one is")
+	}
+	_ = m.applyClients(d)
+	return true
 }
 
 // ── Reading chrony ───────────────────────────────────────────────────────────

@@ -1163,8 +1163,11 @@
           { label: "Worst", cls: "t3", values: r.latency_max, text: (i) => f1(r.latency_max[i]) + " ms" }], { floor: 1, axis: msAxis, legend: true });
         let charts;
         if (r.kind === "gateway") {
+          const goff = (r.offset_ms || []).map((v) => (v == null ? -1 : Math.abs(v)));
           charts = [
-            tsChart("Availability", dd, [{ label: "Available", cls: "t3", values: r.avail, text: (i) => r.avail[i].toFixed(2) + "% of the time" }], { fixedMax: 100, axis: pctAxis })];
+            tsChart("Availability", dd, [{ label: "Available", cls: "t3", values: r.avail, text: (i) => r.avail[i].toFixed(2) + "% of the time" }], { fixedMax: 100, axis: pctAxis }),
+            tsChart("Clock offset", dd, [{ label: "Offset", cls: "t3", values: goff, text: (i) => (r.offset_ms[i] > 0 ? "+" : "") + Number(r.offset_ms[i]).toFixed(3) + " ms" }], { floor: 1, axis: msAxis }),
+            lat("Root delay")];
         } else {
           const off = (r.offset_ms || []).map((v) => (v == null ? -1 : Math.abs(v)));
           charts = [lat("Round trip"),

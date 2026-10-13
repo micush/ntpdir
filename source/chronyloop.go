@@ -56,6 +56,7 @@ func (s *Supervisor) syncChrony() {
 		_ = chrony.applyClients(s.sharedNTP())
 	}
 	servers, empty := s.chronySources()
+	chrony.setServing(len(servers) > 0, s.sharedNTP())
 	if err := chrony.applySources(servers, empty); err != nil {
 		chrony.warnEvery("sources", err.Error())
 	}

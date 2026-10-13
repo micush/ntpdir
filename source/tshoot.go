@@ -306,6 +306,21 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 	do(func() {
 		b.putText("system/services.txt", "# systemctl status ntpdir frr\n"+tshootRun("systemctl", "status", "ntpdir", "frr", "--no-pager", "-l"))
 	})
+	do(func() {
+		u := "chrony"
+		if _, err := os.Stat("/usr/lib/systemd/system/chronyd.service"); err == nil {
+			u = "chronyd"
+		} else if _, err := os.Stat("/lib/systemd/system/chronyd.service"); err == nil {
+			u = "chronyd"
+		}
+		var sb strings.Builder
+		sb.WriteString("# systemctl status " + u + "\n" + tshootRun("systemctl", "status", u, "--no-pager", "-l"))
+		sb.WriteString("\n# systemctl cat " + u + " (the unit and its drop-ins)\n" + tshootRun("systemctl", "cat", u, "--no-pager"))
+		sb.WriteString("\n# journalctl -u " + u + " -n 100\n" + tshootRun("journalctl", "-u", u, "-n", "100", "--no-pager"))
+		sb.WriteString("\n# who holds udp/123\n" + tshootRun("ss", "-ulnp", "sport", "=", ":123"))
+		sb.WriteString("\n# chronyc tracking\n" + tshootRun("chronyc", "tracking"))
+		b.putText("system/chrony-service.txt", sb.String())
+	})
 	do(func() { b.putText("ntpdir/goroutines.txt", goroutineDump()) })
 	do(func() {
 		b.putText("system/journal-ntpdir.txt", tshootRun("journalctl", "-u", "ntpdir", "-n", "1500", "--no-pager"))

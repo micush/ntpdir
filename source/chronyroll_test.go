@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +148,33 @@ func TestChronyRollWithoutPauseAndFailure(t *testing.T) {
 	}
 	if mg.ChronyRollLabel() != rollFailed {
 		t.Fatalf("a chrony that does not synchronise is a failure, label %q", mg.ChronyRollLabel())
+	}
+}
+
+func TestNoServerInServiceMutesChronyAndRestoresIt(t *testing.T) {
+	f := hookChrony(t)
+	d := NTPConfig{}
+	if err := chrony.applyClients(d); err != nil {
+		t.Fatal(err)
+	}
+	read := func() string {
+		b, _ := os.ReadFile(filepath.Join(chronyConfDir, "ntpdir.conf"))
+		return string(b)
+	}
+	if !strings.Contains(read(), "allow all") {
+		t.Fatal("clients are allowed while a server is in service")
+	}
+	if !chrony.setServing(false, d) || strings.Contains(read(), "allow") {
+		t.Fatalf("no server in service must leave no allow line:\n%s", read())
+	}
+	if chrony.setServing(false, d) {
+		t.Fatal("a second call with the same answer changes nothing")
+	}
+	last := f.calls[len(f.calls)-1]
+	if strings.Join(last, " ") != "deny all" {
+		t.Fatalf("the live rules must end with deny all, got %v", last)
+	}
+	if !chrony.setServing(true, d) || !strings.Contains(read(), "allow all") || f.restarts != 0 {
+		t.Fatalf("a server back restores the clients without a restart:\n%s", read())
 	}
 }

@@ -112,7 +112,7 @@ In the GUI, the settings are under Configure ▸ NTP, on three tabs: **Servers**
 
 **Which servers a node uses.** Only the servers of the topology: a gateway's own servers, or the shared list (Configure ▸ NTP ▸ Servers) for a gateway that has none of its own, from every gateway that is not paused. Every node uses the same list. chrony has one set of sources, so with several gateways the node uses the healthy servers of all of them together. A shared list that no gateway uses is not given to chrony.
 
-**When no server passes.** chrony keeps the sources it has (it is already synchronised and holds over), and the fallback servers become sources only while no normal server passes. If every server is paused, the sources file is emptied. If a node cannot reach any server, chrony's own holdover is all there is.
+**When no server passes.** chrony keeps the sources it has, and the fallback servers become sources only while no normal server passes. With no fallback either (every server down or paused) the gateway is red and the node answers no clients: ntpdir tells chrony to allow nobody, live and in its file, and the allowed clients come back as soon as one server passes. If every server is paused, the sources file is emptied.
 
 ### Choosing the upstream servers
 

@@ -107,10 +107,16 @@ func (s *StatusServer) sampleUptime(stop chan struct{}) {
 			return
 		case <-t.C:
 			// every pass is also one availability sample for the gateways' history (idle and paused say nothing)
+			cs := chrony.State()
 			for _, g := range s.canvasGroups() {
 				switch g.Status {
 				case "ok", "warn":
-					srvhist.series(gwKey(g.GroupID)).avail(true)
+					sr := srvhist.series(gwKey(g.GroupID))
+					sr.avail(true)
+					if cs.Running && cs.Synced { // the time itself: this node's clock against what chrony believes, and its distance to the reference
+						sr.off(time.Duration(cs.OffsetMS * float64(time.Millisecond)))
+						sr.lat(time.Duration(cs.RootDelay * float64(time.Millisecond)))
+					}
 				case "bad":
 					srvhist.series(gwKey(g.GroupID)).avail(false)
 				}

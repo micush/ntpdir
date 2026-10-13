@@ -1,5 +1,45 @@
 # Changelog
 
+## [v14] - 2026-10-12 — A red gateway answers nobody
+
+### Changed
+- When no server is in service and no fallback is configured (every server down or paused), the gateway is red, and the node now also stops answering clients: chrony is told `deny all` live and the `allow` lines are left out of its file (so a restart does not bring them back). The allowed clients return, without a restart, as soon as a server passes. Before, chrony kept answering from its holdover while the gateway showed red.
+
+### Added
+- A gateway's Statistics dialog (right-click ▸ Statistics…) now shows the time itself, not only availability: **Clock offset** (this node's clock against what chrony believes; with chrony `-x` in a container, the host's error) and **Root delay** (average and worst), one point a minute, all nodes of the cluster together. Recorded from chrony's tracking while the gateway is up and chrony is synchronised.
+
+### Verified
+- A test for the mute and the restore (file, live rules, no restart), gofmt, vet, tests, cross-builds.
+
+### Not verified
+- A live run against a real chronyd (the live rule is the same `deny all` that was checked in v8).
+
+## [v13] - 2026-10-12 — Chrony in containers, corrected
+
+### Fixed
+- v12's chrony drop-in did not work: Ubuntu starts chronyd with `ExecStart=!…` (full privileges), the drop-in dropped the `!`, and chronyd then failed with "Not superuser". The drop-in keeps the `!` and also clears `ConditionVirtualization`.
+- v12 decided "container" only from the installer's own capabilities. The installer now also reads PID 1's capabilities and, after starting chrony, asks systemd whether the unit was skipped (`ConditionResult=no`); if so it writes the drop-in and restarts chrony.
+
+### Added
+- The troubleshooting bundle has `system/chrony-service.txt`: `systemctl status` and `systemctl cat` of the chrony unit (drop-ins included), its last 100 journal lines, who holds UDP 123, and `chronyc tracking`.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function with the skipped/not-skipped answers forced, gofmt, vet, tests, cross-builds. The `!` fix follows a real failure log from an Ubuntu 26.04 LXC node.
+
+### Not verified
+- A full installer run in a container (the manual drop-in with `!` was given to the owner to try).
+
+## [v13] - 2026-10-12 — Detect a skipped chrony unit
+
+### Fixed
+- v12 decided whether the machine was a container from the installer's own capabilities; on some LXC setups systemd still skipped the chrony unit and no drop-in was written. The installer now also reads PID 1's capabilities and, after starting chrony, asks systemd whether the unit was skipped (`ConditionResult=no`); if so it writes the `chronyd -x` drop-in and restarts chrony.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function with the skipped/not-skipped answers forced, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- A real install in a container.
+
 ## [v12] - 2026-10-12 — Chrony in containers
 
 ### Fixed

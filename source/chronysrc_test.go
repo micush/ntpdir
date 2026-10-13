@@ -337,6 +337,9 @@ func TestSampleClientsCountsTheDifference(t *testing.T) {
 	if r.Sums.Answered != 48+7 || r.Sums.Refused != 2 {
 		t.Fatalf("answered %d refused %d, want 55 and 2", r.Sums.Answered, r.Sums.Refused)
 	}
+	if r.Sums.Clients != 2 {
+		t.Fatalf("clients %d, want 2", r.Sums.Clients)
+	}
 	// chrony restarted: its totals start again, and are counted as they are
 	f.answers["-n -c clients"] = "10.0.0.1,3,0,-5,127,0,0,0,127,4294967295\n"
 	m.sampleClients(qs)

@@ -329,21 +329,30 @@ chrony_version() {
 # systemd then skips chrony's unit ("start condition unmet"), so nothing answers NTP.  NTPDIR_NO_SYS_TIME=1/0 forces the answer.
 can_set_clock() {
   case "${NTPDIR_NO_SYS_TIME:-}" in 1) return 1;; 0) return 0;; esac
-  local cap; cap=$(awk '/^CapEff:/{print $2}' /proc/self/status 2>/dev/null)
-  [ -n "$cap" ] || return 0
-  [ $(( (0x$cap >> 25) & 1 )) = 1 ]
+  local f cap
+  for f in /proc/self/status /proc/1/status; do
+    cap=$(awk '/^CapEff:|^CapBnd:/{print $2}' "$f" 2>/dev/null)
+    for cap in $cap; do [ $(( (0x$cap >> 25) & 1 )) = 1 ] || return 1; done
+  done
+  return 0
+}
+# unit_skipped: systemd decided not to start the chrony unit because a start condition failed (what a container does)
+unit_skipped() {
+  [ "$HAVE_SYSTEMD" = 1 ] || return 1
+  case "${NTPDIR_UNIT_SKIPPED:-}" in 1) return 0;; 0) return 1;; esac
+  [ "$("$SYSTEMCTL" show -p ConditionResult --value "$(chrony_unit)" 2>/dev/null)" = no ]
 }
 chrony_dropin_dir() { echo "${NTPDIR_CHRONY_DROPIN_DIR:-/etc/systemd/system/$(chrony_unit).d}"; }
 # chrony without clock control (-x): it still tracks its sources and answers clients; the clock comes from the host
 configure_chrony_container() {
-  can_set_clock && return 0
+  can_set_clock && ! unit_skipped && return 0
   local d f opts bin; d=$(chrony_dropin_dir); f="$d/ntpdir.conf"
   bin=$(command -v chronyd 2>/dev/null || echo /usr/sbin/chronyd)
   if [ "$FAMILY" = debian ]; then opts='$DAEMON_OPTS'; else opts='$OPTIONS'; fi
   warn "this machine cannot set the system clock (a container?): chrony runs with -x, so its time comes from the host; keep the host synchronised"
   if [ "$DRY" = 1 ]; then info "[dry-run] write $f (chronyd -x)"; return 0; fi
   mkdir -p "$d"
-  printf '%s\n' "# Written by ntpdir: chrony cannot set the clock here, so it runs with -x." "[Unit]" "ConditionCapability=" "[Service]" "ExecStart=" "ExecStart=$bin -x $opts" >"$f"
+  printf '%s\n' "# Written by ntpdir: chrony cannot set the clock here, so it runs with -x." "[Unit]" "ConditionCapability=" "ConditionVirtualization=" "[Service]" "ExecStart=" "ExecStart=!$bin -x $opts" >"$f"
   [ "$HAVE_SYSTEMD" = 1 ] && run "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
   CHRONY_DROPIN=1
 }
@@ -395,6 +404,9 @@ configure_chrony() {
     run "$SYSTEMCTL" enable "$(chrony_unit)" >/dev/null 2>&1 || warn "could not enable $(chrony_unit)"
     if [ "$res" != unchanged ] || [ "$CHRONY_DROPIN" = 1 ] || ! "$SYSTEMCTL" is-active --quiet "$(chrony_unit)" 2>/dev/null; then
       run "$SYSTEMCTL" restart "$(chrony_unit)" || warn "could not (re)start $(chrony_unit)"
+    fi
+    if [ "$CHRONY_DROPIN" = 0 ] && [ "$DRY" = 0 ] && unit_skipped; then
+      configure_chrony_container && run "$SYSTEMCTL" restart "$(chrony_unit)" || warn "could not (re)start $(chrony_unit)"
     fi
   fi
 }
