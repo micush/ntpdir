@@ -50,7 +50,7 @@ func (s *Supervisor) chronySources() (servers []string, empty bool) {
 func (s *Supervisor) syncChrony() {
 	st := chrony.readState()
 	if !st.Running && st.Err != "" {
-		chrony.warnEvery("down", "chrony: "+st.Err+" (this node cannot serve NTP to clients until chrony runs)")
+		chrony.warnEvery("down", "chrony: "+st.Err+" (this node cannot serve NTP to clients until chrony runs; in a container run the installer again so chrony starts with -x, or check systemctl status chrony)")
 	}
 	if !chrony.allowedOK() { // chrony was not there when the allow rules were first sent
 		_ = chrony.applyClients(s.sharedNTP())

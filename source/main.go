@@ -660,7 +660,7 @@ func showNTPTable(sock string) {
 	c := d.Chrony
 	switch {
 	case !c.Running:
-		fmt.Println("chrony: not running (" + orDefault(c.Err, "no answer") + "); this node cannot serve NTP")
+		fmt.Println("chrony: not running (" + orDefault(c.Err, "no answer") + "); this node cannot serve NTP; in a container, run the installer again so chrony starts with -x")
 	case !c.Synced:
 		fmt.Println("chrony: running, not synchronised yet (" + orDefault(c.Leap, "no source") + ")")
 	default:

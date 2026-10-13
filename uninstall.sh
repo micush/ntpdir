@@ -164,6 +164,16 @@ if [ -n "$CHRONY_CONF" ] && [ -f "$CHRONY_CONF" ] && grep -qxF "$CHRONY_BEGIN" "
   fi
 fi
 
+# chrony's container drop-in (chrony -x), when the installer wrote one
+for cu in chrony.service chronyd.service; do
+  df="${NTPDIR_CHRONY_DROPIN_DIR:-/etc/systemd/system/$cu.d}/ntpdir.conf"
+  if [ -f "$df" ] && grep -q '^# Written by ntpdir' "$df"; then
+    run rm -f "$df"; rmdir "$(dirname "$df")" 2>/dev/null || true
+    [ "$HAVE_SYSTEMD" = 1 ] && run "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
+    info "removed the chrony container drop-in $df"
+  fi
+done
+
 # PAM service
 if [ -f "$PAM_FILE" ]; then
   if [ "$PURGE" = 1 ]; then

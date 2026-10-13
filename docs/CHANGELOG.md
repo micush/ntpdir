@@ -1,5 +1,16 @@
 # Changelog
 
+## [v12] - 2026-10-12 — Chrony in containers
+
+### Fixed
+- In an LXC or other container without `CAP_SYS_TIME`, Ubuntu's chrony unit is skipped by systemd ("start condition unmet"), so no node ever answered NTP and the gateways stayed amber. The installer now detects a machine that cannot set the clock and writes a drop-in (`/etc/systemd/system/<chrony unit>.d/ntpdir.conf`) that removes the condition and runs `chronyd -x`: chrony tracks the servers and answers clients, and the clock comes from the host. The uninstaller removes the drop-in. The chrony-not-running message now says what to do.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function in isolation (written only when the clock cannot be set), gofmt, vet, `go test -race -count=1 ./...`, the five cross-builds, `CGO_ENABLED=0` vet and test.
+
+### Not verified
+- A full install in a real container; the generated unit text matches Ubuntu's chrony unit (`ExecStart=!/usr/sbin/chronyd $DAEMON_OPTS`) and the Red Hat family's (`$OPTIONS`) but was not run under systemd here.
+
 ## [v11] - 2026-10-12 — Host lookup fix
 
 ### Fixed
