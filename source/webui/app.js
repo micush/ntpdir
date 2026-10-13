@@ -844,7 +844,7 @@
           onkeydown: (e) => { if (e.key === "Enter") pick("srv", addr)(e); } },
           sv("title", {}, srvTitle(g, addr) + " — " + ss.why + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
-          label(mx, SY + (srvName(g, addr) ? 19 : 20), fitPx(shortAddr(addr), SW - 44, "600 13px system-ui, sans-serif"), "t1"),
+          label(mx, SY + (srvName(g, addr) ? 19 : 20), fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "600 13px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t1"),   // the star: the source chrony has selected
           ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),
           label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? info.ms + " ms" : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
       });
@@ -1668,7 +1668,7 @@
           oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
             openMenu(e, [["New gateway…", () => gatewayForm(null)]].concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
-          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
+          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time (* selected)");
         main.append(svgHost, legend);
         cv.loaded = false;
         load().then(() => {

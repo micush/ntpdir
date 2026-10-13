@@ -172,6 +172,9 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 					cs.Chrony = chronyNow.stateOf(addr)
 					if cs.Status == "ok" && (cs.Chrony == "*" || cs.Chrony == "+") {
 						cs.Detail += " — chrony takes the time from it"
+						if cs.Chrony == "*" {
+							cs.Detail += " (the selected source)"
+						}
 					}
 				}
 				cg.Servers = append(cg.Servers, cs)

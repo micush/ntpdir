@@ -1,5 +1,16 @@
 # Changelog
 
+## [v17] - 2026-10-12 — Topology: a star on the selected source
+
+### Added
+- A server box shows a star after its address when it is the source chrony has selected (`*` in `chronyc sources`); the blue links still mark every source the time comes from. The tooltip says "the selected source".
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The drawing in a browser.
+
 ## [v16] - 2026-10-12 — Topology: the servers chrony uses are blue
 
 ### Fixed
