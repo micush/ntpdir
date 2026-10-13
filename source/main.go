@@ -1,6 +1,5 @@
 // ntpdir — AnyTime NTP Director: a Distributed Gateway Load Balancing Protocol
-// daemon with a built-in NTP relay that serves the VIP and forwards to the
-// fastest healthy upstream.
+// daemon that tests the configured NTP servers and gives chrony the ones that pass; chrony serves the VIP.
 package main
 
 import (
@@ -22,7 +21,7 @@ import (
 	"time"
 )
 
-const usageText = `ntpdir — AnyTime NTP Director (Distributed Gateway Load Balancing Protocol + NTP relay)
+const usageText = `ntpdir — AnyTime NTP Director (Distributed Gateway Load Balancing Protocol + chrony NTP serving)
 Run as a systemd service or directly. All options are runtime-configurable
 and persisted to /var/lib/ntpdir/ntpdir.conf.
 
@@ -38,7 +37,7 @@ Options:
   --show-config         Print current configuration and exit
   --show-neighbors      Print live neighbor table and exit
   --show-gateways       Print all nodes per group with role (AGC/AFN) and exit
-  --show-ntp            Print NTP upstream pool(s): health and latency ranking
+  --show-ntp            Print chrony's state and the NTP server pool(s): health
   --canvas              Print the gateway diagram as a tree with live status
   --version             Print the release number and exit
   --assert-agc          Make this node the active gateway (AGC) for all groups
@@ -66,10 +65,9 @@ the web GUI):
                                         [--anycast ADDR[,ADDR]|-]   (extra addresses of ANY subnet, held on lo
                                          by every running node while its NTP answers, for BGP; - clears)
                                         [--real-macs on|off]   (run without virtual MACs on every node)
-                                        [--spread on|off] [--spread-band PCT]
                                         [--max-stratum N] [--max-root-distance MS] [--max-offset MS|off]
-                                        [--fail-threshold N] [--max-attempts N] [--latency-alpha A]
-                                          (this gateway's own load balancing; --lb settings goes back to
+                                        [--fail-threshold N]
+                                          (this gateway's own health checks; --lb settings goes back to
                                            following Settings, which is the default)
                    --tshoot [--all-nodes] [--tshoot-file F.tgz]
                                          (a troubleshooting bundle for support: logs, configuration, gateway, NTP, BGP and
@@ -162,42 +160,37 @@ file directly. Each group entry supports:
     When present, ntpdir sends hellos directly to each neighbor via unicast
     instead of multicast — required when peers are on different VNIs or
     separated by a routed boundary.
-  Every ACTIVE/FORWARD node relays NTP on the VIP (there is no switch for it).
+  Every ACTIVE/FORWARD node answers NTP on the VIP through chrony (there is no switch for it).
 
-NTP relay ("ntp" block at the top level of the config):
+NTP ("ntp" block at the top level of the config):
+  chrony serves the clients; ntpdir tests the upstream servers and gives chrony the ones that pass (see
+  the NTP page and --show-ntp).
   servers            upstream NTP servers, e.g. ["10.0.0.123", "10.0.1.123:1123", "ntp.example.com"]
                      (a host name is resolved when the server is probed; the default port is 123)
   fallback_servers   used only while every server in "servers" is down; never probed, always counted as up
-  listen_port        UDP port served on the VIP (default 123)
-  allowed_clients    networks that may use the relay, e.g. ["10.0.0.0/8", "192.168.1.5"]; empty (default) =
-                     everyone. Anyone else gets nothing (or a kiss-o'-death, see client_action); the node itself always may
-  client_rate        requests per second one client (an IPv4 address or an IPv6 /64) may send; 0 (default) = no limit
+  listen_port        UDP port chrony serves on (default 123; written to chrony as "port")
+  allowed_clients    networks that may ask, e.g. ["10.0.0.0/8", "192.168.1.5"]; empty (default) =
+                     everyone (chrony "allow"); the node itself always may
+  client_rate        requests per second one client may send; 0 (default) = no limit (chrony "ratelimit")
   client_burst       how many it may send at once before client_rate applies; 0 (default) = twice the rate, at least 10
-  client_action      what a client over its rate gets: drop (default; nothing is sent) or kod (a RATE kiss-o'-death)
-  client_exempt      networks never rate limited (still subject to allowed_clients)
-  client_limits      a rate of its own for one client or network, one entry each: "192.168.1.5 50" (requests per second;
-                     burst twice that, at least 10). Applies even when client_rate is 0 or the network is in client_exempt
-  spread             true (default) shares requests out: servers within spread_band (20) percent
-                     of the fastest one's round trip take turns (round-robin); false = fastest first
+  client_action      drop (default) or kod: what chrony mostly sends a client over its rate (the ratelimit leak)
   max_stratum        a server answering with a higher stratum counts as down (default 15)
   max_root_distance_ms  a server whose root distance is larger counts as down (default 1500)
+  max_rtt_ms         a server whose round trip is longer is too slow and counts as down (default 500; 0 = off)
   max_offset_ms      with three or more servers, one whose clock differs from the median by more than this is
                      a falseticker and counts as down (default 128; 0 = off)
   probe_interval_ms  default 16000    probe_timeout_ms  default 1000
-  query_timeout_ms   default 800      max_attempts      default 2
   fail_threshold     consecutive failures before a server is dropped (2)
-  latency_alpha      EWMA smoothing for round-trip time (default 0.3)
   server_names       optional names shown under the addresses: {"10.0.0.123": "ntp-a"}
-  Only client requests (mode 3) are relayed; control (mode 6) and private (mode 7) packets never are.
-  A server that answers unsynchronised (leap 3 / stratum 16), with a kiss-o'-death, or with a wrong
-  origin timestamp is not used. The upstream servers see the relay's address for every client.
-  chrony (installed with ntpdir) keeps this node's own clock; it is told "port 0" so it does not
-  hold UDP 123 on the VIP.
-A group can have its own pool: put the same
-keys in a "ntp" block inside the group (that is what the Topology page writes); groups
-without one share the top-level block. A server receives traffic only while its
-probes are judged good; eligible servers are tried in turns within the spread band of the fastest (or fastest-first with spread off) (live
-round trips feed the same estimate). An explicit "groups": [] means no gateways.
+  spread, spread_band, query_timeout_ms, max_attempts, latency_alpha, client_exempt and client_limits are
+  still accepted in a file but have no effect: chrony picks among its sources itself and answers the clients.
+  Every few seconds the servers that pass are written to /etc/chrony/ntpdir.sources.d/ntpdir.sources and chrony
+  re-reads them (chronyc reload sources); a server that stops passing is dropped from there. With none passing,
+  chrony keeps the sources it has. The allow, ratelimit and port settings go to /etc/chrony/ntpdir.conf.d/ntpdir.conf
+  and chrony is restarted when they change. The installer points chrony at both directories.
+A group can have its own servers: put the same keys in a "ntp" block inside the group (that is what the
+Topology page writes); groups without one share the top-level block. Every node's chrony uses the servers of
+all its gateways together. An explicit "groups": [] means no gateways.
 
 Web GUI ("web" block): everything above is also available in a browser.
   Served over HTTPS (default port 12380). Log in with a system account that
@@ -654,30 +647,51 @@ func showNTPTable(sock string) {
 			MaxStr  int          `json:"max_stratum"`
 			MaxOff  int          `json:"max_offset_ms"`
 			MaxRD   int          `json:"max_root_distance_ms"`
-			Spread  bool         `json:"spread"`
-			Band    int          `json:"spread_band"`
-			Allowed int          `json:"allowed_clients"`
-			Rate    int          `json:"client_rate"`
-			Burst   int          `json:"client_burst"`
-			Action  string       `json:"client_action"`
-			Denied  uint64       `json:"denied"`
-			Limited uint64       `json:"limited"`
+			MaxRTT  int          `json:"max_rtt_ms"`
 		} `json:"pools"`
-		Listeners []string `json:"listeners"`
-		Queries   uint64   `json:"queries"`
-		Answered  uint64   `json:"answered"`
-		Failed    uint64   `json:"failed"`
+		Listeners []string    `json:"listeners"`
+		Chrony    ChronyState `json:"chrony"`
+		Roll      string      `json:"chrony_roll"`
+		Stats     ServerStats `json:"server_stats"`
+		Allowed   int         `json:"allowed_clients"`
+		Rate      int         `json:"client_rate"`
+		Burst     int         `json:"client_burst"`
+		Action    string      `json:"client_action"`
 	}
 	decodeData(res, &d)
-	if len(d.Listeners) == 0 {
-		fmt.Println("Listening: (not active on this node)")
-	} else {
-		fmt.Println("Listening: " + strings.Join(d.Listeners, ", "))
+	c := d.Chrony
+	switch {
+	case !c.Running:
+		fmt.Println("chrony: not running (" + orDefault(c.Err, "no answer") + "); this node cannot serve NTP")
+	case !c.Synced:
+		fmt.Println("chrony: running, not synchronised yet (" + orDefault(c.Leap, "no source") + ")")
+	default:
+		fmt.Printf("chrony: synchronised, stratum %d, to %s, system clock %+.3f ms off, root delay %.2f ms\n", c.Stratum, orDefault(c.Ref, "-"), c.OffsetMS, c.RootDelay)
 	}
-	fmt.Printf("Requests: %d  answered: %d  no answer: %d\n", d.Queries, d.Answered, d.Failed)
-	const f = "%-4s %-16s %-28s %-9s %-8s %-11s %-8s %-8s %-8s %-8s %s\n"
+	if d.Roll != "" {
+		fmt.Println("chrony restart (port or rate limit changed): " + d.Roll)
+	}
+	if len(d.Listeners) == 0 {
+		fmt.Println("Serving: (no gateway answers on this node)")
+	} else {
+		fmt.Println("Serving: " + strings.Join(d.Listeners, ", "))
+	}
+	if d.Stats.Err == "" {
+		fmt.Printf("Requests chrony has handled: %d  dropped: %d\n", d.Stats.Received, d.Stats.Dropped)
+	}
+	if d.Allowed > 0 {
+		fmt.Printf("allowed clients: %d network(s) listed (allowed_clients)\n", d.Allowed)
+	} else {
+		fmt.Println("allowed clients: everyone (allowed_clients is empty)")
+	}
+	if d.Rate > 0 {
+		fmt.Printf("client rate limit: %d requests/s per client (burst %d), over the limit: %s\n", d.Rate, d.Burst, d.Action)
+	} else {
+		fmt.Println("client rate limit: off")
+	}
+	const f = "%-16s %-28s %-9s %-8s %-8s %-11s %-8s %-8s %-8s %s\n"
 	for _, p := range d.Pools {
-		who := "shared pool"
+		who := "shared servers"
 		if p.Key != 0 {
 			who = "gateway " + itoa(p.Key)
 			if p.Name != "" {
@@ -688,34 +702,21 @@ func showNTPTable(sock string) {
 		for _, g := range p.Groups {
 			gl = append(gl, itoa(g))
 		}
-		fmt.Printf("\n%s (used by group %s): a server is down after %d failed probes in a row; usable up to stratum %d, root distance %d ms, %s\n", who, strings.Join(gl, ","), p.FailThr, p.MaxStr, p.MaxRD, offLimit(p.MaxOff))
-		if p.Allowed > 0 {
-			fmt.Printf("allowed clients: %d network(s) listed (allowed_clients); %d requests from other addresses were refused\n", p.Allowed, p.Denied)
-		} else {
-			fmt.Println("allowed clients: everyone (allowed_clients is empty)")
+		used := ""
+		if len(gl) > 0 {
+			used = " (used by group " + strings.Join(gl, ",") + ")"
 		}
-		if p.Rate > 0 {
-			fmt.Printf("client rate limit: %d requests/s per client (burst %d), over the limit: %s; %d requests turned away\n", p.Rate, p.Burst, p.Action, p.Limited)
-		} else {
-			fmt.Println("client rate limit: off")
-		}
-		if p.Spread {
-			fmt.Printf("spread: on, servers within %d%% of the fastest take turns (see the Served column)\n", p.Band)
-		} else {
-			fmt.Println("spread: off (the fastest server gets the requests; the others are fallbacks)")
-		}
+		fmt.Printf("\n%s%s: a server is out after %d failed probes in a row; usable up to stratum %d, root distance %d ms, %s, %s\n",
+			who, used, p.FailThr, p.MaxStr, p.MaxRD, rttLimit(p.MaxRTT), offLimit(p.MaxOff))
 		if p.UsingFB {
-			fmt.Println("no configured server is in service (down or paused): answering from the fallback servers")
+			fmt.Println("no configured server is in service (down or paused): chrony uses the fallback servers")
 		}
-		fmt.Printf(f, "RANK", "SERVER NAME", "SERVER IP", "STATE", "STRATUM", "OFFSET(ms)", "RTT(ms)", "OK", "FAIL", "SERVED", "LAST ERROR")
+		fmt.Printf(f, "SERVER NAME", "SERVER IP", "STATE", "STRATUM", "OFFSET(ms)", "RTT(ms)", "IN CHRONY", "OK", "FAIL", "LAST ERROR")
 		fmt.Println(strings.Repeat("-", 140))
 		for _, s := range p.Servers {
-			rank, state := "-", "down"
+			state := "down"
 			if s.Healthy {
 				state = "up"
-				if s.Rank > 0 {
-					rank = itoa(s.Rank)
-				}
 			}
 			if s.Falseticker {
 				state = "false"
@@ -728,11 +729,12 @@ func showNTPTable(sock string) {
 			if s.Fallback {
 				addr += " (fallback)"
 			}
-			fmt.Printf(f, rank, orDefault(s.Name, "-"), addr, state, stratum, offset, fmt.Sprintf("%.2f", s.EWMAMS),
-				strconv.FormatUint(s.Successes, 10), strconv.FormatUint(s.Failures, 10),
-				strconv.FormatUint(s.Served, 10), s.LastError)
+			in := orDefault(s.Chrony, "no")
+			fmt.Printf(f, orDefault(s.Name, "-"), addr, state, stratum, offset, fmt.Sprintf("%.2f", s.EWMAMS), in,
+				strconv.FormatUint(s.Successes, 10), strconv.FormatUint(s.Failures, 10), s.LastError)
 		}
 	}
+	fmt.Println("\nIN CHRONY: * chrony is synchronised to it, + combined with it, - not combined, ? not reachable, x falseticker, ~ too variable, no = not a chrony source")
 }
 
 // ── Interactive configure ────────────────────────────────────────────────────
@@ -819,11 +821,11 @@ func interactiveConfigure(path string) error {
 		g.Key = p.ask("HMAC-SHA256 shared key", g.Key)
 	}
 	if len(dc.Groups) > 0 {
-		fmt.Println("\n  NTP proxy")
+		fmt.Println("\n  NTP")
 		servers := p.ask("Upstream NTP servers (comma separated)", strings.Join(dc.NTP.Servers, ","))
 		dc.NTP.Servers = splitList(servers)
 		dc.NTP.FailThreshold = p.askInt("A server is down after this many failed probes in a row", dc.NTP.FailThreshold)
-		dc.NTP.ListenPort = p.askInt("Listen port", dc.NTP.ListenPort)
+		dc.NTP.ListenPort = p.askInt("NTP port chrony serves on", dc.NTP.ListenPort)
 	}
 	if err := dc.Validate(); err != nil {
 		return fmt.Errorf("not saved: %w", err)
@@ -860,6 +862,13 @@ func splitList(s string) []string {
 }
 
 // offLimit words the falseticker limit for --show-ntp.
+func rttLimit(ms int) string {
+	if ms <= 0 {
+		return "round trip not checked"
+	}
+	return fmt.Sprintf("round trip up to %d ms", ms)
+}
+
 func offLimit(ms int) string {
 	if ms <= 0 {
 		return "falseticker check off"

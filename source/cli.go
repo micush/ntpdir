@@ -34,9 +34,8 @@ type cliFlags struct {
 	updateUpload, updatePush, updateCancel, updateAuto, updateRepo, clusterFailover                                                                                                                                                         *string
 	canvas, vmacTest, tshoot, tshootCapture                                                                                                                                                                                                 *bool
 	canvasPause, canvasResume, canvasMove, canvasAdd, canvasDel, canvasSet, vip, vip6, ifname, server, label, anycast, address, scope, node, realMACs                                                                                       *string
-	pos, group, spreadBand, maxStratum, maxRootDist, failThreshold, maxAttempts                                                                                                                                                             *int
-	serverStats, gatewayStats, spread, lbMode, maxOffset                                                                                                                                                                                    *string
-	latencyAlpha                                                                                                                                                                                                                            *float64
+	pos, group, maxStratum, maxRootDist, failThreshold                                                                                                                                                                                      *int
+	serverStats, gatewayStats, lbMode, maxOffset                                                                                                                                                                                            *string
 }
 
 func registerCLIFlags(fs *flag.FlagSet) *cliFlags {
@@ -55,9 +54,9 @@ func registerCLIFlags(fs *flag.FlagSet) *cliFlags {
 		clusterJoin: s("cluster-join"), clusterRemove: s("cluster-remove"), clusterUnremove: s("cluster-unremove"),
 		canvas: b("canvas"), vmacTest: b("test-vmac"), tshoot: b("tshoot"), tshootCapture: b("tshoot-capture"), tshootFile: s("tshoot-file"), realMACs: s("real-macs"), canvasAdd: s("canvas-add"), canvasDel: s("canvas-del"),
 		canvasSet: s("canvas-set"), canvasMove: s("canvas-move"), pos: fs.Int("to", 0, ""), canvasPause: s("canvas-pause"), canvasResume: s("canvas-resume"), vip6: s("vip6"), label: s("label"), anycast: s("anycast"), address: s("address"), scope: s("scope"), node: s("node"),
-		serverStats: s("server-stats"), gatewayStats: s("gateway-stats"), spread: s("spread"), lbMode: s("lb"), spreadBand: fs.Int("spread-band", 0, ""), maxStratum: fs.Int("max-stratum", 0, ""), maxRootDist: fs.Int("max-root-distance", 0, ""), maxOffset: s("max-offset"),
-		failThreshold: fs.Int("fail-threshold", 0, ""), maxAttempts: fs.Int("max-attempts", 0, ""), latencyAlpha: fs.Float64("latency-alpha", 0, ""),
-		vip: s("vip"), ifname: s("interface"), server: s("server"),
+		serverStats: s("server-stats"), gatewayStats: s("gateway-stats"), lbMode: s("lb"), maxStratum: fs.Int("max-stratum", 0, ""), maxRootDist: fs.Int("max-root-distance", 0, ""), maxOffset: s("max-offset"),
+		failThreshold: fs.Int("fail-threshold", 0, ""),
+		vip:           s("vip"), ifname: s("interface"), server: s("server"),
 		group: fs.Int("group", 0, ""),
 		users: b("users"), userAdd: s("user-add"), userPasswd: s("user-passwd"), userExpiry: s("user-expiry"), userDel: s("user-del"), userGrant: s("user-grant"), userRevoke: s("user-revoke"), expires: s("expires"),
 		power: s("power"), powerAt: s("at"), powerIn: fs.Int("in", 0, ""),
@@ -137,7 +136,7 @@ func (f *cliFlags) run(sock string) bool {
 	case *f.canvasAdd != "" || *f.canvasDel != "" || *f.canvasSet != "" || *f.canvasPause != "" || *f.canvasResume != "" || *f.canvasMove != "":
 		e := canvasEdit{Action: "add", Kind: *f.canvasAdd, Group: *f.group, VIP: *f.vip, VIP6: *f.vip6, Interface: *f.ifname, Label: *f.label, Anycast: *f.anycast, Address: *f.address, Scope: *f.scope, Node: *f.node, RealMACs: *f.realMACs,
 			Server: *f.server,
-			LB:     *f.lbMode, Spread: *f.spread, SpreadBand: *f.spreadBand, MaxStratum: *f.maxStratum, MaxRootDist: *f.maxRootDist, FailThreshold: *f.failThreshold, MaxAttempts: *f.maxAttempts, LatencyAlpha: *f.latencyAlpha, Pos: *f.pos}
+			LB:     *f.lbMode, MaxStratum: *f.maxStratum, MaxRootDist: *f.maxRootDist, FailThreshold: *f.failThreshold, Pos: *f.pos}
 		if *f.maxOffset != "" {
 			if strings.EqualFold(*f.maxOffset, "off") {
 				e.MaxOffset = new(int)
@@ -740,8 +739,8 @@ func showCanvas(sock string) {
 			fmt.Printf("      fallback servers: %s — %s\n", strings.Join(g.Fallback, ", "), note)
 		}
 		if g.LBOwn {
-			fmt.Printf("      load balancing: this gateway's own (spread %s, band %d%%, stratum up to %d, root distance up to %d ms, %s, %d failures, %d servers tried) — --lb settings follows Settings\n",
-				map[bool]string{true: "on", false: "off"}[g.LB.Spread], g.LB.SpreadBand, g.LB.MaxStratum, g.LB.MaxRootDistanceMS, offLimit(g.LB.MaxOffsetMS), g.LB.FailThreshold, g.LB.MaxAttempts)
+			fmt.Printf("      health checks: this gateway's own (stratum up to %d, root distance up to %d ms, %s, %d failures) — --lb settings follows Settings\n",
+				g.LB.MaxStratum, g.LB.MaxRootDistanceMS, offLimit(g.LB.MaxOffsetMS), g.LB.FailThreshold)
 		}
 		for _, a := range g.Anycast {
 			if a.External {
@@ -783,12 +782,6 @@ func showCanvas(sock string) {
 				branch = "└─"
 			}
 			extra := s.Detail
-			if s.Rank > 0 {
-				extra += fmt.Sprintf(" (rank %d)", s.Rank)
-			}
-			if s.InBand {
-				extra += " [spread: takes turns]"
-			}
 			who := s.Addr
 			if s.Name != "" {
 				who = s.Name + " (" + s.Addr + ")"

@@ -18,10 +18,6 @@ import (
 //	warn  yellow  degraded (works, but something underneath it does not)
 //	bad   red     down
 //	idle  grey    not known yet (not applied, or not probed yet)
-//
-// A blue line from the gateway to a server (in_band) means spread is on and the server is within the
-// band of the fastest one, so requests take turns across the blue ones.
-
 type CanvasServer struct {
 	Addr   string  `json:"addr"`
 	Name   string  `json:"name,omitempty"` // optional label shown instead of the address
@@ -29,7 +25,6 @@ type CanvasServer struct {
 	Detail string  `json:"detail"`
 	MS     float64 `json:"ms"`
 	Rank   int     `json:"rank"`
-	InBand bool    `json:"in_band"` // takes its turn at the front under spread (a blue line)
 	// Time is what the server's last answer said about its clock; absent until it has answered once.
 	Time        *TimeStat `json:"time,omitempty"`
 	Falseticker bool      `json:"falseticker,omitempty"`
@@ -163,7 +158,7 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 					cs.Status, cs.Detail = "bad", orDefault(st.LastError, "not answering")
 					cs.Time, cs.Falseticker = st.Time, st.Falseticker
 				default:
-					cs.MS, cs.Rank, cs.InBand, cs.Time = st.EWMAMS, st.Rank, st.InBand, st.Time
+					cs.MS, cs.Rank, cs.Time = st.EWMAMS, st.Rank, st.Time
 					cs.Status, cs.Detail = "ok", fmt.Sprintf("healthy, %.2f ms", st.EWMAMS)
 					if t := st.Time; t != nil {
 						cs.Detail = fmt.Sprintf("stratum %d, offset %+.2f ms, round trip %.2f ms", t.Stratum, t.OffsetMS, st.EWMAMS)
@@ -432,22 +427,18 @@ type canvasEdit struct {
 	RealMACs string `json:"real_macs"`
 	// load balancing of the gateway's own pool: any of these makes the gateway use its own values (starting from what
 	// it uses now); LB "settings" goes back to following Settings
-	LB            string  `json:"lb"`
-	Spread        string  `json:"spread"` // on | off | "" (unchanged)
-	SpreadBand    int     `json:"spread_band"`
-	MaxStratum    int     `json:"max_stratum"`
-	MaxRootDist   int     `json:"max_root_distance_ms"`
-	MaxOffset     *int    `json:"max_offset_ms"` // nil = unchanged, 0 = falseticker check off
-	FailThreshold int     `json:"fail_threshold"`
-	MaxAttempts   int     `json:"max_attempts"`
-	LatencyAlpha  float64 `json:"latency_alpha"`
-	Interface     string  `json:"interface"`
-	Label         string  `json:"label"`   // gateway or server name; "-" clears it
-	Anycast       string  `json:"anycast"` // anycast addresses, comma separated; "-" clears them
-	Address       string  `json:"address"` // one anycast address (--canvas-add|del|pause|resume anycast)
-	Scope         string  `json:"scope"`   // pausing an anycast address: node (this one) or all (every node)
-	Server        string  `json:"server"`
-	Pos           int     `json:"pos"` // --canvas-move: the new place in the list, 1 = first
+	LB            string `json:"lb"`
+	MaxStratum    int    `json:"max_stratum"`
+	MaxRootDist   int    `json:"max_root_distance_ms"`
+	MaxOffset     *int   `json:"max_offset_ms"` // nil = unchanged, 0 = falseticker check off
+	FailThreshold int    `json:"fail_threshold"`
+	Interface     string `json:"interface"`
+	Label         string `json:"label"`   // gateway or server name; "-" clears it
+	Anycast       string `json:"anycast"` // anycast addresses, comma separated; "-" clears them
+	Address       string `json:"address"` // one anycast address (--canvas-add|del|pause|resume anycast)
+	Scope         string `json:"scope"`   // pausing an anycast address: node (this one) or all (every node)
+	Server        string `json:"server"`
+	Pos           int    `json:"pos"` // --canvas-move: the new place in the list, 1 = first
 	// Node names a cluster node for --canvas-add|del node: its address, host name or node ID.  CanvasEdit turns it into
 	// nodeID and lists the cluster's node IDs in members, so the last member cannot be removed.
 	Node    string `json:"node"`
@@ -512,29 +503,26 @@ func parseAnycastList(v string) ([]string, error) {
 	return out, nil
 }
 
-// setLB applies --spread, --spread-band, --max-stratum, --max-root-distance, --max-offset, --fail-threshold, --max-attempts, --latency-alpha (the gateway
+// setLB applies --max-stratum, --max-root-distance, --max-offset, --fail-threshold (the gateway
 // then uses its own values, starting from the ones it uses now) or --lb settings (back to following Settings).
 func setLB(dc *DaemonConfig, g *GroupConfig, e canvasEdit) (string, error) {
-	have := e.Spread != "" || e.SpreadBand != 0 || e.MaxStratum != 0 || e.MaxRootDist != 0 || e.MaxOffset != nil || e.FailThreshold != 0 || e.MaxAttempts != 0 || e.LatencyAlpha != 0
+	have := e.MaxStratum != 0 || e.MaxRootDist != 0 || e.MaxOffset != nil || e.FailThreshold != 0
 	if e.LB != "" && e.LB != "settings" {
-		return "", errors.New("--lb must be settings (to follow Settings again); giving any load-balancing value makes the gateway use its own")
+		return "", errors.New("--lb must be settings (to follow Settings again); giving any health value makes the gateway use its own")
 	}
 	if e.LB == "" && !have {
 		return "", nil
 	}
-	if e.Spread != "" && e.Spread != "on" && e.Spread != "off" {
-		return "", errors.New("--spread must be on or off")
-	}
 	if e.LB == "settings" {
 		if have {
-			return "", errors.New("--lb settings cannot be combined with load-balancing values")
+			return "", errors.New("--lb settings cannot be combined with health values")
 		}
 		if g.NTP != nil {
 			g.NTP.LB = nil
 			def := defaultNTP()
 			g.NTP.setLBValues(def.lbValues()) // so an old pool at other values does not count as its own
 		}
-		return "load balancing follows Settings", nil
+		return "health checks follow Settings", nil
 	}
 	d := ownNTP(dc, g)
 	cur, own := d.ownLB()
@@ -542,14 +530,6 @@ func setLB(dc *DaemonConfig, g *GroupConfig, e canvasEdit) (string, error) {
 		cur = dc.NTP.lbValues()
 	}
 	var parts []string
-	if e.Spread != "" {
-		cur.Spread = e.Spread == "on"
-		parts = append(parts, "spread "+e.Spread)
-	}
-	if e.SpreadBand != 0 {
-		cur.SpreadBand = e.SpreadBand
-		parts = append(parts, fmt.Sprintf("spread band %d%%", e.SpreadBand))
-	}
 	if e.MaxStratum != 0 {
 		cur.MaxStratum = e.MaxStratum
 		parts = append(parts, fmt.Sprintf("highest stratum %d", e.MaxStratum))
@@ -570,19 +550,11 @@ func setLB(dc *DaemonConfig, g *GroupConfig, e canvasEdit) (string, error) {
 		cur.FailThreshold = e.FailThreshold
 		parts = append(parts, fmt.Sprintf("%d failures before down", e.FailThreshold))
 	}
-	if e.MaxAttempts != 0 {
-		cur.MaxAttempts = e.MaxAttempts
-		parts = append(parts, fmt.Sprintf("%d servers tried at most", e.MaxAttempts))
-	}
-	if e.LatencyAlpha != 0 {
-		cur.LatencyAlpha = e.LatencyAlpha
-		parts = append(parts, fmt.Sprintf("latency smoothing %g", e.LatencyAlpha))
-	}
 	if err := cur.validate(); err != nil {
 		return "", err
 	}
 	d.LB = &cur
-	return "this gateway's own load balancing: " + strings.Join(parts, ", "), nil
+	return "this gateway's own health checks: " + strings.Join(parts, ", "), nil
 }
 
 // ownPoolFrom is the start of a gateway's own pool: a copy of the shared one, with the load-balancing values back at

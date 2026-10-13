@@ -1,9 +1,9 @@
 # Instructions for Claude working on this project
 
 AnyTime NTP Director (`ntpdir`) is a Go daemon: the Distributed Gateway Load Balancing Protocol (VIP
-shared by an AGC and AFNs through per-node virtual MACs) plus an NTP relay that
-serves the VIP and forwards client packets to the fastest healthy upstream NTP server. Chrony keeps the node's own clock
-(the installer sets it up, bound to the first Ethernet interface's addresses). This file is a
+shared by an AGC and AFNs through per-node virtual MACs) plus chrony, which answers
+NTP clients on every node; ntpdir tests the upstream servers and writes the healthy ones to chrony's `sourcedir`
+(client settings to its `confdir`). The installer sets chrony (4.0+) up. This file is a
 standing instruction from the project owner so it doesn't need repeating each
 conversation. If you (Claude) are asked to change this project, follow the
 process below without being told to.
@@ -25,7 +25,7 @@ file such as `webui/` and `testdata/` are under `source/`, and the CHANGELOG is 
    drops a `ntpdir` binary in the repo root — delete it if it appears), `go vet ./...` and
    `go test -race -count=1 ./...`. Don't skip straight to packaging on a
    change that could plausibly have broken something. Beyond the unit tests:
-   - **Touched the NTP relay, pool or frontend?** Also do a manual smoke run:
+   - **Touched the chrony sources, the pool or client settings?** Also do a live run with a real private `chronyd -x` (`NTPDIR_CHRONY_SOURCEDIR`, `NTPDIR_CHRONY_CONFDIR`, `NTPDIR_CHRONYC_ARGS="-h SOCKDIR/sock"`, `NTPDIR_SYSTEMCTL` shim; the socket dir must be mode 750) and stub NTP servers, and check that a dead, slow or falseticker server leaves `chronyc sources`. Also do a manual smoke run:
      a config on `lo` (`"interface": "lo"`, a `127.0.0.x/8` VIP,
      `"neighbors": ["127.0.0.2"]` for unicast mode,
      `listen_port` above 1024), two or three throwaway UDP NTP responders (stub servers answering a mode-4 packet

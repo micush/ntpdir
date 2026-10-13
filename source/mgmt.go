@@ -31,6 +31,7 @@ type Mgmt struct {
 	certs    *CertManager
 	upd      *Updater
 	cl       *Cluster
+	croll    chronyRoll // this node's part in the rolling chrony restart
 
 	cfgMu     sync.Mutex // serialises writes of the config file
 	webPolicy atomic.Pointer[WebConfig]
@@ -76,6 +77,9 @@ func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
 		return nil, fmt.Errorf("state directory %s: %w", stateDir, err)
 	}
 	m := &Mgmt{confPath: confPath, stateDir: stateDir}
+	chrony.mu.Lock()
+	chrony.keyFile = filepath.Join(stateDir, "chrony-applied.key")
+	chrony.mu.Unlock()
 	m.bgp = NewBGPManager(stateDir)
 	w := dc.Web
 	m.webPolicy.Store(&w)

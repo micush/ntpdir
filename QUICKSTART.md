@@ -1,6 +1,6 @@
 # AnyTime NTP Director quick start (using the web GUI)
 
-AnyTime gives a group of machines one shared NTP address (a **gateway**). Clients point at that address; every node answers, and each request goes to the fastest healthy upstream NTP server you list. This guide takes you from the tarball to a working gateway using only the browser. The full reference is `README.md`.
+AnyTime gives a group of machines one shared NTP address (a **gateway**). Clients point at that address; every node answers through chrony, and chrony takes its time from the upstream NTP servers you list that pass AnyTime's health checks. This guide takes you from the tarball to a working gateway using only the browser. The full reference is `README.md`.
 
 ## What you need
 
@@ -24,7 +24,7 @@ cd ntpdir
 sudo ./install.sh
 ```
 
-The user running the installer (you, behind `sudo`) can log in to the GUI; add others with `--add-user NAME` or later on the Users page. The installer installs what is missing (including **chrony**, which keeps the machine's own clock and serves NTP on the first Ethernet interface's own addresses), builds AnyTime, creates the `ntpdir` group and the PAM login file, and starts the `ntpdir` service. Add `--dry-run` first if you want to see what it will do. Re-running it on a newer tarball upgrades in place and keeps your settings.
+The user running the installer (you, behind `sudo`) can log in to the GUI; add others with `--add-user NAME` or later on the Users page. The installer installs what is missing (including **chrony** 4.0 or newer, which answers NTP clients and keeps the machine's clock; the installer switches off the servers chrony came with, so the machine has no time source until you add NTP servers in the next steps), builds AnyTime, creates the `ntpdir` group and the PAM login file, and starts the `ntpdir` service. Add `--dry-run` first if you want to see what it will do. Re-running it on a newer tarball upgrades in place and keeps your settings.
 
 Who can log in: a user whose Linux password PAM accepts **and** who is in the `ntpdir` group. `root` is not special; add it to the group only if you want it to log in (Configure ▸ Users ▸ **Add existing user** adds an existing account to the group later).
 
@@ -53,7 +53,7 @@ A new install has no gateways. Topology is the first page.
 
 Add a second server the same way for redundancy. Hover any shape for its status and uptime ("Online for 1m 1s - 0 failures").
 
-Colours: **green** working, **yellow** degraded (the gateway runs but something is down), **red** down, **grey** not known yet. A server is taken out of service when it stops answering, reports a stratum or root distance above the limits, or its clock disagrees with the others (change the limits on Configure ▸ NTP relay).
+Colours: **green** working, **yellow** degraded (the gateway runs but something is down), **red** down, **grey** not known yet. A server is taken out of service when it stops answering, reports a stratum or root distance above the limits, or its clock disagrees with the others or answers too slowly (change the limits on Configure ▸ NTP ▸ Health). It is then removed from chrony's sources on every node, and added again when it recovers.
 
 ## 4. Try it
 
@@ -64,7 +64,7 @@ chronyc -h 127.0.0.1 sources   # on a node, or:
 ntpdate -q 192.168.1.123
 ```
 
-Then open **Monitor ▸ NTP** to see each server's rank, round trip, offset, stratum and how many requests it served. **Monitor ▸ Statistics** shows requests over time and top clients.
+Then open **Monitor ▸ NTP** to see chrony's state and each server's health, round trip, offset, stratum and whether chrony uses it. **Monitor ▸ Statistics** shows requests over time and top clients.
 
 Point your clients (or your DHCP server) at the shared address when you are happy with it.
 
@@ -84,7 +84,7 @@ Both nodes now answer on the shared address and one of them is the controller (s
 
 ## 7. Worth knowing
 
-- **General, Gateway groups, NTP relay, Web GUI and Cluster** (all under Configure) hold everything else, and every field saves on its own: probe timing, spread of requests over servers of similar speed, stratum and root-distance limits, falseticker offset, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
+- **General, Gateway groups, NTP, Web GUI and Cluster** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
 - **History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.
 - **Operate ▸ Upgrade**: upload a newer AnyTime tarball, tick the nodes to update and press the button in the Nodes card (none ticked = this node). A bad update rolls back by itself.
 - **Operate ▸ Anycast**: switch BGP, or a single neighbor, off and on without losing the settings (set them under **Configure ▸ Anycast**).
@@ -96,5 +96,5 @@ Both nodes now answer on the shared address and one of them is the controller (s
 ## If something looks wrong
 
 - **Circle stays grey or amber**: the node has no address on the gateway's subnet, or no server answers. Hover it: the tooltip says why.
-- **Server red**: hover it (or look at the last error on **Monitor ▸ NTP**). A typo in the address, a blocked UDP port 123, a server that is not synchronised (stratum 16) or one that rate-limits the relay are the usual causes.
+- **Server red**: hover it (or look at the last error on **Monitor ▸ NTP**). A typo in the address, a blocked UDP port 123, a server that is not synchronised (stratum 16) or one that rate-limits your nodes are the usual causes.
 - **Log**: **Monitor ▸ Log** shows what the daemon is doing, filtered by level.

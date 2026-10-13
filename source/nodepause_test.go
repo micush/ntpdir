@@ -60,8 +60,8 @@ func TestNodePauseStartsNothingAndShowsOnTheCanvas(t *testing.T) {
 	if n := len(sup.engineList()); n != 0 {
 		t.Fatalf("a paused node must start no engines, got %d", n)
 	}
-	if sup.poolFor(1) != nil {
-		t.Fatal("a paused node needs no probe pool")
+	if sup.poolFor(1) == nil {
+		t.Fatal("a paused node keeps its pools: the servers are still its time sources")
 	}
 	cv := buildCanvas(sup.config(), nil, sup.poolList())[0]
 	if cv.Status != "paused" || !cv.Paused || !cv.NodePaused || !strings.Contains(cv.Detail, "This node is paused") {

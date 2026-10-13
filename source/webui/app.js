@@ -214,7 +214,7 @@
   const TOPO = "Topology";
   const NAV_GROUPS = [
     ["Monitor", [["stats", "Statistics"], ["host", "Host"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["ntp", "NTP"], ["anycaststatus", "Anycast"], ["capture", "Capture"], ["log", "Log"]]],
-    ["Configure", [["cfg_general", "General"], ["cfg_groups", "Gateway groups"], ["cfg_ntp", "NTP relay"], ["cfg_web", "Web GUI"], ["cfg_cluster", "Cluster"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
+    ["Configure", [["cfg_general", "General"], ["cfg_groups", "Gateway groups"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_cluster", "Cluster"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
     ["Operate", [["node", "Node"], ["cluster", "Cluster"], ["anycastop", "Anycast"], ["updates", "Upgrade"]]],
   ];
   const TABS = [["topology", TOPO]].concat(NAV_GROUPS.flatMap(([, items]) => items));
@@ -376,7 +376,7 @@
     b.title = open ? "Close help (Esc)" : "Help for this page";
   }
   function fillHelp() {
-    // the NTP relay page has a help page for each of its tabs
+    // the NTP page has a help page for each of its tabs
     const topic = state.tab === "cfg_ntp" && NTPDIR_HELP["config_ntp" + state.ntpTab] ? "config_ntp" + state.ntpTab : state.tab.startsWith("cfg_") ? "config" : state.tab;
     const [t, kids] = helpBody(topic);
     document.getElementById("help-title").textContent = t;
@@ -836,7 +836,7 @@
         const x = rowX + i * COLW + (COLW - SW) / 2, mx = x + SW / 2;
         const ss = serverState(g, addr, st.servers[addr], st.via);
         const info = st.servers[addr];
-        lines.push(sv("line", { x1: cx, y1: CY + R, x2: mx, y2: SY, class: "edge" + (info && info.in_band ? " spread" : "") }));
+        lines.push(sv("line", { x1: cx, y1: CY + R, x2: mx, y2: SY, class: "edge" }));
         shapes.push(sv("g", { class: "shape drag st-" + ss.c + (sel("srv", addr) ? " sel" : ""), "data-col": addr, tabindex: "0", role: "button", "aria-label": "NTP server " + srvTitle(g, addr), onclick: pick("srv", addr), oncontextmenu: rightClick("srv", addr),
           onpointerdown: dragStart({ axis: "x", n: servers.length, index: i, pos: x, origin: rowX + (COLW - SW) / 2, step: COLW, group: addr,
             ghost: (k) => sv("rect", { class: "dropslot", x: rowX + (COLW - SW) / 2 + k * COLW, y: SY, width: SW, height: SH, rx: 4 }),
@@ -846,7 +846,7 @@
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
           label(mx, SY + (srvName(g, addr) ? 19 : 20), fitPx(shortAddr(addr), SW - 44, "600 13px system-ui, sans-serif"), "t1"),
           ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),
-          label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? info.ms + " ms" + (info.rank ? " · #" + info.rank : "") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
+          label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? info.ms + " ms" : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
       });
       svg.append(...lines, ...shapes);
       // The scrolling box (.cv-wrap) is made once and kept: only the drawing inside it is swapped on each refresh, so its
@@ -1164,17 +1164,12 @@
         let charts;
         if (r.kind === "gateway") {
           charts = [
-            lat("Answer time (as clients see it)"),
-            tsChart("Errors", dd, [{ label: "Errors", cls: "t6", values: r.loss, text: (i) => r.loss[i].toFixed(2) + "% of " + r.queries[i] + " requests" }], { floor: 1, axis: pctAxis }),
-            tsChart("Availability", dd, [{ label: "Available", cls: "t3", values: r.avail, text: (i) => r.avail[i].toFixed(2) + "% of the time" }], { fixedMax: 100, axis: pctAxis }),
-            tsChart("Requests per second", dd, [
-              { label: "All", cls: "t1", values: r.qps, text: (i) => r.qps[i].toFixed(1) + " per second" }], { floor: 1, axis: (v) => (Number.isInteger(v) ? v : v.toFixed(1)) + "/s" })];
+            tsChart("Availability", dd, [{ label: "Available", cls: "t3", values: r.avail, text: (i) => r.avail[i].toFixed(2) + "% of the time" }], { fixedMax: 100, axis: pctAxis })];
         } else {
           const off = (r.offset_ms || []).map((v) => (v == null ? -1 : Math.abs(v)));
           charts = [lat("Round trip"),
             tsChart("Clock offset", dd, [{ label: "Offset", cls: "t3", values: off, text: (i) => (r.offset_ms[i] > 0 ? "+" : "") + Number(r.offset_ms[i]).toFixed(2) + " ms" }], { floor: 1, axis: msAxis }),
-            tsChart("Failed probes", dd, [{ label: "Failed probes", cls: "t6", values: r.loss, text: (i) => r.loss[i].toFixed(2) + "% of the probes" }], { floor: 1, axis: pctAxis }),
-            tsChart("Failed requests", dd, [{ label: "Failed requests", cls: "t6", values: r.query_loss || [], text: (i) => r.query_loss[i].toFixed(2) + "% of " + r.queries[i] + " requests" }], { floor: 1, axis: pctAxis })];
+            tsChart("Failed probes", dd, [{ label: "Failed probes", cls: "t6", values: r.loss, text: (i) => r.loss[i].toFixed(2) + "% of the probes" }], { floor: 1, axis: pctAxis })];
         }
         sum.hidden = true;   // the graphs say it all; the line is only for "loading", "nothing recorded" and errors
         clear(body).append(...charts);
@@ -1369,7 +1364,7 @@
     // the gateway's own load-balancing values only show while "own values" is chosen
     function showLB(els) {
       const own = els.lbmode.value === LB_OWN;
-      for (const k of ["lb_spread", "lb_band", "lb_stratum", "lb_rootdist", "lb_offset", "lb_fail", "lb_attempts", "lb_alpha"]) els[k].closest("label").style.display = own ? "" : "none";
+      for (const k of ["lb_stratum", "lb_rootdist", "lb_offset", "lb_fail"]) els[k].closest("label").style.display = own ? "" : "none";
     }
     function renameGateway(g) {
       form("Rename gateway", [{ k: "name", l: "Name (optional)", v: g.name || "", ph: "e.g. Office NTP" }], (v) => {
@@ -1389,27 +1384,20 @@
         { k: "more6", l: "More IPv6 addresses (same subnet, optional)", v: g ? (g.more_vip6 || []).join(", ") : "", ph: "2001:db8::2" },
         { k: "iface", l: "Network interface", v: g ? g.interface : (base ? base.interface : "eth0") },
         { k: "fb", l: "Fallback NTP servers (optional)", v: fallbackOf(g).join(", "), ph: "e.g. 1.1.1.1, 9.9.9.9" },
-        { k: "lbmode", l: "Load balancing", v: lbNow(g).own ? LB_OWN : LB_FOLLOW, options: [LB_FOLLOW, LB_OWN], initOn: true, on: (els) => showLB(els) },
-        { k: "lb_spread", l: "Spread requests over servers of similar speed", v: lbNow(g).lb.spread ? "on" : "off", options: ["on", "off"] },
-        { k: "lb_band", l: "Spread band (% of fastest)", v: String(lbNow(g).lb.spread_band) },
+        { k: "lbmode", l: "Health checks", v: lbNow(g).own ? LB_OWN : LB_FOLLOW, options: [LB_FOLLOW, LB_OWN], initOn: true, on: (els) => showLB(els) },
         { k: "lb_stratum", l: "Highest stratum", v: String(lbNow(g).lb.max_stratum) },
         { k: "lb_rootdist", l: "Largest root distance (ms)", v: String(lbNow(g).lb.max_root_distance_ms) },
         { k: "lb_offset", l: "Falseticker offset (ms, 0 = off)", v: String(lbNow(g).lb.max_offset_ms) },
         { k: "lb_fail", l: "Failures before down", v: String(lbNow(g).lb.fail_threshold) },
-        { k: "lb_attempts", l: "Max servers tried", v: String(lbNow(g).lb.max_attempts) },
-        { k: "lb_alpha", l: "Round-trip smoothing (0–1]", v: String(lbNow(g).lb.latency_alpha) },
       ], (v) => {
         let lbOwn = null;
         if (v.lbmode === LB_OWN) {
-          lbOwn = { spread: v.lb_spread === "on", spread_band: Number(v.lb_band), max_stratum: Number(v.lb_stratum), max_root_distance_ms: Number(v.lb_rootdist), max_offset_ms: Number(v.lb_offset), fail_threshold: Number(v.lb_fail), max_attempts: Number(v.lb_attempts), latency_alpha: Number(v.lb_alpha) };
+          lbOwn = { ...lbShared(), max_stratum: Number(v.lb_stratum), max_root_distance_ms: Number(v.lb_rootdist), max_offset_ms: Number(v.lb_offset), fail_threshold: Number(v.lb_fail) };
           const intIn = (n, lo, hi) => Number.isInteger(n) && n >= lo && n <= hi;
-          if (!intIn(lbOwn.spread_band, 1, 1000)) return "The spread band is a whole number from 1 to 1000.";
           if (!intIn(lbOwn.max_stratum, 1, 15)) return "The highest stratum is a whole number from 1 to 15.";
           if (!intIn(lbOwn.max_root_distance_ms, 0, 60000)) return "The root distance is a whole number of milliseconds, 0 to 60000.";
           if (!intIn(lbOwn.max_offset_ms, 0, 3600000)) return "The falseticker offset is a whole number of milliseconds, 0 to 3600000.";
           if (!intIn(lbOwn.fail_threshold, 1, 1000000)) return "Failures before down is a whole number, at least 1.";
-          if (!intIn(lbOwn.max_attempts, 1, 1000000)) return "Max servers tried is a whole number, at least 1.";
-          if (!(lbOwn.latency_alpha > 0 && lbOwn.latency_alpha <= 1)) return "Round-trip smoothing is above 0 and at most 1.";
         }
         const fb = (v.fb || "").split(/[\s,;]+/).filter(Boolean);
         if (fb.some((a) => !/^[A-Za-z0-9_.\-:\[\]\/]+$/.test(a))) return "A fallback server needs to be an IP address or host name.";
@@ -1455,7 +1443,6 @@
     const LB_DEFAULTS = { spread: true, spread_band: 20, max_stratum: 15, max_root_distance_ms: 1500, max_offset_ms: 128, fail_threshold: 2, max_attempts: 2, latency_alpha: 0.3 };
     const LB_FOLLOW = "follow Settings", LB_OWN = "own values";
     const lbShared = () => { const d = cv.cfg.ntp || {}; return { spread: d.spread !== false, spread_band: d.spread_band, max_stratum: d.max_stratum, max_root_distance_ms: d.max_root_distance_ms, max_offset_ms: d.max_offset_ms, fail_threshold: d.fail_threshold, max_attempts: d.max_attempts, latency_alpha: d.latency_alpha }; };
-    const lbText = (l) => "spread " + (l.spread ? "on" : "off") + ", band " + l.spread_band + "%, stratum up to " + l.max_stratum + ", root distance up to " + l.max_root_distance_ms + " ms, falseticker beyond " + (l.max_offset_ms ? l.max_offset_ms + " ms" : "off") + ", " + l.fail_threshold + " failures, " + l.max_attempts + " servers tried, smoothing " + l.latency_alpha;
     // what a gateway runs with now (the daemon works it out: cv.view) and whether that is its own
     const lbNow = (g) => {
       const v = g && (cv.view || []).find((x) => x.group_id === g.group_id);
@@ -1677,8 +1664,8 @@
           // right-click on empty canvas (shapes and tabs handle their own menus)
           oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
             openMenu(e, [["New gateway…", () => gatewayForm(null)]].concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
-        const legend = legendEl = h("div", { class: "cv-legend muted small" },
-          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "active");
+        const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
+          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused");
         main.append(svgHost, legend);
         cv.loaded = false;
         load().then(() => {
@@ -1768,38 +1755,44 @@
         if (!r.ok) { out.append(h("div", { class: "notice bad", role: "alert" }, r.error)); morph(body, out); return; }
         const d = r.data;
         const pools = d.pools && d.pools.length ? d.pools : [{ key: 0, groups: [], servers: d.servers }];
-        out.append(h("div", { class: "stats" }, stat("Requests", d.queries), stat("Answered", d.answered), stat("Failed", d.failed)));
+        const c = d.chrony || {}, ss = d.server_stats || {};
+        const cState = !c.running ? "not running" : c.synced ? "synchronised" : "not synchronised";
+        out.append(h("div", { class: "stats" },
+          stat("chrony", d.chrony_roll ? h("span", { class: "pill warn" }, d.chrony_roll) : h("span", { class: "pill " + (c.synced ? "ok" : "bad") }, cState)),
+          stat("Stratum", c.synced ? c.stratum : "–"),
+          stat("System clock offset", c.synced ? sgn(c.offset_ms) + " ms" : "–"),
+          stat("Synchronised to", c.synced ? c.ref || "–" : "–", true),
+          stat("Requests", ss.received == null ? "–" : ss.received),
+          stat("Dropped", ss.dropped == null ? "–" : ss.dropped)));
         // "group 1 192.168.0.5:123" -> where each gateway answers, shown on its own card
         const addrsOf = {};
         for (const l of d.listeners || []) { const m = /^group (\d+) (.+)$/.exec(l); if (m) (addrsOf[m[1]] = addrsOf[m[1]] || []).push(m[2]); }
         const fills = [];
+        const IN_CHRONY = { "*": ["synchronised to", "ok"], "+": ["combined", "ok"], "-": ["not combined", "info"], "?": ["not reachable", "warn"], "x": ["falseticker", "bad"], "~": ["too variable", "warn"] };
         for (const p of pools) {
           const maxE = Math.max(1, ...p.servers.filter((s) => s.healthy).map((s) => s.ewma_ms));
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared pool" + (p.groups.length ? " (group " + p.groups.join(", ") + ")" : "")),
-              p.max_stratum ? h("span", { class: "muted small" }, "stratum up to " + p.max_stratum + " · root distance up to " + p.max_root_distance_ms + " ms · " + (p.max_offset_ms ? "falseticker beyond " + p.max_offset_ms + " ms" : "falseticker check off")) : null,
+            h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared servers" + (p.groups.length ? " (group " + p.groups.join(", ") + ")" : "")),
+              p.max_stratum ? h("span", { class: "muted small" }, "stratum up to " + p.max_stratum + " · root distance up to " + p.max_root_distance_ms + " ms · " + (p.max_rtt_ms ? "round trip up to " + p.max_rtt_ms + " ms" : "round trip not checked") + " · " + (p.max_offset_ms ? "falseticker beyond " + p.max_offset_ms + " ms" : "falseticker check off")) : null,
               p.using_fallback ? pill("every server is down: using the fallback servers", "warn") : null,
-              p.client_rate ? pill("limit " + p.client_rate + "/s per client" + (p.limited ? " · " + p.limited.toLocaleString() + " turned away" : ""), p.limited ? "warn" : "info") : null,
-              p.allowed_clients ? pill("allowed clients · " + p.allowed_clients + " network" + (p.allowed_clients === 1 ? "" : "s") + (p.denied ? " · " + p.denied.toLocaleString() + " turned away" : ""), p.denied ? "warn" : "info") : null,
-              p.spread ? h("span", { class: "muted small", title: "Servers within " + p.spread_band + "% of the fastest one's round trip take turns; slower ones are fallbacks." }, "spread within " + p.spread_band + "%") : null,
               h("span", { class: "spacer" }),
               (() => {
                 const on = (p.groups.length ? p.groups : [p.key]).flatMap((g) => addrsOf[g] || []);
                 return on.length ? h("span", { class: "mono small" }, "answering on " + on.join(" · ")) : h("span", { class: "muted small" }, "not answering on this node");
               })()),
             h("div", { class: "scroll" }, h("table", { class: "ntp" },
-              h("thead", {}, h("tr", {}, ["Rank", "Server name", "Server IP", "State", "Stratum", "Offset (ms)", "Root dist. (ms)", "EWMA (ms)", "Last (ms)", "OK", "Fail", "Served", "Last error"].map((t, i) => h("th", { class: i >= 4 && i <= 11 ? "num" : "" }, t)))),
+              h("thead", {}, h("tr", {}, ["Server name", "Server IP", "State", "In chrony", "Stratum", "Offset (ms)", "Root dist. (ms)", "Round trip (ms)", "Last (ms)", "OK", "Fail", "Last error"].map((t, i) => h("th", { class: i >= 4 && i <= 10 ? "num" : "" }, t)))),
               h("tbody", {}, p.servers.map((s) => h("tr", {},
-                h("td", {}, s.healthy && s.rank ? s.rank : "–"),
                 h("td", { class: "sname", title: s.name || null }, s.name || "–"),   // a long name is cut short; the whole is the tooltip
                 h("td", { class: "mono" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null),
                 h("td", {}, s.falseticker ? pill("falseticker", "bad") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad")),
+                h("td", {}, s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted" }, "no")),
                 h("td", { class: "num", title: s.time ? "Reference: " + s.time.refid : null }, s.time ? s.time.stratum : "–"),
                 h("td", { class: "num" }, s.time ? sgn(s.time.offset_ms) : "–"),
                 h("td", { class: "num" }, s.time ? fmtMs(s.time.root_distance_ms) : "–"),
                 h("td", { class: "num" }, s.healthy && s.ewma_ms > 0 ? h("span", { class: "bar-wrap" }, h("span", { class: "bar-fill" })) : null, s.healthy && s.ewma_ms > 0 ? fmtMs(s.ewma_ms) : "–"),
                 h("td", { class: "num" }, s.last_ms > 0 ? fmtMs(s.last_ms) : "–"),
-                h("td", { class: "num" }, s.successes), h("td", { class: "num" }, s.failures), h("td", { class: "num" }, s.served),
+                h("td", { class: "num" }, s.successes), h("td", { class: "num" }, s.failures),
                 h("td", { class: "wrap muted" }, s.last_error || ""))))))));
           for (const s of p.servers) if (s.healthy && s.ewma_ms > 0) fills.push([s, maxE]);
         }
@@ -1833,31 +1826,25 @@
     { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "list", wide: true, hint: "Every node, one IP per line. Empty: multicast." },
   ];
   const NTP_FIELDS = [
-    { section: "Upstream servers", note: "The default settings for every gateway that has no servers of its own (a gateway drawn on the Topology page can have its own)." },
+    { section: "Upstream servers" },
     { shared: true, k: "servers", l: "Servers", t: "list", wide: true, hint: "One per line: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
-    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "list", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one answers again. They are never probed and always count as up." },
-    { section: "Load Balancing", cols: 3, note: "Applies to every gateway unless that gateway has its own load balancing (Topology ▸ right-click the gateway ▸ Edit)." },
-    { shared: true, k: "spread", l: "Spread requests over servers of similar speed (round-robin)", t: "bool" },
-    { shared: true, k: "spread_band", l: "Spread band (% of fastest)", t: "int", min: 1, max: 1000 },
+    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "list", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are never probed and always count as up." },
+    { section: "Health", cols: 3, note: "A server that fails a check is taken out as a source of every node. Applies to every gateway unless it has its own checks (Topology ▸ right-click the gateway ▸ Edit)." },
     { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", min: 1, max: 15 },
     { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", min: 0, max: 60000 },
+    { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", min: 0, max: 60000 },
     { shared: true, k: "max_offset_ms", l: "Falseticker offset (ms, 0 = off)", t: "int", min: 0, max: 3600000 },
     { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", min: 1 },
-    { shared: true, k: "max_attempts", l: "Max servers tried", t: "int", min: 1 },
-    { shared: true, k: "latency_alpha", l: "Round-trip smoothing (0–1]", t: "float" },
-    { section: "Listener" },
-    { shared: true, k: "listen_port", l: "NTP port (UDP)", t: "int", min: 1, max: 65535 },
-    { section: "Client Rate Limiting", note: "Applies to every gateway that uses these settings. This node itself is always allowed and never limited. Counters are per node." },
-    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "list", wide: true, hint: "Networks that may use the relay, one per line: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
+    { section: "Serving" },
+    { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", min: 1, max: 65535 },
+    { section: "Client Rate Limiting", note: "Written to chrony (allow, ratelimit). This node itself is always allowed. The rate limit restarts chrony." },
+    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "list", wide: true, hint: "Networks that may ask, one per line: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
     { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit. A client is one IPv4 address or one IPv6 /64." },
     { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
     { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
-    { shared: true, k: "client_limits", l: "Per-client limits", t: "list", wide: true, hint: "One per line: an address or network, then requests per second (192.168.1.5 50)." },
-    { shared: true, k: "client_exempt", l: "Never limited", t: "list", wide: true, hint: "Networks exempt from the rate limit (not from the allowed list), same forms." },
     { section: "Timing" },
     { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", min: 1 },
     { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", min: 1 },
-    { shared: true, k: "query_timeout_ms", l: "Forward timeout (ms)", t: "int", min: 1 },
   ];
   const WEB_FIELDS = [
     { k: "listen", l: "Listen address", t: "port", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
@@ -1947,13 +1934,12 @@
       const web = fieldset(WEB_FIELDS, cfg.web);
       const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
-      // the NTP relay page is four tabs; every card stays in the page (a hidden one is still read when saving)
+      // the NTP page is three tabs; every card stays in the page (a hidden one is still read when saving)
       const ntpTabs = () => {
         const TABS = [
           ["Servers", ["Upstream servers"]],
-          ["Health & balancing", ["Load Balancing", "Timing"]],
-          ["Listener", ["Listener"]],
-          ["Clients", ["Client Rate Limiting"]],
+          ["Health", ["Health", "Timing"]],
+          ["Clients", ["Serving", "Client Rate Limiting"]],
         ];
         const titleOf = (c) => ((c.querySelector("header h2") || {}).textContent || "");
         const panes = TABS.map(() => h("div", { role: "tabpanel" }));
@@ -1969,7 +1955,7 @@
           if (focus) buttons[i].focus();
           if (document.getElementById("help-panel") && document.getElementById("help-panel").classList.contains("open")) fillHelp();
         }
-        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "NTP relay settings" }, buttons);
+        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "NTP settings" }, buttons);
         strip.addEventListener("keydown", (e) => {
           const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
           if (!d) return;
@@ -2048,7 +2034,7 @@
       const panels = [
         ["general", "General", h("div", {}, section("General", general.el), updatesCard())],
         ["groups", "Gateway groups", h("div", {}, groupsEl)],
-        ["ntp", "NTP relay", ntpTabs()],
+        ["ntp", "NTP", ntpTabs()],
         ["web", "Web GUI", h("div", {}, section("Web GUI", web.el), certBox)],
         ["cluster", "Cluster", section("Cluster", cluster.el)],
       ];
@@ -2849,40 +2835,6 @@
     async function copyAddr(text) {
       try { await navigator.clipboard.writeText(text); } catch (_) { /* no permission: nothing copied */ }
     }
-    // Limit…: a rate of its own for one client (Settings ▸ client_limits, "ADDRESS RATE"); 0 removes it
-    async function setClientLimit(addr, rate) {
-      try {
-        const cfg = (await api("GET", "/api/config")).config;
-        cfg.ntp = cfg.ntp || {};
-        const list = (cfg.ntp.client_limits || []).filter((x) => x.trim().split(/\s+/)[0] !== addr);
-        if (rate > 0) list.push(addr + " " + rate);
-        if (list.length) cfg.ntp.client_limits = list; else delete cfg.ntp.client_limits;
-        await api("PUT", "/api/config", { config: cfg, note: "Client limit from Statistics: " + addr + (rate > 0 ? " " + rate + " requests/s" : " removed") });
-        await load();
-      } catch (e) { if (e.message !== "unauthenticated") say(status, "bad", "Limit not saved: " + e.message); }
-    }
-    function askLimit(addr, current) {
-      const input = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false", value: current ? String(current) : "", placeholder: "requests per second", "aria-label": "Requests per second" });
-      const err = h("div", { "aria-live": "polite" });
-      const d = h("dialog", { class: "cv-dialog", "aria-label": "Limit " + addr });
-      const close = () => { try { d.close(); } catch (_) { /* closed */ } d.remove(); };
-      d.addEventListener("close", () => d.remove());
-      d.append(h("h2", {}, "Limit " + addr),
-        h("form", { onsubmit: (ev) => {
-          ev.preventDefault();
-          const v = input.value.trim();
-          if (!/^\d+$/.test(v) || Number(v) < 1 || Number(v) > 10000000) { errorBox(err, "Write a number of requests per second, 1 to 10000000."); return; }
-          close(); setClientLimit(addr, Number(v));
-        } },
-        h("label", { class: "f wide" }, "Requests per second", input), err,
-        h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "submit" }, "Save"),
-          current ? h("button", { class: "btn", type: "button", onclick: () => { close(); setClientLimit(addr, 0); } }, "Remove limit") : null,
-          h("button", { class: "btn", type: "button", onclick: close }, "Cancel"))));
-      root.append(d);
-      d.showModal();
-      input.focus(); input.select();
-    }
-
     // Name…: give a client a name by hand (Settings ▸ client_names); an empty name removes it
     async function setClientName(addr, name) {
       try {
@@ -2917,20 +2869,13 @@
       d.showModal();
       input.focus(); input.select();
     }
-    async function clientMenu(e, addr, entry) {
+    function clientMenu(e, addr, entry) {
       e.preventDefault(); e.stopPropagation();
-      let limit = 0;
-      try {
-        const ntp = (await api("GET", "/api/config")).config.ntp || {};
-        const own = (ntp.client_limits || []).map((x) => x.trim().split(/\s+/)).find((f) => f[0] === addr);
-        limit = own ? Number(own[1]) || 0 : 0;
-      } catch (_) { /* offer the limit */ }
       const manual = !!(entry && entry.manual), host = (entry && entry.host) || "";
       rowMenu([["Whois", () => whoisPopup(addr)], "-",
         ["Ping", () => netTool("ping", addr)], ["Traceroute", () => netTool("trace", addr)], ["Scan", () => scanPopup(addr)], "-",
         ["Copy", () => copyAddr(addr)], "-",
-        ...(host ? [["Rename…", () => askName(addr, host)], ...(manual ? [["Remove name", () => setClientName(addr, "")]] : [])] : [["Name…", () => askName(addr, "")]]),
-        ["Limit…" + (limit ? " (" + limit + "/s)" : ""), () => askLimit(addr, limit)]])(e);
+        ...(host ? [["Rename…", () => askName(addr, host)], ...(manual ? [["Remove name", () => setClientName(addr, "")]] : [])] : [["Name…", () => askName(addr, "")]])])(e);
     }
     function serverMenu(e, addr) {
       e.preventDefault(); e.stopPropagation();

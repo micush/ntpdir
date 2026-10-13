@@ -17,17 +17,15 @@
   "ntp": {
     "servers": ["10.0.10.1", "10.0.10.2", "10.0.20.1:1123"],
     "listen_port": 123,
-    "spread": true,
-    "spread_band": 20,
+    "allowed_clients": [],
+    "client_rate": 0,
     "max_stratum": 15,
     "max_root_distance_ms": 1500,
     "max_offset_ms": 128,
+    "max_rtt_ms": 500,
     "probe_interval_ms": 16000,
     "probe_timeout_ms": 1000,
-    "query_timeout_ms": 800,
-    "max_attempts": 2,
-    "fail_threshold": 2,
-    "latency_alpha": 0.3
+    "fail_threshold": 2
   },
   "web": {
     "listen": ":12380",

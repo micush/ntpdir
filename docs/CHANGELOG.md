@@ -1,5 +1,48 @@
 # Changelog
 
+## [v8] - 2026-10-13 — chrony answers the clients; AnyTime keeps its sources healthy
+
+The forwarding NTP relay is gone. Each node's chrony answers clients, and AnyTime decides which upstream servers chrony may use: servers that test good are chrony's sources on every node, and a server that fails, is a falseticker, is too far out of sync or is too slow is removed from them within seconds and added again when it recovers.
+
+### Added
+- `chrony` source management (`chronysrc.go`, `chronyloop.go`): every 2 seconds AnyTime writes the healthy servers to `<sourcedir>/ntpdir.sources` (chrony's `sourcedir`) and runs `chronyc reload sources`. If no normal server passes, chrony keeps what it has and the fallback servers become sources only for that time; with everything paused the file is emptied. A write that chrony was not there to receive is retried.
+- **Rolling chrony restart** (`chronyroll.go`): a changed port or rate limit is applied by restarting chrony node by node. Each node pauses itself, restarts chrony, waits (up to 3 minutes) until it is synchronised, and resumes; nodes go in order of address, and nobody starts while another is restarting, has failed, or is updating. A node that cannot be paused (alone, or the last one serving a gateway) restarts without pausing. A node that fails to synchronise resumes anyway, shows `failed`, and holds the others for 10 minutes. The state is in the cluster status (`chrony_roll`), the NTP page tile and `--show-ntp`; a roll cut short by a daemon stop resumes the node afterwards (`chrony-roll.json`).
+- Client settings go to `<confdir>/ntpdir.conf` (`port`, `allow`, `ratelimit`); a new `allowed_clients` list is applied to the running chrony with `chronyc deny all` / `allow all NET` (verified against a real chronyd with `accheck`) and chrony is restarted only when the port or the rate limit changes, since chrony has no command for those. `allowed_clients` is `allow`; `client_rate`, `client_burst` and `client_action` are `ratelimit` (interval from the rate rounded to a power of two, burst, leak 4 for drop and 2 for kod).
+- `max_rtt_ms` (default 500, 0 = off): a server whose round trip is longer counts as down ("too slow"). Configure ▸ NTP ▸ Health.
+- The NTP page and `--show-ntp` show chrony's state (synchronised, stratum, offset, synchronised to, requests handled and dropped) and an **In chrony** column per server. `chrony.json`, `chrony-sources.txt` and `chrony-sourcestats.txt` are in the troubleshooting bundle.
+- Statistics are read from `chronyc clients` every 10 seconds (answered = packets minus drops, refused = drops).
+- Installer: requires chrony 4.0 or newer; adds `sourcedir` and `confdir` to chrony's marked block, creates both directories, and switches off chrony's own servers (`pool`/`server`/`peer` lines marked `#ntpdir-off#`, distribution `sources.d/*.sources` renamed `*.ntpdir-off`). The uninstaller puts them back; `--purge` also removes the two directories.
+
+### Changed
+- A gateway or anycast address counts as healthy only while chrony runs and is synchronised, as well as a server passing.
+- Pools are kept for paused gateways and paused nodes too (a paused node still needs its time sources); two tests that expected no pool were changed.
+- With no gateway there is no pool, so chrony gets no sources: draw a gateway first.
+- Configure ▸ NTP is now Servers, Health and Clients tabs; per-gateway "Load balancing" is "Health checks".
+- A node's sources are only the servers of the topology: each gateway's own servers, or the shared list for a gateway without its own, from gateways that are not paused; the same on every node. A shared list that no gateway uses is not given to chrony. chrony has one set of sources, so with several gateways the node uses all their healthy servers together.
+- Test floor in `TestHelpCoversEveryField` lowered from 70 to 55 labelled fields, because the spread/attempts/alpha/timeout/limit fields were removed.
+
+### Removed
+- The relay (`ntpfront.go`, `upstreamudp.go`, `udpreply.go`, `loopguard.go`, `fwdfail.go`), the in-process client limiter, ranking, spread and the `NTPDIR_CHRONY_IFACE` / `bindaddress` logic. `spread`, `spread_band`, `max_attempts`, `latency_alpha`, `query_timeout_ms`, `client_exempt` and `client_limits` are still accepted in a file but do nothing. Their CLI flags and GUI fields are gone.
+- Recorded per-gateway answer time, errors and request rate, and a server's failed requests: chrony does not report them. The topology gateway/server statistics windows show availability, round trip, offset and failed probes only. Statistics show "Failed" and "Kiss-o'-death" as 0, the top-servers list as one `chrony` entry and the NTP version as "Other".
+
+### Fixed
+- The NTP page and `--show-ntp` showed the default port and client settings instead of the configured ones.
+- The Topology legend is hidden until a gateway exists.
+
+### Verified
+- gofmt, `go build`, `go vet`, `go test -race -count=1 ./...` pass, with new tests for the sources file, client config, state parsing and statistics sampling; cross-builds and `CGO_ENABLED=0` vet/test as listed below.
+- Live, with a real chronyd 4.5 (private instance, `-x`), three stub NTP servers and the daemon: the three servers appear as sources; a dead server, a server 0.6 s slow (limit 300 ms) and a server 5 s off are each removed from `chronyc sources` within about 10 s and added back on recovery; with all servers dead chrony keeps its sources; a node started before chronyd got its sources once chronyd came up; a gateway on `lo` answered on the VIP through chrony; allowed clients and rate limit reached `ntpdir.conf`, and the allowed-clients rules applied to a real running chronyd (`accheck`).
+- Installer: dry-run, a real install with a shim `systemctl` against a fake `chrony.conf` and `sources.d`, an idempotent re-run, and an uninstall with `--purge` that restored `chrony.conf` byte for byte.
+- Live, two real daemons clustered, each with its own real chronyd and shim `systemctl`: a shared rate-limit change rolled through the nodes in order: the first node paused, chrony restarted, resumed when synchronised (about 12 s), and only then the second; the primary role was handed over on each pause; a fresh node started with a non-default port restarted chrony once.
+- GUI in headless Chromium, light and dark: NTP page, Configure ▸ NTP, Statistics, Topology.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- A real cluster of several nodes with chrony (each node's chrony run by systemd), a real `chronyd` restart through systemd, chrony older than 4.5, and the installer on a distribution other than a sandbox with a fake Ubuntu `os-release` (no real apt/dnf chrony install, no shellcheck-clean run on other families beyond `shellcheck -S warning`).
+- chrony's own `clientloglimit` caps the clients it counts, so the statistics undercount on a very busy node.
+- The screenshots under `snaps/` were not retaken: `ntp.png`, `topology.png` and `statistics.png` show the old relay pages. `ntp-relay.png` was removed.
+- Cross-platform builds use the PAM stub (see v1); only the native amd64 build is verified with PAM.
+
 ## [v7] - 2026-10-12 — Updates: "Downloading…"; Controller greyed with several gateways
 
 Taken from the Anyname DNS Director v379. Its other recent changes (server names registered in DNS, Rename registering in DNS, policy-based resolution) are DNS-only; its v369-v374 changes were already here.
@@ -14,6 +57,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - In a browser; the multi-gateway case was reasoned from the code, not reproduced.
 
 ## [v6] - 2026-10-12 — README and screenshots refreshed for NTP
@@ -30,6 +74,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - gofmt, build, vet, `go test -race -count=1`, cross-compile amd64/arm64/arm/386/riscv64, `CGO_ENABLED=0` vet and test, `node --check` on `app.js` and `help.js`.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - The screenshots were taken from a build with the `cli.go` fix but before the final `app.js`/`help.js` placeholder edits.
 - The Upgrade shot's newest event is a "cancelled" entry from a mistaken demo command; History shows setup BGP entries; the NTP page's right-hand columns clip at 1280px.
 - The first `go test -race` run failed once (failing test not captured); the rerun passed. Timing-sensitive tests have been flaky before (`TestLogServerFlips`, `TestSpreadSharesRealQueries`).
@@ -45,6 +90,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - gofmt, build, vet, `go test -race -count=1` (new `TestConfigSaveNeverChangesTheNodePause`, `TestTakeFromClearsLocalOnMembers`; one run failed once with the output not captured and passed on three reruns, so it is treated as a flaky timing test), CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - In a browser or on a live cluster. A node paused by this bug stays paused until it is resumed from its menu.
 
 ## [v4] - 2026-10-12 — A gateway can answer NTP on dnsdir's anycast addresses
@@ -66,6 +112,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, `node --check`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - Two flaky tests: one full `-race` run reported a race in `TestLogServerFlips`, and one non-race run missed a timing bound in `TestSpreadSharesRealQueries`. Neither recurred in 40 isolated race runs, 3 isolated runs and the full runs that followed (all green), and neither touches this change, but the race report was not investigated.
 - A real dnsdir install: dnsdir was simulated by a marker file, a configuration file and an address added to `lo` by hand. BGP announcements, and what dnsdir does with the address when its own DNS is unhealthy, were not exercised.
 - More than one node: the shared list is covered by tests of the hash and merge, not by a live cluster run.
@@ -84,6 +131,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, `node --check webui/app.js`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - The three Anycast pages in Chromium with the block shown (only `node --check` and the API/CLI were run).
 - A real dnsdir install on the same host; the check is by file presence only, so a dnsdir that was removed by hand but left its unit file behind keeps BGP blocked.
 - dnsdir v373 was not changed and has no matching check for ntpdir, so it would still take over `frr.conf` on its own; only ntpdir backs off.
@@ -103,6 +151,7 @@ Taken from the Anyname DNS Director v379. Its other recent changes (server names
 - `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64; `bash -n install.sh`.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - Running ntpdir and dnsdir together on one host: the conflict was found by reading both sources, and the fix was not tried against a running dnsdir.
 - A rolling v1 to v2 update on a live multi-node cluster.
 
@@ -137,6 +186,7 @@ The project is now **AnyTime NTP Director** (`ntpdir`), built from the Anyname D
 - Installer: `bash -n` and `shellcheck -x -S warning` clean; dry runs for ubuntu, debian, linuxmint, fedora, rocky, almalinux, centos, arch, manjaro and endeavouros (alpine refused); a real run with a shim `systemctl`: fresh install, no-op, upgrade, forced-failure rollback, downgrade refusal, uninstall with and without `--purge`, a customised PAM file kept, and chrony's configuration restored byte for byte.
 
 ### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
 - The IPv6 branch of the chrony block (the sandbox has no IPv6) and a real chrony package install and restart; only the configuration edit with a shim was run.
 - The installer's Go download against a local server was not re-run for this release (that code is unchanged).
 - Real multi-host behaviour: election on a real wire, ARP/NS steering to virtual MACs, an AFN answering through `lo` and `arp_ignore`, real public NTP servers, and relay behaviour behind rate-limiting upstreams. Upstream servers see the relay's address for every client.

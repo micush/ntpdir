@@ -72,6 +72,8 @@ type PeerStatusMsg struct {
 	Gateways []GwState `json:"gateways,omitempty"`
 	// NodePaused: the whole node is paused (Operate ▸ Node); shown on the Topology drawing.
 	NodePaused bool `json:"node_paused,omitempty"`
+	// ChronyRoll is this node's part in the rolling chrony restart: pending, restarting or failed (absent: nothing to do).
+	ChronyRoll string `json:"chrony_roll,omitempty"`
 	// Host is this node's CPU, memory and disk use, for the Topology drawing (absent on older nodes).
 	Host *HostLoad `json:"host,omitempty"`
 	// Addrs are this node's Ethernet interfaces with their IPv4 and IPv6 GUA addresses, for the node's tooltip on the
@@ -624,7 +626,7 @@ func (c *Cluster) statusMsg() PeerStatusMsg {
 		Peers: append(c.knownPeers(snap), c.node.Self()), Removed: snap.Removed,
 		Version: version(), SourceVersion: c.mg.upd.SourceVersion(), Updating: c.mg.upd.Busy(),
 		UpdateFailed: c.mg.upd.FailedFor(), UptimeSec: int64(time.Since(processStart) / time.Second), AnycastUp: c.mg.anycastReport(), SharedRev: snap.SharedRev, Intent: c.mg.upd.Intent(), PrimaryDownSec: c.primaryDownSec(),
-		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), Host: hostLoadPtr(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
+		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Host: hostLoadPtr(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
 	}
 }
 
@@ -1228,6 +1230,7 @@ func (c *Cluster) Run(ctx context.Context) {
 		c.failoverTick()
 		c.mg.powerHandoverTick()
 		c.mg.updateTick(sctx)
+		c.mg.chronyRollTick(ctx)
 		cancel()
 		c.logStrain()
 	}
@@ -1414,6 +1417,7 @@ type PeerView struct {
 	Epoch         uint64 `json:"epoch"`
 	IsPrimary     bool   `json:"is_primary"`
 	NodePaused    bool   `json:"node_paused,omitempty"` // the whole node is paused: it cannot take the primary role
+	ChronyRoll    string `json:"chrony_roll,omitempty"`
 	Version       string `json:"version"`
 	Hostname      string `json:"hostname,omitempty"`
 	SourceVersion string `json:"source_version"`
@@ -1469,7 +1473,7 @@ func (c *Cluster) View() ClusterView {
 	v.FailoverOn = failoverEnabled(v.Failover, len(snap.Peers)+1)
 	v.Peers = append(v.Peers, PeerView{
 		Addr: snap.SelfAddr, NodeID: snap.NodeID, Fingerprint: c.node.Fingerprint(), Self: true, Reachable: true,
-		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), Version: version(),
+		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Version: version(),
 		SourceVersion: c.mg.upd.SourceVersion(), Updating: c.mg.upd.Busy(), UpdateFailed: c.mg.upd.FailedFor(),
 		SharedRev: snap.SharedRev, LastSeen: time.Now(), Hostname: selfHost(), IPs: selfIPs, GwIPs: selfGw,
 	})
@@ -1483,6 +1487,7 @@ func (c *Cluster) View() ClusterView {
 			pv.Updating, pv.UpdateFailed, pv.SharedRev = m.Updating, m.UpdateFailed, m.SharedRev
 			pv.Hostname = m.Hostname
 			pv.NodePaused = m.NodePaused
+			pv.ChronyRoll = m.ChronyRoll
 			pv.IPs, pv.GwIPs = addrList(m.Addrs), m.GwIPs
 		}
 		v.Peers = append(v.Peers, pv)
@@ -1842,7 +1847,7 @@ func max2(a, b string) string {
 
 // GwState says whether this node is serving one gateway right now: it holds the
 // address (AGC) or forwards for it (AFN) in every address family the gateway
-// has and, with a NTP proxy, the NTP listener is up.
+// has and, with chrony serving, the NTP service is up.
 type GwState struct {
 	GroupID int  `json:"group_id"`
 	Serving bool `json:"serving"`

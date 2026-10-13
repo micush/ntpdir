@@ -203,9 +203,9 @@ func TestCLIParityEndpoints(t *testing.T) {
 	if r.code != 200 || r.body["ok"] != false {
 		t.Fatalf("assert-agc: %d %v", r.code, r.body)
 	}
-	// no gateway, no DNS proxy
+	// no NTP server defined, nothing to show
 	r = e.do("GET", "/api/ntp", nil, withAuth(e, false))
-	if r.body["ok"] != false || !strings.Contains(r.body["error"].(string), "no gateway") {
+	if r.body["ok"] != false || !strings.Contains(r.body["error"].(string), "no NTP server") {
 		t.Fatalf("dns: %v", r.body)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"log/slog"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -190,61 +189,6 @@ func TestJudge(t *testing.T) {
 	}
 }
 
-// ── pool ─────────────────────────────────────────────────────────────────────
-
-func TestRankedFastestFirst(t *testing.T) {
-	slow, mid, fast := newFakeNTP(t), newFakeNTP(t), newFakeNTP(t)
-	slow.delay.Store(int64(80 * time.Millisecond))
-	mid.delay.Store(int64(30 * time.Millisecond))
-	p := NewPool(testNTPCfg(slow.addr, mid.addr, fast.addr))
-	p.ProbeNow(context.Background())
-	got := rankedAddrs(p)
-	want := []string{fast.addr, mid.addr, slow.addr}
-	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("ranking = %v, want %v", got, want)
-	}
-	// the spread band is off in this test: traffic goes to the fastest server only
-	cfg := testNTPCfg(slow.addr, mid.addr, fast.addr)
-	cfg.Spread = false
-	p = NewPool(cfg)
-	p.ProbeNow(context.Background())
-	sh, mh, fh := slow.hits.Load(), mid.hits.Load(), fast.hits.Load()
-	for i := 0; i < 5; i++ {
-		req := clientReq(uint64(0x1234 + i))
-		resp, via, err := p.Forward(context.Background(), req, mustAddr("192.0.2.10"))
-		if err != nil || via != fast.addr || !ntpAnswers(req, resp) {
-			t.Fatalf("%v via %s", err, via)
-		}
-	}
-	if slow.hits.Load() != sh || mid.hits.Load() != mh {
-		t.Fatalf("slow/mid got forwarded traffic: slow=%d mid=%d", slow.hits.Load()-sh, mid.hits.Load()-mh)
-	}
-	if fast.hits.Load() != fh+5 {
-		t.Fatalf("fast hits = %d, want %d", fast.hits.Load(), fh+5)
-	}
-}
-
-func TestForwardRelaysTheAnswerUnchanged(t *testing.T) {
-	f := newFakeNTP(t)
-	f.stratum.Store(1)
-	p := NewPool(testNTPCfg(f.addr))
-	p.ProbeNow(context.Background())
-	req := clientReq(0xFEEDFACECAFEBEEF)
-	req[0] = 3<<3 | ntpModeClient
-	resp, _, err := p.Forward(context.Background(), req, mustAddr("192.0.2.10"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// what the server saw is exactly what the client sent (the proxy changes nothing), and the answer comes back whole
-	seen, _ := f.lastReq.Load().([]byte)
-	if !bytes.Equal(seen, req) {
-		t.Fatalf("the request was changed on the way:\n sent % x\n seen % x", req, seen)
-	}
-	if pk, _ := parseNTP(resp); pk.Stratum != 1 || pk.Version != 3 || pk.Orig != 0xFEEDFACECAFEBEEF {
-		t.Fatalf("%+v", pk)
-	}
-}
-
 func TestLatencyReordersAfterChange(t *testing.T) {
 	a, b := newFakeNTP(t), newFakeNTP(t)
 	b.delay.Store(int64(40 * time.Millisecond))
@@ -306,61 +250,6 @@ func TestFailThresholdKeepsAServerUntilItFailsEnoughTimes(t *testing.T) {
 	}
 }
 
-func TestForwardFailoverAndMarkDown(t *testing.T) {
-	fast, slow := newFakeNTP(t), newFakeNTP(t)
-	slow.delay.Store(int64(20 * time.Millisecond))
-	cfg := testNTPCfg(fast.addr, slow.addr)
-	cfg.Spread = false
-	p := NewPool(cfg)
-	p.ProbeNow(context.Background())
-
-	fast.mode.Store(fakeDrop) // the fast server dies between probes
-	req := clientReq(7)
-	resp, via, err := p.Forward(context.Background(), req, mustAddr("192.0.2.10"))
-	if err != nil || via != slow.addr || !ntpAnswers(req, resp) {
-		t.Fatalf("expected failover to the slow server: %v via %s", err, via)
-	}
-	// the failed request does not demote it; the next probe does (fail_threshold=1)
-	if r := rankedAddrs(p); len(r) != 2 {
-		t.Fatalf("a failed request took the server out of service: %v", r)
-	}
-	p.ProbeNow(context.Background())
-	if r := rankedAddrs(p); len(r) != 1 || r[0] != slow.addr {
-		t.Fatalf("dead server still ranked: %v", r)
-	}
-}
-
-func TestKissOfDeathTriesTheNextServer(t *testing.T) {
-	a, b := newFakeNTP(t), newFakeNTP(t)
-	b.delay.Store(int64(20 * time.Millisecond))
-	cfg := testNTPCfg(a.addr, b.addr)
-	cfg.Spread = false
-	p := NewPool(cfg)
-	p.ProbeNow(context.Background())
-	a.mode.Store(fakeKoD)
-	req := clientReq(9)
-	resp, via, err := p.Forward(context.Background(), req, mustAddr("192.0.2.10"))
-	if err != nil || via != b.addr || kodCode(resp) != "" {
-		t.Fatalf("expected b's good answer: %v via %s kod %q", err, via, kodCode(resp))
-	}
-	// when every server refuses, the client gets the kiss-o'-death (it tells it to back off) rather than silence
-	b.mode.Store(fakeKoD)
-	resp, _, err = p.Forward(context.Background(), req, mustAddr("192.0.2.10"))
-	if err != nil || kodCode(resp) != "DENY" || !ntpAnswers(req, resp) {
-		t.Fatalf("all servers refuse: %v kod %q", err, kodCode(resp))
-	}
-}
-
-func TestNoHealthyServers(t *testing.T) {
-	dead := newFakeNTP(t)
-	dead.mode.Store(fakeDrop)
-	p := NewPool(testNTPCfg(dead.addr))
-	p.ProbeNow(context.Background())
-	if _, _, err := p.Forward(context.Background(), clientReq(1), mustAddr("192.0.2.10")); err != errNoServers {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 func TestFalsetickerIsTakenOut(t *testing.T) {
 	a, b, c, liar := newFakeNTP(t), newFakeNTP(t), newFakeNTP(t), newFakeNTP(t)
 	liar.offset.Store(int64(5 * time.Second)) // five seconds ahead of the other three
@@ -418,24 +307,6 @@ func TestSnapshotCarriesWhatTheServerSaid(t *testing.T) {
 	}
 }
 
-func TestNeverForwardsToTheAsker(t *testing.T) {
-	// a request that comes from a server of the pool is not sent back to it (a loop); the others still get it
-	a := &Server{Addr: "192.0.2.7:123"}
-	b := &Server{Addr: "192.0.2.8:123"}
-	got := dropAsker([]*Server{a, b}, mustAddr("192.0.2.7"))
-	if len(got) != 1 || got[0] != b {
-		t.Fatalf("the asker was not dropped: %v", got)
-	}
-	if got := dropAsker([]*Server{a, b}, mustAddr("192.0.2.9")); len(got) != 2 {
-		t.Fatal("a stranger lost a server")
-	}
-	// a local program is not a server forwarding
-	l := &Server{Addr: "127.0.0.1:123"}
-	if got := dropAsker([]*Server{l}, mustAddr("127.0.0.1")); len(got) != 1 {
-		t.Fatal("a request from this machine was treated as a loop")
-	}
-}
-
 func TestLogServerFlips(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()
@@ -456,53 +327,6 @@ func TestLogServerFlips(t *testing.T) {
 	p.ProbeNow(context.Background())
 	if !strings.Contains(buf.String(), "is DOWN") {
 		t.Fatalf("no DOWN line: %s", buf.String())
-	}
-}
-
-// ── frontend ─────────────────────────────────────────────────────────────────
-
-func TestFrontendServesUDPAndAnswersUnsynchronisedWhenNothingIsUp(t *testing.T) {
-	up := newFakeNTP(t)
-	p := NewPool(testNTPCfg(up.addr))
-	p.ProbeNow(context.Background())
-
-	l, _ := net.ListenPacket("udp4", "127.0.0.1:0")
-	port := l.LocalAddr().(*net.UDPAddr).Port
-	l.Close()
-	fe := NewNTPFrontend(mustAddr("127.0.0.1"), port, func() *Pool { return p })
-	if err := fe.Start(); err != nil {
-		t.Skipf("cannot bind: %v", err)
-	}
-	defer fe.Stop()
-	srv := net.JoinHostPort("127.0.0.1", itoa(port))
-
-	req := clientReq(0xBEEF00000000BEEF)
-	resp, _, err := exchange(context.Background(), srv, req, time.Second)
-	if err != nil || !ntpAnswers(req, resp) || kodCode(resp) != "" {
-		t.Fatalf("udp: %v % x", err, resp)
-	}
-	if pk, _ := parseNTP(resp); pk.Stratum != 2 {
-		t.Fatalf("the upstream's answer must come back as it is: %+v", pk)
-	}
-	// every upstream down: the client is told at once that this server is not synchronised, not left to time out
-	up.mode.Store(fakeDrop)
-	p.ProbeNow(context.Background())
-	start := time.Now()
-	resp, _, err = exchange(context.Background(), srv, req, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pk, _ := parseNTP(resp); pk.Stratum != 16 || pk.Leap != ntpLeapUnsynch || !ntpAnswers(req, resp) {
-		t.Fatalf("want an unsynchronised answer, got %+v", pk)
-	}
-	if time.Since(start) > 200*time.Millisecond {
-		t.Fatal("the unsynchronised answer was not immediate")
-	}
-	// a control-mode packet gets no answer at all
-	ctl := append([]byte(nil), req...)
-	ctl[0] = 2<<3 | 6
-	if r, _, err := exchange(context.Background(), srv, ctl, 150*time.Millisecond); err == nil {
-		t.Fatalf("mode 6 was answered: % x", r)
 	}
 }
 

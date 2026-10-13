@@ -21,7 +21,7 @@ type engineKey struct {
 //
 // Live fields (no engine restart): priority, lb_method, weight, hello_ms,
 // hold_ms, preempt, max_afns.  Restart fields: interface, vip4, vip6,
-// group_id, key, neighbors, ntp_proxy.  The "ntp" block is applied live by
+// group_id, key, neighbors.  The "ntp" block is applied live by
 // swapping in a freshly probed pool.
 type Supervisor struct {
 	ctx context.Context
@@ -51,6 +51,10 @@ type Supervisor struct {
 
 	// Anycast address sets of the running groups (guarded by mu).
 	anycast map[int]*anycastSet
+
+	// The loop that keeps chrony's sources in line with the pools' health (chronyloop.go).
+	chronyCancel context.CancelFunc
+	chronyDone   chan struct{}
 }
 
 type offnetWait struct {
@@ -127,6 +131,18 @@ func (s *Supervisor) ntpFor(gid int) NTPConfig {
 	return defaultNTP()
 }
 
+// sharedNTP is the top-level NTP block (client settings and the port chrony serves on are shared by every pool).
+func (s *Supervisor) sharedNTP() NTPConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dc == nil {
+		return defaultNTP()
+	}
+	return s.dc.NTP
+}
+
+func (s *Supervisor) ntpPort() int { return s.sharedNTP().ListenPort }
+
 // serverNames is the names given to the NTP servers of the pool key (0 is the shared pool, otherwise a gateway's own).
 func (s *Supervisor) serverNames(key int) map[string]string {
 	s.mu.Lock()
@@ -182,6 +198,7 @@ func (s *Supervisor) StartAll() {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	s.refreshPool(s.dc, false)
+	s.startChronyLoop()
 	s.mu.Lock()
 	for _, gc := range s.dc.Groups {
 		s.startGroupWhenReadyLocked(gc)
@@ -210,6 +227,7 @@ func (s *Supervisor) StopAll() {
 		go func() { defer wg.Done(); e.Stop() }()
 	}
 	wg.Wait()
+	s.stopChronyLoop()
 	s.poolMu.Lock()
 	old := s.pools
 	s.pools, s.ntps, s.keyOf = map[int]*Pool{}, map[int]NTPConfig{}, map[int]int{}
@@ -240,8 +258,7 @@ func (s *Supervisor) startAnycastLocked(gc GroupConfig) {
 		return
 	}
 	gid := gc.GroupID
-	a := newAnycastSet(gid, gc.ExtraVIPs, func() *Pool { return s.poolFor(gid) },
-		func() int { return s.ntpFor(gid).ListenPort })
+	a := newAnycastSet(gid, gc.ExtraVIPs, func() *Pool { return s.poolFor(gid) })
 	a.addExternal(gc.DNSDirVIPs)
 	a.paused = func() map[string]string { return s.pausedAnycast(gid) }
 	s.anycast[gid] = a
@@ -495,23 +512,22 @@ func (s *Supervisor) stopGroupLocked(gid int) []*Engine {
 }
 
 // refreshPool makes the running pools match the new config.  A changed pool
-// is probed once (when preprobe is set) before it replaces the old one so there
-// is no window of SERVFAILs.  It reports the groups whose listen port changed.
-func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) map[int]bool {
+// is probed once (when preprobe is set) before it replaces the old one so chrony
+// is not left without a verdict on the servers.
+func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) {
 	want := map[int]NTPConfig{}
 	keyOf := map[int]int{}
 	for i := range nu.Groups {
 		g := &nu.Groups[i]
-		if g.Paused {
-			continue
-		}
+		// a paused gateway (or node) keeps its pool: the servers are still this node's time sources
 		k, c := nu.poolFor(g)
 		keyOf[g.GroupID] = k
 		want[k] = c.live()
 	}
+	// only the servers of the topology feed chrony: a gateway's own servers, or the shared list for a gateway without its own
 
 	s.poolMu.RLock()
-	oldPools, oldCfg, oldKey := s.pools, s.ntps, s.keyOf
+	oldPools, oldCfg := s.pools, s.ntps
 	s.poolMu.RUnlock()
 
 	next := map[int]*Pool{}
@@ -535,13 +551,6 @@ func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) map[int]bool {
 		infof("ntp: %s pool started — %d server(s), up to stratum %d", name, len(c.Servers), c.MaxStratum)
 	}
 
-	changed := map[int]bool{}
-	for gid, k := range keyOf {
-		if ok, had := oldKey[gid]; had && (oldCfg[ok].ListenPort != want[k].ListenPort) {
-			changed[gid] = true
-		}
-	}
-
 	s.poolMu.Lock()
 	s.pools, s.ntps, s.keyOf = next, want, keyOf
 	s.poolMu.Unlock()
@@ -551,7 +560,6 @@ func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) map[int]bool {
 			p.Stop()
 		}
 	}
-	return changed
 }
 
 func (s *Supervisor) Reload(nu *DaemonConfig) {
@@ -569,7 +577,7 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 	}
 
 	s.notePausedAnycast(nu)
-	portChanged := s.refreshPool(nu, true)
+	s.refreshPool(nu, true)
 
 	oldGroups := map[int]*GroupConfig{}
 	for i := range cur.Groups {
@@ -633,17 +641,11 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 					}
 				}
 			}
-			if portChanged[gid] {
-				for _, af := range []AF{afIPv4, afIPv6} {
-					if e := s.engines[engineKey{gid, af}]; e != nil {
-						go e.RestartNTP()
-					}
-				}
-			}
 		}
 	}
 	s.dc = nu
 	s.mu.Unlock()
+	s.applyChronyClients()
 
 	// Stop outside the lock; Stop tears down interfaces and can be slow.  Gateways that restart are stopped with the
 	// removed ones, all at once, and started again when every stop is done.

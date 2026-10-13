@@ -12,7 +12,7 @@
 #
 # Test hooks (not for normal use): NTPDIR_OS_RELEASE, NTPDIR_SYSTEMCTL,
 # NTPDIR_FORCE_SYSTEMD, NTPDIR_ASSUME_MISSING, NTPDIR_FORCE_GO_DOWNLOAD,
-# NTPDIR_GO_BASE_URL, NTPDIR_SETTLE, NTPDIR_CHRONY_CONF, NTPDIR_CHRONY_IFACE.
+# NTPDIR_GO_BASE_URL, NTPDIR_SETTLE, NTPDIR_CHRONY_CONF, NTPDIR_CHRONY_SOURCEDIR, NTPDIR_CHRONY_CONFDIR.
 
 set -euo pipefail
 umask 022
@@ -292,14 +292,17 @@ install_deps() {
   fi
 }
 
-# chrony keeps this node's own clock right and also serves NTP, but only on the addresses of the first
-# ethernet interface (bindaddress), never on a gateway's shared address: AnyTime answers on those, and the
-# two coexist on UDP 123 because each is bound to its own addresses.  The settings go in a marked block of
-# chrony's config that the uninstaller removes again.  chrony is a prerequisite.
+# chrony is what answers NTP clients (on every address of this node, including a gateway's shared address) and
+# keeps this node's own clock.  ntpdir tests the configured upstream servers and writes the healthy ones into
+# a source directory chrony watches (sourcedir) and the client settings into a conf directory (confdir), so
+# chrony 4.0 or newer is required.  The installer adds a marked block to chrony's config that the uninstaller
+# removes again, and switches off the servers chrony shipped with (the distribution's pool lines and
+# sources.d files), each marked so uninstall puts them back: until servers are defined in ntpdir this node has
+# no time source.
 have_chronyd() { ! assumed_missing chrony && { have chronyd || [ -x /usr/sbin/chronyd ]; }; }
 install_chrony() {
   if have_chronyd; then info "chrony already present"; return 0; fi
-  info "installing chrony (it keeps this node's own clock; AnyTime relays NTP for other hosts)"
+  info "installing chrony (it answers NTP clients and keeps this node's clock)"
   pkg_install chrony
   if [ "$DRY" = 0 ]; then have_chronyd || die "chrony still missing after installing it"; fi
 }
@@ -309,56 +312,61 @@ chrony_conf_path() {
   if [ "$FAMILY" = debian ]; then echo /etc/chrony/chrony.conf; else echo /etc/chrony.conf; fi
 }
 chrony_unit() { if [ "$FAMILY" = debian ]; then echo chrony.service; else echo chronyd.service; fi; }
+chrony_sourcedir() { echo "${NTPDIR_CHRONY_SOURCEDIR:-/etc/chrony/ntpdir.sources.d}"; }
+chrony_confdir() { echo "${NTPDIR_CHRONY_CONFDIR:-/etc/chrony/ntpdir.conf.d}"; }
+CHRONY_OFF='#ntpdir-off# '
 
-# first_nic prints the first ethernet interface: the lowest-named physical one (it has a device link, type
-# ether, not a bridge/veth/macvlan); failing that, the interface of the default route.
-first_nic() {
-  if [ -n "${NTPDIR_CHRONY_IFACE:-}" ]; then echo "$NTPDIR_CHRONY_IFACE"; return; fi
-  local d n
-  for d in /sys/class/net/*; do
-    n=${d##*/}
-    [ "$n" = lo ] && continue
-    [ "$(cat "$d/type" 2>/dev/null)" = 1 ] || continue
-    [ -e "$d/device" ] && [ ! -d "$d/bridge" ] || continue
-    echo "$n"; return
-  done
-  ip -o route show default 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'
-}
-nic_addrs() { # nic_addrs IFACE -> its first global IPv4 and first global (non-temporary, non-deprecated) IPv6 address
-  ip -4 -o addr show dev "$1" scope global 2>/dev/null | awk '{sub(/\/.*/,"",$4); print $4; exit}'
-  ip -6 -o addr show dev "$1" scope global -temporary -deprecated 2>/dev/null | awk '{sub(/\/.*/,"",$4); print $4; exit}'
+# chrony_version prints "major.minor" of the installed chronyd ("" when it cannot be told)
+chrony_version() {
+  local c v
+  c=$(command -v chronyd 2>/dev/null || true); [ -n "$c" ] || { [ -x /usr/sbin/chronyd ] && c=/usr/sbin/chronyd; }
+  [ -n "$c" ] || return 0
+  v=$("$c" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)
+  echo "$v"
 }
 
 configure_chrony() {
   CHRONY_CONF=$(chrony_conf_path); CHRONY_BLOCK=0
   if ! have_chronyd && [ "$DRY" = 0 ]; then
-    warn "chrony is not installed (--skip-deps?); this node's own clock is not managed. Install chrony and re-run the installer."
+    warn "chrony is not installed (--skip-deps?); this node cannot answer NTP clients. Install chrony 4.0 or newer and re-run the installer."
     return 0
   fi
-  local nic addrs a body
-  nic=$(first_nic || true)
-  [ -n "$nic" ] || { warn "no ethernet interface found; chrony's listening addresses were not set"; return 0; }
-  addrs=$(nic_addrs "$nic")
-  [ -n "$addrs" ] || { [ "$DRY" = 1 ] && addrs="<addresses of $nic>"; }
-  if [ -z "$addrs" ]; then
-    warn "$nic has no global address; chrony's listening addresses were not set (it would listen on every address)"
-    return 0
+  local ver major
+  ver=$(chrony_version)
+  major=${ver%%.*}
+  if [ -n "$major" ] && [ "$major" -lt 4 ] 2>/dev/null; then
+    die "chrony $ver is too old: ntpdir needs chrony 4.0 or newer (sourcedir). Upgrade chrony and run the installer again."
   fi
-  body="# NTP service on the addresses of $nic only"$'\n'
-  while IFS= read -r a; do [ -n "$a" ] && body+="bindaddress $a"$'\n'; done <<<"$addrs"
-  body+="allow ::/0"$'\n'"allow 0.0.0.0/0"
+  local sd cdir body
+  sd=$(chrony_sourcedir); cdir=$(chrony_confdir)
+  body="# ntpdir writes the healthy upstream servers to $sd/ntpdir.sources"$'\n'
+  body+="# and the client settings (port, allow, ratelimit) to $cdir/ntpdir.conf"$'\n'
+  body+="sourcedir $sd"$'\n'"confdir $cdir"
   if [ ! -f "$CHRONY_CONF" ]; then
     if [ "$DRY" = 1 ]; then info "[dry-run] would add the ntpdir block to $CHRONY_CONF: ${body//$'\n'/ | }"; CHRONY_BLOCK=1; return 0; fi
     warn "$CHRONY_CONF not found; chrony was not configured"
     return 0
   fi
-  local mode new res
+  if [ "$DRY" = 0 ]; then
+    mkdir -p "$sd" "$cdir"; chmod 0755 "$sd" "$cdir"
+  fi
+  # the servers chrony came with are switched off (marked, so uninstall restores them)
+  local mode new res off=0 f
   mode=$(stat -c %a "$CHRONY_CONF" 2>/dev/null || echo 644)
-  new=$(awk -v b="$CHRONY_BEGIN" -v e="$CHRONY_END" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$CHRONY_CONF")
+  new=$(awk -v b="$CHRONY_BEGIN" -v e="$CHRONY_END" -v m="$CHRONY_OFF" '
+    $0==b{skip=1} !skip{ if ($0 ~ /^[[:space:]]*(pool|server|peer)[[:space:]]/) print m $0; else print } $0==e{skip=0}' "$CHRONY_CONF")
+  [ "$(printf '%s\n' "$new" | grep -c "^$CHRONY_OFF")" -gt "$(grep -c "^$CHRONY_OFF" "$CHRONY_CONF" || true)" ] && off=1
   new=$(printf '%s\n%s\n%s\n%s\n' "$new" "$CHRONY_BEGIN" "$body" "$CHRONY_END")
   res=$(printf '%s\n' "$new" | write_file "$CHRONY_CONF" "$mode")
   CHRONY_BLOCK=1
-  info "chrony: $CHRONY_CONF $res (listens on $(tr '\n' ' ' <<<"$addrs")of $nic, allow all)"
+  # distribution source files (Ubuntu: /etc/chrony/sources.d/*.sources) are moved aside the same way
+  for f in "$(dirname "$CHRONY_CONF")"/sources.d/*.sources; do
+    [ -f "$f" ] || continue
+    if [ "$DRY" = 1 ]; then info "[dry-run] would switch off $f"; else mv -f "$f" "$f.ntpdir-off"; fi
+    off=1; res=updated
+  done
+  info "chrony: $CHRONY_CONF $res (sourcedir $sd, confdir $cdir)"
+  [ "$off" = 1 ] && warn "chrony's own servers were switched off; define NTP servers in ntpdir (Topology or Configure ▸ NTP) or this node has no time source"
   if [ "$HAVE_SYSTEMD" = 1 ]; then
     run "$SYSTEMCTL" enable "$(chrony_unit)" >/dev/null 2>&1 || warn "could not enable $(chrony_unit)"
     if [ "$res" != unchanged ] || ! "$SYSTEMCTL" is-active --quiet "$(chrony_unit)" 2>/dev/null; then
@@ -672,7 +680,7 @@ if [ -d /etc/NetworkManager ] && { [ "$HAVE_SYSTEMD" = 0 ] || "$SYSTEMCTL" is-ac
   fi
 fi
 
-# chrony: serves NTP on the first interface's own addresses only
+# chrony: answers NTP clients; ntpdir feeds it sources and client settings
 step "chrony"
 configure_chrony
 
@@ -789,7 +797,7 @@ if have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
 elif have ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then
   info "ufw is active; open what you need, e.g.: ufw allow $GUI_PORT/tcp && ufw allow $CLUSTER_PORT/tcp && ufw allow 123/udp && ufw allow 12382/udp"
 else
-  info "ports used: GUI tcp/$GUI_PORT, cluster tcp/$CLUSTER_PORT (only if clustering is on), NTP relay udp/123, gateway protocol udp/12382 (open them if a firewall is active)"
+  info "ports used: GUI tcp/$GUI_PORT, cluster tcp/$CLUSTER_PORT (only if clustering is on), NTP (chrony) udp/123, gateway protocol udp/12382 (open them if a firewall is active)"
 fi
 info "status: ntpdir --show-gateways | ntpdir --show-ntp     logs: journalctl -u ntpdir -f"
 info "uninstall: sudo ntpdir-uninstall   (add --purge to remove config and certificate too)"

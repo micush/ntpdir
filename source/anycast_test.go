@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestNormalizeAnycast(t *testing.T) {
@@ -124,6 +123,9 @@ func hookLo(t *testing.T) *fakeLo {
 	}
 	anycastDelFn = func(a string) { f.mu.Lock(); delete(f.on, a); f.dels++; f.mu.Unlock() }
 	t.Cleanup(func() { anycastAddFn, anycastDelFn = oa, od })
+	oc := chronyServingFn
+	chronyServingFn = func() bool { return true }
+	t.Cleanup(func() { chronyServingFn = oc })
 	return f
 }
 
@@ -145,9 +147,9 @@ func TestAnycastFollowsNTPHealth(t *testing.T) {
 	up := newFakeNTP(t)
 	p := NewPool(testNTPCfg(up.addr))
 	p.ProbeNow(context.Background())
-	port := freeUDPPort(t)
+	_ = freeUDPPort
 	const addr = "127.0.0.9" // loopback so the test can bind it; the real config refuses loopback
-	a := newAnycastSet(1, []string{addr}, func() *Pool { return p }, func() int { return port })
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
 	a.step()
 	if !lo.has(addr) || !a.state()[0].Up {
 		t.Fatalf("not announced while healthy: %+v", a.state())
@@ -156,16 +158,6 @@ func TestAnycastFollowsNTPHealth(t *testing.T) {
 	if lo.adds < 2 {
 		t.Fatal("the address lifetime is not renewed")
 	}
-	// the answer comes from the anycast address itself
-	req := clientReq(0x1234567890)
-	resp, _, err := exchange(context.Background(), net.JoinHostPort(addr, itoa(port)), req, 2*time.Second)
-	if err != nil {
-		t.Skipf("cannot query the anycast listener here: %v", err)
-	}
-	if !ntpAnswers(req, resp) {
-		t.Fatalf("bad answer from the anycast address: % x", resp)
-	}
-
 	up.mode.Store(2) // stops answering
 	p.ProbeNow(context.Background())
 	a.step()
@@ -204,11 +196,30 @@ func TestAnycastFollowsNTPHealth(t *testing.T) {
 	if lo.has(addr) {
 		t.Fatal("still on lo after stop")
 	}
-	c, err := net.ListenPacket("udp4", net.JoinHostPort(addr, itoa(port)))
-	if err != nil {
-		t.Fatalf("listener not closed on stop: %v", err)
+}
+
+// The address is taken off while chrony is not running or not synchronised, even with every upstream server up.
+func TestAnycastFollowsChrony(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
+	const addr = "127.0.0.9"
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
+	a.step()
+	if !lo.has(addr) {
+		t.Fatalf("not announced while chrony serves: %+v", a.state())
 	}
-	c.Close()
+	chronyServingFn = func() bool { return false }
+	a.step()
+	if lo.has(addr) || !strings.Contains(a.state()[0].Reason, "chrony") {
+		t.Fatalf("still announced with chrony down: %+v", a.state())
+	}
+	chronyServingFn = func() bool { return true }
+	a.step()
+	if !lo.has(addr) {
+		t.Fatal("not announced again when chrony came back")
+	}
 }
 
 // The supervisor holds the addresses with the gateway and drops them when it stops.
@@ -319,9 +330,9 @@ func TestAnycastPause(t *testing.T) {
 	up := newFakeNTP(t)
 	p := NewPool(testNTPCfg(up.addr))
 	p.ProbeNow(context.Background())
-	port := freeUDPPort(t)
+	_ = freeUDPPort
 	const addr = "127.0.0.9"
-	a := newAnycastSet(1, []string{addr}, func() *Pool { return p }, func() int { return port })
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
 	scope := ""
 	a.paused = func() map[string]string {
 		if scope == "" {
@@ -431,10 +442,10 @@ func TestAnycastSharedByTwoGateways(t *testing.T) {
 	p1, p2 := NewPool(testNTPCfg(f1.addr)), NewPool(testNTPCfg(f2.addr))
 	p1.ProbeNow(context.Background())
 	p2.ProbeNow(context.Background())
-	port := freeUDPPort(t)
+	_ = freeUDPPort
 	const addr = "127.0.0.9"
-	a := newAnycastSet(1, []string{addr}, func() *Pool { return p1 }, func() int { return port })
-	b := newAnycastSet(2, []string{addr}, func() *Pool { return p2 }, func() int { return port })
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p1 })
+	b := newAnycastSet(2, []string{addr}, func() *Pool { return p2 })
 	a.step()
 	b.step()
 	if !lo.has(addr) || !a.state()[0].Up || !b.state()[0].Up || a.state()[0].Carried != nil {

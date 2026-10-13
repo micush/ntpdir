@@ -2,11 +2,9 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"testing"
 	"time"
 )
@@ -132,32 +130,6 @@ func TestServerHistoryNilSafeAndShared(t *testing.T) {
 	s.lat(time.Millisecond) // a hand-made Server has no history: none of these may panic
 	if srvhist.series("shared:123") != srvhist.series("shared:123") {
 		t.Fatal("two pools listing one address must share its history")
-	}
-}
-
-// A real pool feeds the history: probes and live answers of a fake upstream show up, and an unsynchronised answer counts as a loss.
-func TestPoolFeedsServerHistory(t *testing.T) {
-	up := newFakeNTP(t)
-	p := NewPool(testNTPCfg(up.addr))
-	p.ProbeNow(context.Background())
-	q := clientReq(7)
-	for i := 0; i < 20; i++ {
-		if _, _, err := p.Forward(context.Background(), q, netip.Addr{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	r, _ := srvhist.Query(up.addr, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
-	if r.Answered < 20 || r.ProbesOK < 1 || r.LossPct != 0 || !r.Known {
-		t.Fatalf("history after traffic: %+v", r)
-	}
-	up.mode.Store(fakeUnsync)
-	p2 := NewPool(testNTPCfg(up.addr))
-	p2.ProbeNow(context.Background())
-	before := r.Failed + r.ProbesBad
-	p2.Forward(context.Background(), q, netip.Addr{})
-	r2, _ := srvhist.Query(up.addr, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
-	if r2.Failed+r2.ProbesBad <= before || r2.LossPct <= 0 {
-		t.Fatalf("a server answering unsynchronised must show loss: %+v", r2)
 	}
 }
 
@@ -297,33 +269,6 @@ func TestGatewayAndServerHistory(t *testing.T) {
 	}
 }
 
-// The front end feeds its gateway's series: answers and failures.
-func TestFrontendFeedsGatewayHistory(t *testing.T) {
-	up := newFakeNTP(t)
-	cfg := testNTPCfg(up.addr)
-	p := NewPool(cfg)
-	p.ProbeNow(context.Background())
-	f := NewNTPFrontend(netip.MustParseAddr("127.0.0.1"), 0, func() *Pool { return p })
-	f.ctx, f.cancel = context.WithCancel(context.Background())
-	defer f.cancel()
-	s := &srvSeries{}
-	f.gw = s
-	q := clientReq(9)
-	client := netip.MustParseAddr("127.0.0.1")
-	for i := 0; i < 16; i++ {
-		f.resolve(q, client)
-	}
-	sl := s.take(false)
-	if sl.OK != 16 || sl.Fail != 0 {
-		t.Fatalf("answers not counted: %+v", sl)
-	}
-	if sl.LatN != 2 { // one answer in eight is timed
-		t.Fatalf("latency samples: %d", sl.LatN)
-	}
-}
-
-// Two nodes that each saw traffic in different minutes make one graph with no hole; averages are weighted by the samples,
-// the worst is the worst of both, counts add up, and a range that does not line up is refused.
 func TestGatewayHistoryMergesNodes(t *testing.T) {
 	ha, hb := newTestHistory(), newTestHistory()
 	a, b := seriesFor(ha, gwKey(7)), seriesFor(hb, gwKey(7))

@@ -142,14 +142,14 @@ td.wrap { white-space: normal; word-break: break-word; max-width: 28rem; }
 
 .bar-wrap { display: inline-block; width: 90px; height: 6px; border-radius: 3px; background: var(--surface-2); vertical-align: middle; margin-right: .6rem; overflow: hidden; }
 /* the same column widths in every gateway's table, so the cards line up */
-table.ntp { table-layout: fixed; min-width: 80rem; }
-table.ntp th:nth-child(1) { width: 3rem; }
+table.ntp { table-layout: fixed; min-width: 68rem; }
+table.ntp th:nth-child(1) { width: 6rem; }
 table.ntp th:nth-child(2) { width: 9rem; }
-table.ntp th:nth-child(3) { width: 14rem; }
-table.ntp th:nth-child(4) { width: 5.5rem; }
+table.ntp th:nth-child(3) { width: 6rem; }
+table.ntp th:nth-child(4) { width: 9rem; }
 table.ntp th:nth-child(5) { width: 4.5rem; }
 table.ntp th:nth-child(6), table.ntp th:nth-child(7) { width: 5.5rem; }
-table.ntp th:nth-child(8) { width: 10.5rem; }
+table.ntp th:nth-child(8) { width: 9rem; }
 table.ntp td.num, table.ntp td.mono { white-space: nowrap; }
 table.ntp .bar-wrap { width: 60px; }
 table.ntp th:nth-child(9) { width: 5rem; }

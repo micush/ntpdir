@@ -62,23 +62,20 @@ func TestLegacyGatewayPoolKeepsItsOwnValues(t *testing.T) {
 
 func TestCanvasSetOwnLoadBalancingAndBack(t *testing.T) {
 	dc := lbTestConfig()
-	dc.NTP.SpreadBand, dc.NTP.MaxAttempts = 200, 4
+	dc.NTP.MaxRootDistanceMS, dc.NTP.FailThreshold = 900, 4
 	gid := dc.Groups[0].GroupID
-	msg, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, SpreadBand: 80, Spread: "off"})
-	if err != nil || !strings.Contains(msg, "own load balancing") {
+	msg, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, MaxStratum: 8})
+	if err != nil || !strings.Contains(msg, "own health checks") {
 		t.Fatalf("set: %q %v", msg, err)
 	}
 	lb := dc.Groups[0].NTP.LB
-	if lb == nil || lb.SpreadBand != 80 || lb.Spread || lb.MaxAttempts != 4 {
+	if lb == nil || lb.MaxStratum != 8 || lb.MaxRootDistanceMS != 900 || lb.FailThreshold != 4 {
 		t.Fatalf("the rest must start from what the gateway used (Settings): %+v", lb)
 	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, SpreadBand: 5000}); err == nil {
-		t.Fatal("a band of 5000 must be refused")
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, MaxStratum: 50}); err == nil {
+		t.Fatal("a stratum of 50 must be refused")
 	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, Spread: "maybe"}); err == nil {
-		t.Fatal("--spread must be on or off")
-	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, LB: "settings", SpreadBand: 10}); err == nil {
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, LB: "settings", MaxStratum: 10}); err == nil {
 		t.Fatal("--lb settings with values must be refused")
 	}
 	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: gid, LB: "own"}); err == nil {
@@ -93,8 +90,8 @@ func TestCanvasSetOwnLoadBalancingAndBack(t *testing.T) {
 	if _, own := dc.Groups[0].NTP.ownLB(); own {
 		t.Fatal("after --lb settings the pool must not count as own again")
 	}
-	if _, c := dc.poolFor(&dc.Groups[0]); c.SpreadBand != 200 || c.MaxAttempts != 4 {
-		t.Fatalf("back to Settings: band %d attempts %d", c.SpreadBand, c.MaxAttempts)
+	if _, c := dc.poolFor(&dc.Groups[0]); c.MaxRootDistanceMS != 900 || c.FailThreshold != 4 {
+		t.Fatalf("back to Settings: root distance %d failures %d", c.MaxRootDistanceMS, c.FailThreshold)
 	}
 	if err := dc.Validate(); err != nil {
 		t.Fatal(err)
@@ -161,39 +158,6 @@ func TestCanvasShowsLoadBalancingInUse(t *testing.T) {
 	cg = buildCanvas(dc, nil, nil)[0]
 	if cg.LB.SpreadBand != 40 || !cg.LBOwn {
 		t.Fatalf("own: %+v own=%v", cg.LB, cg.LBOwn)
-	}
-}
-
-// The client rules are edited on the Settings page only, so a gateway's own pool must follow them: setting a rate
-// there has to reach every gateway.
-func TestGatewayPoolFollowsSettingsClientRules(t *testing.T) {
-	dc := lbTestConfig()
-	dc.NTP.ClientRate, dc.NTP.ClientBurst, dc.NTP.ClientAction = 5, 7, "kod"
-	dc.NTP.AllowedClients = []string{"10.0.0.0/8"}
-	dc.NTP.ClientExempt = []string{"10.1.0.0/16"}
-	_, c := dc.poolFor(&dc.Groups[0])
-	if c.ClientRate != 5 || c.ClientBurst != 7 || c.ClientAction != "kod" ||
-		len(c.AllowedClients) != 1 || len(c.ClientExempt) != 1 {
-		t.Fatalf("own pool must follow Settings: %+v", c)
-	}
-	if c.Servers[0] != "192.0.2.9:123" {
-		t.Fatalf("the gateway's own servers must stay: %v", c.Servers)
-	}
-	if p := NewPool(c); p.lim == nil {
-		t.Fatal("rate set in Settings, but the gateway's pool has no limiter")
-	}
-	// and back again
-	dc.NTP.ClientRate, dc.NTP.AllowedClients, dc.NTP.ClientExempt = 0, nil, nil
-	_, c = dc.poolFor(&dc.Groups[0])
-	if p := NewPool(c); p.lim != nil {
-		t.Fatal("settings turned back: the limiter is still there")
-	}
-	// the Settings slices are not shared with the pool's copy
-	dc.NTP.AllowedClients = []string{"192.0.2.0/24"}
-	_, c = dc.poolFor(&dc.Groups[0])
-	c.AllowedClients[0] = "x"
-	if dc.NTP.AllowedClients[0] != "192.0.2.0/24" {
-		t.Fatal("poolFor must copy the lists")
 	}
 }
 

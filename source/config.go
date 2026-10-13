@@ -442,7 +442,7 @@ func normalizeAnycast(s string) (string, error) {
 	return a.String(), nil
 }
 
-// ── NTP proxy config ─────────────────────────────────────────────────────────
+// ── NTP config ─────────────────────────────────────────────────────────
 
 // NTPConfig describes the upstream pool and how it is probed.
 type NTPConfig struct {
@@ -463,10 +463,10 @@ type NTPConfig struct {
 	// PausedServersHere is this node's own pause of the same thing (DaemonConfig keeps it, effective() hands it to
 	// the pools).  Never replicated and never written from here.
 	PausedServersHere []string `json:"-"`
-	// ListenPort is the UDP port the proxy serves on the VIP.
+	// ListenPort is the UDP port chrony serves on.
 	ListenPort int `json:"listen_port"`
-	// AllowedClients are the networks (10.0.0.0/8, 192.168.1.5, 2001:db8::/32) that may use the proxy; empty means
-	// everyone. Any other client is answered with a kiss-o'-death RSTR. The node itself always may.
+	// AllowedClients are the networks (10.0.0.0/8, 192.168.1.5, 2001:db8::/32) that may use this node (chrony `allow`);
+	// empty means everyone. The node itself always may.
 	AllowedClients []string `json:"allowed_clients,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
 	// is no limit. ClientBurst is how many it may send at once (0 = twice the rate, at least 10). ClientAction is what
@@ -493,11 +493,14 @@ type NTPConfig struct {
 	MaxStratum        int `json:"max_stratum"`
 	MaxRootDistanceMS int `json:"max_root_distance_ms"`
 	MaxOffsetMS       int `json:"max_offset_ms"`
-	ProbeIntervalMS   int `json:"probe_interval_ms"`
-	ProbeTimeoutMS    int `json:"probe_timeout_ms"`
-	QueryTimeoutMS    int `json:"query_timeout_ms"`
-	MaxAttempts       int `json:"max_attempts"`
-	FailThreshold     int `json:"fail_threshold"`
+	// MaxRTTMS is the longest round trip a server may have and still be used (default 500, 0 = off): a server that
+	// is further away than that is too slow and is taken out as a source.
+	MaxRTTMS        int `json:"max_rtt_ms"`
+	ProbeIntervalMS int `json:"probe_interval_ms"`
+	ProbeTimeoutMS  int `json:"probe_timeout_ms"`
+	QueryTimeoutMS  int `json:"query_timeout_ms"`
+	MaxAttempts     int `json:"max_attempts"`
+	FailThreshold   int `json:"fail_threshold"`
 	// LatencyAlpha is the EWMA smoothing of a server's round-trip time.
 	LatencyAlpha float64 `json:"latency_alpha"`
 	// LB is a gateway's own load-balancing settings (see LBConfig).  Only meaningful in a gateway's own pool; nil
@@ -506,8 +509,8 @@ type NTPConfig struct {
 	LB *LBConfig `json:"lb,omitempty"`
 }
 
-// LBConfig is the set of load-balancing settings (Configure ▸ NTP proxy ▸ Load Balancing): how servers share the
-// requests and when one counts as down.  A gateway that has its own pool follows the shared values unless its own
+// LBConfig is the set of health-check settings (Configure ▸ NTP ▸ Health): when a server counts as down.  The spread and
+// attempts fields are kept so older files load; they have no effect.  A gateway that has its own pool follows the shared values unless its own
 // pool carries an LBConfig.
 type LBConfig struct {
 	Spread            bool    `json:"spread"`
@@ -579,6 +582,7 @@ func defaultNTP() NTPConfig {
 		MaxStratum:        15,
 		MaxRootDistanceMS: 1500,
 		MaxOffsetMS:       128,
+		MaxRTTMS:          500,
 		ProbeIntervalMS:   16000,
 		ProbeTimeoutMS:    1000,
 		QueryTimeoutMS:    800,
@@ -725,6 +729,9 @@ func (d *NTPConfig) Validate() error {
 	}
 	if d.ListenPort < 1 || d.ListenPort > 65535 {
 		return errors.New("ntp: listen_port must be 1-65535")
+	}
+	if d.MaxRTTMS < 0 || d.MaxRTTMS > 60000 {
+		return errors.New("ntp: max_rtt_ms must be 0-60000 (0 = off)")
 	}
 	for _, f := range []struct {
 		name string

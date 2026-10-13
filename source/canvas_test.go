@@ -71,11 +71,8 @@ func TestSupervisorPerGroupPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewSupervisor(context.Background(), dc)
-	changed := s.refreshPool(dc, true)
+	s.refreshPool(dc, true)
 	t.Cleanup(func() { s.StopAll() })
-	if len(changed) != 0 {
-		t.Fatalf("nothing had a port before: %v", changed)
-	}
 	if n := len(s.poolList()); n != 3 {
 		t.Fatalf("want 3 pools (two own + shared), got %d", n)
 	}
@@ -89,17 +86,14 @@ func TestSupervisorPerGroupPools(t *testing.T) {
 	db2 := da
 	db2.ListenPort = 12300
 	nu.Groups = []GroupConfig{mk(1, "10.1.0.1/24", &da), mk(2, "10.2.0.1/24", &db2)}
-	ch := s.refreshPool(&nu, true)
+	s.refreshPool(&nu, true)
 	if s.poolFor(1) != p1 {
 		t.Fatal("unchanged pool must be kept")
 	}
 	if s.poolFor(2) == p2 {
 		t.Fatal("changed pool must be replaced")
 	}
-	if !ch[2] || ch[1] {
-		t.Fatalf("only group 2 changed its port: %v", ch)
-	}
-	if s.poolFor(3) != nil || len(s.poolList()) != 2 {
+	if s.poolFor(3) != nil || len(s.poolList()) != 2 { // only the topology feeds chrony: the shared list is not a pool of its own
 		t.Fatal("removed group's pool must be gone")
 	}
 	if s.ntpFor(2).ListenPort != 12300 {
@@ -372,9 +366,6 @@ func TestCanvasDualStackAndStratumEdits(t *testing.T) {
 	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: 100}); err == nil {
 		t.Fatal("set without anything to change must say so")
 	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: 100, Spread: "maybe"}); err == nil {
-		t.Fatal("--spread must be on or off")
-	}
 	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "set", Kind: "gateway", Group: 9, MaxStratum: 3}); err == nil {
 		t.Fatal("unknown gateway")
 	}
@@ -530,8 +521,8 @@ func TestPauseServerAndGateway(t *testing.T) {
 	if n := len(sup.engineList()); n != 0 {
 		t.Fatalf("a paused gateway must start no engines, got %d", n)
 	}
-	if k := sup.poolFor(1); k != nil {
-		t.Fatal("a paused gateway needs no probe pool")
+	if k := sup.poolFor(1); k == nil {
+		t.Fatal("a paused gateway keeps its pool: its servers are still the node's time sources")
 	}
 	sup.StopAll()
 	do(canvasEdit{Action: "resume", Kind: "gateway", Group: 1})

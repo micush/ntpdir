@@ -169,14 +169,14 @@ func TestDNSDirVIPListensAndNeverTouchesLo(t *testing.T) {
 	up := newFakeNTP(t)
 	p := NewPool(testNTPCfg(up.addr))
 	p.ProbeNow(context.Background())
-	port := freeUDPPort(t)
 	const addr = "203.0.113.53"
-	a := newAnycastSet(1, nil, func() *Pool { return p }, func() int { return port })
+	a := newAnycastSet(1, nil, func() *Pool { return p })
 	a.addExternal([]string{addr})
+	// chrony answers on the address once dnsdir has it on lo; ntpdir only says whether that is so
 	listening := func() bool {
-		anycastReg.Lock()
-		defer anycastReg.Unlock()
-		return anycastReg.fes[addr] != nil
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.extOK[addr]
 	}
 
 	a.step()

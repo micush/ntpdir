@@ -147,3 +147,77 @@ func pauseTestConfig() *DaemonConfig {
 }
 
 func fmtN(i int) string { return strconv.Itoa(i) }
+
+// Helpers that build packets for the fake servers (the daemon itself only asks and reads).
+
+// kodCodes are the kiss-o'-death codes this proxy sends (RFC 5905, section 7.4).
+const (
+	kodRestricted = "RSTR" // access denied by local policy: the client is not allowed
+	kodRate       = "RATE" // the client is asking too often
+)
+
+// ntpVersion is the version of a packet, or 0 when it is too short to say.
+func ntpVersion(b []byte) int {
+	if len(b) < ntpHeaderLen {
+		return 0
+	}
+	return int(b[0]>>3) & 7
+}
+
+// ntpRelayable says whether a datagram is a client request this proxy may pass on: a version 1 to 4 packet in
+// client mode.  Modes 6 and 7 (ntpq control and private requests such as monlist) are never relayed: they reach a
+// server's management functions, and some answer with much more than they were sent.
+func ntpRelayable(b []byte) bool {
+	if len(b) < ntpHeaderLen || len(b) > ntpMaxPacket {
+		return false
+	}
+	v := ntpVersion(b)
+	return ntpMode(b) == ntpModeClient && v >= 1 && v <= 4
+}
+
+// ntpTimestamp converts a time to the 32.32 fixed-point form NTP uses (seconds since 1900).
+func ntpTimestamp(t time.Time) uint64 {
+	sec := uint64(t.Unix()) + ntpUnixEpoch
+	frac := uint64(t.Nanosecond()) << 32 / 1e9
+	return sec<<32 | frac
+}
+
+// kodResponse is the answer for a request that is turned away: stratum 0 with an ASCII code in the reference ID,
+// the alarm leap bit, and the request's transmit timestamp as the origin (without which the client would ignore it).
+// It is nil for a request too short to answer.
+func kodResponse(req []byte, code string) []byte {
+	if len(req) < ntpHeaderLen {
+		return nil
+	}
+	r := make([]byte, ntpHeaderLen)
+	v := byte(ntpVersion(req))
+	if v < 1 || v > 4 {
+		v = 4
+	}
+	r[0] = ntpLeapUnsynch<<6 | v<<3 | ntpModeServer
+	// stratum 0 (r[1]); poll echoes the request's, so a client keeps its own idea of the interval
+	r[2] = req[2]
+	copy(r[12:16], code)
+	copy(r[24:32], req[40:48])
+	return r
+}
+
+// unsyncResponse is the answer for a request the proxy cannot serve because no upstream server answered: the
+// leap indicator at its alarm value and stratum 16, which is what a server that has lost its time says.  A client
+// treats it as a server that is not usable now, and tries another one at once instead of waiting out a timeout.
+func unsyncResponse(req []byte) []byte {
+	if len(req) < ntpHeaderLen {
+		return nil
+	}
+	r := make([]byte, ntpHeaderLen)
+	v := byte(ntpVersion(req))
+	if v < 1 || v > 4 {
+		v = 4
+	}
+	r[0] = ntpLeapUnsynch<<6 | v<<3 | ntpModeServer
+	r[1] = 16
+	r[2] = req[2]
+	copy(r[12:16], "INIT")
+	copy(r[24:32], req[40:48])
+	return r
+}

@@ -26,6 +26,7 @@ SYSTEMCTL=${NTPDIR_SYSTEMCTL:-systemctl}
 PAM_CREATED=""; NM_CREATED=""; GROUP_CREATED=""; PAM_SHA256=""; CHRONY_CONF=""
 CHRONY_BEGIN='# >>> ntpdir (managed block, removed by ntpdir-uninstall) >>>'
 CHRONY_END='# <<< ntpdir <<<'
+CHRONY_OFF='#ntpdir-off# '
 
 PURGE=0; RM_GROUP=0; ASSUME_YES=0; DRY=0
 if [ -t 1 ]; then B=$'\033[1m'; R=$'\033[31m'; Y=$'\033[33m'; G=$'\033[32m'; N=$'\033[0m'; else B=; R=; Y=; G=; N=; fi
@@ -148,9 +149,13 @@ if [ -n "$CHRONY_CONF" ] && [ -f "$CHRONY_CONF" ] && grep -qxF "$CHRONY_BEGIN" "
   if [ "$DRY" = 1 ]; then info "[dry-run] remove the ntpdir block from $CHRONY_CONF"; else
     cmode=$(stat -c %a "$CHRONY_CONF" 2>/dev/null || echo 644)
     ctmp=$(mktemp "$CHRONY_CONF.XXXXXX.tmp")
-    awk -v b="$CHRONY_BEGIN" -v e="$CHRONY_END" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$CHRONY_CONF" >"$ctmp"
+    awk -v b="$CHRONY_BEGIN" -v e="$CHRONY_END" -v m="$CHRONY_OFF" '$0==b{skip=1} !skip{ if (index($0,m)==1) print substr($0,length(m)+1); else print } $0==e{skip=0}' "$CHRONY_CONF" >"$ctmp"
     chmod "$cmode" "$ctmp"; mv -f "$ctmp" "$CHRONY_CONF"
-    info "removed the ntpdir block from $CHRONY_CONF (chrony itself is left installed)"
+    for cf in "$(dirname "$CHRONY_CONF")"/sources.d/*.sources.ntpdir-off; do
+      [ -f "$cf" ] && mv -f "$cf" "${cf%.ntpdir-off}"
+    done
+    if [ "$PURGE" = 1 ]; then rm -rf "${NTPDIR_CHRONY_SOURCEDIR:-/etc/chrony/ntpdir.sources.d}" "${NTPDIR_CHRONY_CONFDIR:-/etc/chrony/ntpdir.conf.d}"; fi
+    info "removed the ntpdir block from $CHRONY_CONF and put chrony's own servers back (chrony itself is left installed)"
     if [ "$HAVE_SYSTEMD" = 1 ]; then
       for cu in chrony.service chronyd.service; do
         "$SYSTEMCTL" is-active --quiet "$cu" 2>/dev/null && { run "$SYSTEMCTL" restart "$cu" >/dev/null 2>&1 || true; break; }

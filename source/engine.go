@@ -89,8 +89,6 @@ type Engine struct {
 
 	arp, ns *rawResponder
 
-	ntpFE      *NTPFrontend
-	ntpMore    []*NTPFrontend // listeners of the further shared addresses
 	ntpLoAdded bool
 
 	leaving bool // told the group we are going: no more hellos
@@ -843,7 +841,7 @@ func (e *Engine) becomeAFNLocked() {
 }
 
 // leaveControllerLocked gives up the controller role IN PLACE: the ARP/NS responder stops and the VIP moves off the
-// macvlan, and that is all.  The macvlans (this node's own slot and the MACs it covers for others) and the NTP proxy stay
+// macvlan, and that is all.  The macvlans (this node's own slot and the MACs it covers for others) and the NTP service stay
 // up: clients that cached one of those MACs are still answered while the new controller takes them over, and the NTP
 // listener never closes.  Taking everything down and building it again, as this used to, left the node without its MAC and
 // its NTP for a moment, which the clients saw as lost packets.  The VIP goes onto lo before it comes off the macvlan, so
@@ -1191,7 +1189,7 @@ func (e *Engine) releaseTakeoverLocked(slot int) {
 	delete(e.takeover, slot)
 }
 
-// ── NTP proxy on the VIP ─────────────────────────────────────────────────────
+// ── NTP on the VIP ─────────────────────────────────────────────────────
 //
 // Every node that is ACTIVE or FORWARD terminates NTP for the VIP.  The AGC
 // has the VIP on its macvlan.  An AFN is reached through its vMAC, but the
@@ -1219,7 +1217,6 @@ func (e *Engine) delLoVIPsLocked() {
 }
 
 func (e *Engine) setupNTPLocked(macvlanUp bool) {
-	vip := e.cfg.vipFor(e.af)
 	if e.cfg.RealMACs {
 		// no macvlan: the VIP is on lo on every node, the controller included, and the real interface is told not to
 		// answer ARP for it (the controller's responder is the one that does)
@@ -1254,88 +1251,14 @@ func (e *Engine) setupNTPLocked(macvlanUp bool) {
 			e.ntpLoAdded = true
 		}
 	}
-	if e.ntpFE != nil {
-		e.startMoreNTPLocked()
-		return
-	}
-	addr, err := vipAddr(vip)
-	if err != nil {
-		return
-	}
-	fe := e.newNTPFrontendLocked(addr)
-	if err := fe.Start(); err != nil {
-		errorf("ntp: cannot listen on %s: %v", fe.listenAddr(), err)
-		return
-	}
-	e.ntpFE = fe
-	e.startMoreNTPLocked()
-}
-
-func (e *Engine) newNTPFrontendLocked(addr netip.Addr) *NTPFrontend {
-	dc := e.ntpCfg()
-	fe := NewNTPFrontend(addr, dc.ListenPort, e.pool)
-	fe.gw = srvhist.series(gwKey(e.cfg.GroupID))
-	return fe
-}
-
-// startMoreNTPLocked opens a listener for each further shared address that has none yet.
-func (e *Engine) startMoreNTPLocked() {
-	have := map[netip.Addr]bool{}
-	for _, f := range e.ntpMore {
-		have[f.addr] = true
-	}
-	for _, v := range e.cfg.vipsFor(e.af)[1:] {
-		addr, err := vipAddr(v)
-		if err != nil || have[addr] {
-			continue
-		}
-		fe := e.newNTPFrontendLocked(addr)
-		if err := fe.Start(); err != nil {
-			errorf("ntp: cannot listen on %s: %v", fe.listenAddr(), err)
-			continue
-		}
-		e.ntpMore = append(e.ntpMore, fe)
-	}
-}
-
-func (e *Engine) stopMoreNTPLocked(wait bool) {
-	more := e.ntpMore
-	e.ntpMore = nil
-	for _, f := range more {
-		if wait {
-			f.Stop()
-		} else {
-			go f.Stop()
-		}
-	}
 }
 
 func (e *Engine) teardownNTPLocked() {
-	e.stopMoreNTPLocked(false)
-	if e.ntpFE != nil {
-		fe := e.ntpFE
-		e.ntpFE = nil
-		go fe.Stop() // Stop waits for in-flight queries; never block the engine
-	}
 	if e.ntpLoAdded {
 		e.delLoVIPsLocked()
 		e.ntpLoAdded = false
 	}
 	e.restoreSysctls() // real-MAC mode changed the real interface's ARP settings: put them back
-}
-
-// RestartNTP re-creates the listener (listen_port changed).
-func (e *Engine) RestartNTP() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running || e.ntpFE == nil {
-		return
-	}
-	fe := e.ntpFE
-	e.ntpFE = nil
-	fe.Stop()
-	e.stopMoreNTPLocked(true)
-	e.setupNTPLocked(true)
 }
 
 // ── Peer reaping ─────────────────────────────────────────────────────────────
@@ -1401,7 +1324,7 @@ func (e *Engine) snapshot() []SnapshotRow {
 	row := func() SnapshotRow {
 		return SnapshotRow{GroupID: e.cfg.GroupID, AF: e.af.String(), VIP4: e.cfg.VIP4,
 			VIP6: e.cfg.VIP6, AGCIP: e.agcIP,
-			NTPUp: e.ntpFE != nil && e.ntpFE.Listening()}
+			NTPUp: chronyServingFn()}
 	}
 	local := row()
 	if e.cfg.RealMACs {

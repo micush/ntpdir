@@ -89,18 +89,14 @@ type anycastClaim struct {
 var anycastReg = struct {
 	sync.Mutex
 	claims map[string]map[int]*anycastClaim
-	fes    map[string]*NTPFrontend
 	onLo   map[string]bool
-}{claims: map[string]map[int]*anycastClaim{}, fes: map[string]*NTPFrontend{}, onLo: map[string]bool{}}
+}{claims: map[string]map[int]*anycastClaim{}, onLo: map[string]bool{}}
 
 // resetAnycast forgets everything (tests).
 func resetAnycast() {
 	anycastReg.Lock()
 	defer anycastReg.Unlock()
-	for _, fe := range anycastReg.fes {
-		fe.Stop()
-	}
-	anycastReg.claims, anycastReg.fes, anycastReg.onLo = map[string]map[int]*anycastClaim{}, map[string]*NTPFrontend{}, map[string]bool{}
+	anycastReg.claims, anycastReg.onLo = map[string]map[int]*anycastClaim{}, map[string]bool{}
 }
 
 // anycastPool is the pool that answers on addr: the first gateway that can answer, else the first one carrying it.
@@ -154,12 +150,13 @@ type anycastSet struct {
 	gid   int
 	addrs []string
 	pool  func() *Pool
-	port  func() int
 	// paused says per address where its announcing is paused ("node" or "all"); nil means none
 	paused func() map[string]string
 	// ext are the addresses that belong to dnsdir: ntpdir listens on them while dnsdir is installed and announces
 	// them, and never touches lo for them (see stepExternal)
 	ext map[string]bool
+	// extOK: dnsdir is installed and announces this dnsdir address (set by stepExternal)
+	extOK map[string]bool
 
 	mu     sync.Mutex
 	reason map[string]string
@@ -168,8 +165,8 @@ type anycastSet struct {
 	done   chan struct{}
 }
 
-func newAnycastSet(gid int, addrs []string, pool func() *Pool, port func() int) *anycastSet {
-	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), pool: pool, port: port, reason: map[string]string{}, ext: map[string]bool{}}
+func newAnycastSet(gid int, addrs []string, pool func() *Pool) *anycastSet {
+	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), pool: pool, reason: map[string]string{}, ext: map[string]bool{}, extOK: map[string]bool{}}
 }
 
 // addExternal adds dnsdir's addresses to the set.
@@ -200,7 +197,7 @@ var addrOnLoFn = func(addr string) bool {
 
 // stepExternal serves one of dnsdir's addresses: a listener while dnsdir is installed and announces the address, and
 // nothing on lo, which is dnsdir's.  It runs with the registry locked.
-func (a *anycastSet) stepExternal(addr string, port int, healthy bool, offered map[string]bool) {
+func (a *anycastSet) stepExternal(addr string, healthy bool, offered map[string]bool) {
 	why := ""
 	switch {
 	case !dnsdirPresent():
@@ -217,30 +214,11 @@ func (a *anycastSet) stepExternal(addr string, port int, healthy bool, offered m
 	}
 	cl[a.gid].pool = a.pool
 	cl[a.gid].want = false // never makes ntpdir put it on lo
-	fe := anycastReg.fes[addr]
-	if fe != nil && (fe.port != port || why != "") {
-		fe.Stop()
-		delete(anycastReg.fes, addr)
-		fe = nil
-	}
-	if why == "" && fe == nil {
-		if ip, err := netip.ParseAddr(addr); err == nil {
-			f := NewNTPFrontend(ip, port, func() *Pool { return anycastPool(addr) })
-			f.gw = srvhist.series(gwKey(a.gid))
-			if err := f.Start(); err != nil {
-				why = "cannot listen: " + err.Error()
-				if a.reason[addr] != why {
-					errorf("dnsdir address: cannot listen on %s: %v", f.listenAddr(), err)
-				}
-			} else {
-				anycastReg.fes[addr] = f
-			}
-		}
-	}
+	a.extOK[addr] = why == ""
 	switch {
 	case why != "":
 	case !healthy:
-		why = "no NTP server is answering"
+		why = a.unhealthyWhy()
 	case !addrOnLoFn(addr):
 		why = "dnsdir is not announcing it right now"
 	}
@@ -283,10 +261,6 @@ func (a *anycastSet) stop() {
 		delete(anycastReg.claims[addr], a.gid)
 		if len(anycastReg.claims[addr]) == 0 {
 			delete(anycastReg.claims, addr)
-			if fe := anycastReg.fes[addr]; fe != nil {
-				fe.Stop()
-				delete(anycastReg.fes, addr)
-			}
 		}
 		if anycastReg.onLo[addr] && !anyWantLocked(addr) {
 			anycastDelFn(addr)
@@ -299,7 +273,7 @@ func (a *anycastSet) stop() {
 // healthy reports whether the group's pool can answer a client right now.
 func (a *anycastSet) healthy() bool {
 	p := a.pool()
-	return p != nil && len(p.Ranked()) > 0
+	return p != nil && len(p.Ranked()) > 0 && chronyServingFn()
 }
 
 // step brings every address in line with what the gateways carrying it can answer: listener up, a pool healthy.  It
@@ -308,7 +282,6 @@ func (a *anycastSet) step() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	healthy := a.healthy()
-	port := a.port()
 	var paused map[string]string
 	if a.paused != nil {
 		paused = a.paused()
@@ -324,12 +297,12 @@ func (a *anycastSet) step() {
 					offered[o] = true
 				}
 			}
-			a.stepExternal(addr, port, healthy, offered)
+			a.stepExternal(addr, healthy, offered)
 			continue
 		}
 		why := ""
 		if !healthy {
-			why = "no NTP server is answering"
+			why = a.unhealthyWhy()
 		}
 		switch paused[addr] {
 		case "node":
@@ -345,30 +318,6 @@ func (a *anycastSet) step() {
 			cl[a.gid] = &anycastClaim{pool: a.pool}
 		}
 		cl[a.gid].pool = a.pool
-		fe := anycastReg.fes[addr]
-		if fe != nil && fe.port != port { // a port changed
-			fe.Stop()
-			delete(anycastReg.fes, addr)
-			fe = nil
-		}
-		if fe == nil {
-			ip, err := netip.ParseAddr(addr)
-			if err == nil {
-				f := NewNTPFrontend(ip, port, func() *Pool { return anycastPool(addr) })
-				f.gw = srvhist.series(gwKey(a.gid))
-				if err := f.Start(); err != nil {
-					why = "cannot listen: " + err.Error()
-					if a.reason[addr] != why { // once, not every renewal
-						errorf("anycast: cannot listen on %s: %v", f.listenAddr(), err)
-					}
-				} else {
-					anycastReg.fes[addr] = f
-				}
-			}
-		}
-		if anycastReg.fes[addr] == nil && why == "" {
-			why = "not listening"
-		}
 		a.reason[addr] = why
 		cl[a.gid].want = why == ""
 		switch {
@@ -407,7 +356,7 @@ func (a *anycastSet) state() []AnycastState {
 		st := AnycastState{Addr: addr, Up: anycastReg.onLo[addr], Reason: a.reason[addr]}
 		if a.ext[addr] {
 			st.External = true
-			st.Up = anycastReg.fes[addr] != nil && addrOnLoFn(addr)
+			st.Up = a.extOK[addr] && addrOnLoFn(addr)
 			out = append(out, st)
 			continue
 		}
@@ -417,4 +366,12 @@ func (a *anycastSet) state() []AnycastState {
 		out = append(out, st)
 	}
 	return out
+}
+
+// unhealthyWhy says why the gateway cannot answer: no upstream server tests good, or chrony is not running or keeping time.
+func (a *anycastSet) unhealthyWhy() string {
+	if p := a.pool(); p != nil && len(p.Ranked()) > 0 {
+		return "chrony is not running or not synchronised"
+	}
+	return "no NTP server is answering"
 }

@@ -224,7 +224,15 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 		b.putJSON("ntpdir/config.json", dc)
 	})
 	do(func() { b.putJSON("ntpdir/config-versions.json", m.VersionsList()) })
-	do(func() { b.putJSON("ntpdir/ntp-forward-failures.json", recentFwdFailures()) })
+	do(func() {
+		b.putJSON("ntpdir/chrony.json", map[string]any{"state": chrony.readState(), "server_stats": readServerStats()})
+		if out, err := chronyc("sources", "-n", "-a"); err == nil {
+			b.put("ntpdir/chrony-sources.txt", out)
+		}
+		if out, err := chronyc("-n", "sourcestats", "-a"); err == nil {
+			b.put("ntpdir/chrony-sourcestats.txt", out)
+		}
+	})
 	do(func() { // who asked for what in the last ten minutes (top clients and domains, types, transports)
 		now := time.Now()
 		b.putJSON("ntpdir/ntp-queries-last-10-min.json", qstats.Query(now.Add(-10*time.Minute), now, QFilter{}))

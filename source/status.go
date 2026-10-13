@@ -20,7 +20,7 @@ import (
 //
 //	{"cmd":"snapshot"}   neighbor/gateway table
 //	{"cmd":"assert-agc"} directed failover onto this node
-//	{"cmd":"ntp"}        upstream pool state (latency ranking)
+//	{"cmd":"ntp"}        upstream pool state and chrony
 //
 // Anything that changes state or exposes configuration (assert-agc and every
 // management command such as versions.restore or tls.install) is accepted
@@ -233,7 +233,7 @@ func (s *StatusServer) ipNames() map[string]string {
 func (s *StatusServer) ntpStatus() map[string]any {
 	pools := s.sup.poolList()
 	if len(pools) == 0 {
-		return map[string]any{"ok": false, "error": "there is no gateway, so there is no NTP proxy (draw one on the Topology page)"}
+		return map[string]any{"ok": false, "error": "no NTP server is defined (add one in Configure ▸ NTP or draw one on the Topology page)"}
 	}
 	listeners := []string{}
 	for _, r := range s.snapshot() {
@@ -243,15 +243,11 @@ func (s *StatusServer) ntpStatus() map[string]any {
 				vip = r.VIP6
 			}
 			listeners = append(listeners, "group "+itoa(r.GroupID)+" "+
-				strings.SplitN(vip, "/", 2)[0]+":"+itoa(s.sup.ntpFor(r.GroupID).ListenPort))
+				strings.SplitN(vip, "/", 2)[0]+":"+itoa(s.sup.ntpPort()))
 		}
 	}
-	var total, answered, servfail uint64
 	var list []map[string]any
 	for _, pi := range pools {
-		total += pi.Pool.Queries.Load()
-		answered += pi.Pool.Answered.Load()
-		servfail += pi.Pool.Failed.Load()
 		name := ""
 		if pi.Key != 0 {
 			name = s.sup.groupName(pi.Key)
@@ -259,23 +255,32 @@ func (s *StatusServer) ntpStatus() map[string]any {
 		list = append(list, map[string]any{
 			"key": pi.Key, "name": name, "groups": pi.Groups, "servers": s.namedServers(pi), "using_fallback": pi.Pool.UsingFallback(),
 			"fail_threshold": pi.Cfg.FailThreshold, "max_stratum": pi.Cfg.MaxStratum, "max_offset_ms": pi.Cfg.MaxOffsetMS, "max_root_distance_ms": pi.Cfg.MaxRootDistanceMS,
-			"queries": pi.Pool.Queries.Load(), "answered": pi.Pool.Answered.Load(),
-			"failed":          pi.Pool.Failed.Load(),
-			"allowed_clients": len(pi.Cfg.AllowedClients), "client_limits": len(pi.Cfg.ClientLimits), "client_rate": pi.Cfg.ClientRate, "client_burst": int(effectiveBurst(pi.Cfg.ClientRate, pi.Cfg.ClientBurst)),
-			"client_action": orDefault(pi.Cfg.ClientAction, actDrop), "denied": pi.Pool.Denied.Load(), "limited": pi.Pool.Limited.Load(),
-			"spread": pi.Cfg.Spread, "spread_band": pi.Cfg.SpreadBand,
+			"max_rtt_ms": pi.Cfg.MaxRTTMS,
 		})
 	}
 	first := list[0]
+	cfg := s.sup.sharedNTP()
 	return map[string]any{"ok": true, "data": map[string]any{
-		"servers":        first["servers"],
-		"pools":          list,
-		"listeners":      listeners,
-		"queries":        total,
-		"answered":       answered,
-		"failed":         servfail,
-		"fail_threshold": first["fail_threshold"],
+		"servers":         first["servers"],
+		"pools":           list,
+		"listeners":       listeners,
+		"chrony":          chrony.State(),
+		"chrony_roll":     s.rollText(),
+		"server_stats":    readServerStats(),
+		"allowed_clients": len(cfg.AllowedClients),
+		"client_rate":     cfg.ClientRate,
+		"client_burst":    int(effectiveBurst(cfg.ClientRate, cfg.ClientBurst)),
+		"client_action":   orDefault(cfg.ClientAction, actDrop),
+		"fail_threshold":  first["fail_threshold"],
 	}}
+}
+
+// rollText says where this node is in the rolling chrony restart ("" when it has nothing to do).
+func (s *StatusServer) rollText() string {
+	if s.mg == nil {
+		return ""
+	}
+	return s.mg.ChronyRollText()
 }
 
 // namedServers is the pool's servers with the names given on the Topology page (Configure ▸ NTP ▸ server names).  The pool
@@ -283,8 +288,10 @@ func (s *StatusServer) ntpStatus() map[string]any {
 func (s *StatusServer) namedServers(pi poolInfo) []ServerStat {
 	sv := pi.Pool.Snapshot()
 	names := s.sup.serverNames(pi.Key)
+	cs := chrony.State()
 	for i := range sv {
 		sv[i].Name = names[sv[i].Addr]
+		sv[i].Chrony = cs.stateOf(sv[i].Addr)
 	}
 	return sv
 }

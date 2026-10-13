@@ -49,10 +49,10 @@ type qsMin struct {
 // The outcomes the top lists are kept apart by, so a tile can show who asked and was, say, turned away.  The
 // order is the index into qsTop.c.
 const (
-	outAnswered = iota // an upstream server answered
-	outFailed          // no upstream server answered: the client was told this server is not synchronised
-	outKoD             // an upstream server answered with a kiss-o'-death, which was passed on
-	outRefused         // the client was turned away: not in allowed_clients, or over its rate
+	outAnswered = iota // chrony answered
+	outFailed          // (not used with chrony)
+	outKoD             // (not used with chrony)
+	outRefused         // chrony dropped the request: not allowed, or over the rate limit
 	qcCount
 )
 
@@ -129,6 +129,14 @@ func (s *QStats) Record(client netip.Addr, server string, version int, outcome i
 	s.enqueue(qEvent{t: s.now().Unix(), client: client, server: server, version: uint8(version), outcome: uint8(outcome)})
 }
 
+// RecordN counts n requests of one client that ended the same way (chrony reports totals, not single requests).
+func (s *QStats) RecordN(client netip.Addr, server string, version int, outcome int, n uint32) {
+	if n == 0 {
+		return
+	}
+	s.enqueue(qEvent{t: s.now().Unix(), client: client, server: server, version: uint8(version), outcome: uint8(outcome), n: n})
+}
+
 // qsWhoMax is how many client address strings are kept for reuse (see whoString).
 const qsWhoMax = 4096
 
@@ -168,22 +176,26 @@ func (s *QStats) apply(e qEvent) {
 	if server == "" {
 		server = "(none)"
 	}
+	n := e.n
+	if n == 0 {
+		n = 1
+	}
 	m := e.t / 60
 	who := s.whoString(client)
 	ms := &s.mins[m%qsMinSlots]
 	if ms.stamp != m {
 		*ms = qsMin{stamp: m}
 	}
-	ms.total++
+	ms.total += n
 	switch kind {
 	case outAnswered:
-		ms.answered++
+		ms.answered += n
 	case outFailed:
-		ms.failed++
+		ms.failed += n
 	case outKoD:
-		ms.kod++
+		ms.kod += n
 	case outRefused:
-		ms.refd++
+		ms.refd += n
 	}
 	vn := versionName(e.version)
 	v6 := client.IsValid() && !client.Unmap().Is4()
@@ -201,23 +213,23 @@ func (s *QStats) apply(e qEvent) {
 			k.clients, k.servers, k.versions = map[string]uint32{}, map[string]uint32{}, map[string]uint32{}
 			k.pairs = map[string]map[string]uint32{}
 		}
-		bump(k.clients, who, qsCaps[kind][0])
-		bump(k.servers, server, qsCaps[kind][1])
-		k.versions[vn]++
+		bump(k.clients, who, qsCaps[kind][0], n)
+		bump(k.servers, server, qsCaps[kind][1], n)
+		k.versions[vn] += n
 		if sm := k.pairs[who]; sm != nil && sm[server] > 0 {
-			sm[server]++
+			sm[server] += n
 		} else if k.npairs < qsPairCaps[kind] {
 			if sm == nil {
 				sm = map[string]uint32{}
 				k.pairs[who] = sm
 			}
-			sm[server]++
+			sm[server] += n
 			k.npairs++
 		}
 		if v6 {
-			k.v6++
+			k.v6 += n
 		} else {
-			k.v4++
+			k.v4 += n
 		}
 	}
 }
@@ -239,6 +251,7 @@ type qEvent struct {
 	server  string
 	version uint8
 	outcome uint8
+	n       uint32 // how many requests this event stands for; 0 is one
 }
 
 type qsPending struct {
@@ -287,11 +300,11 @@ func (s *QStats) flush() {
 	}
 }
 
-func bump(m map[string]uint32, k string, limit int) {
+func bump(m map[string]uint32, k string, limit int, n uint32) {
 	if _, ok := m[k]; !ok && len(m) >= limit {
 		k = qsOthers
 	}
-	m[k]++
+	m[k] += n
 }
 
 // NameCount is one row of a top list.
