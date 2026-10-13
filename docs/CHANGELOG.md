@@ -1,5 +1,21 @@
 # Changelog
 
+## [v11] - 2026-10-12 — Host lookup fix
+
+### Fixed
+- Add NTP server: filling in a name or an address showed "Lookup failed: unknown command: ntp.lookup". The route `/api/hostlookup` named an operation that does not exist; it now calls `host.lookup`. A test checks that every operation a web route names is handled.
+
+### Verified
+- gofmt, `go vet`, `go test -race -count=1 ./...`, the five cross-builds, `CGO_ENABLED=0` vet and test.
+
+## [v10] - 2026-10-12
+
+### Removed
+- The cluster **Failover** drop-down (Auto/On/Off), `--cluster-failover`, `POST /api/cluster/failover` and the `cluster.failover` operation. Failover is always automatic: on from three members, off with two (promote by hand). Old files that carry a `failover` value are accepted and ignored.
+
+### Fixed
+- A node whose saved state said it was a replica of its own address showed "the primary … is not reachable" and "Last sync failed: the primary … is not a known peer" while it was in fact alone. It now becomes the primary at start and on the next sync (no epoch change), and the warning is never shown for one's own address.
+
 ## [v9] - 2026-10-13 — Clean re-release of v8
 
 No code change. The v8 tag on GitHub contained files that v8 had deleted (`ntpfront.go`, `fwdfail.go`, `upstreamudp.go` and others from the old relay), so `get.sh` and `install.sh` failed to build it with "dialUDP redeclared" and "undefined: ntpVersion". This archive is the v8 tree, built from an empty directory, with the version raised so that a new tag is unambiguous.

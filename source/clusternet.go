@@ -797,6 +797,10 @@ func (c *Cluster) handleJoin(rw http.ResponseWriter, r *http.Request) {
 		jsonError(rw, http.StatusBadRequest, "invalid peer description")
 		return
 	}
+	if peer.Addr == c.node.Self().Addr {
+		jsonError(rw, http.StatusConflict, "the joining node has the same address as this one ("+peer.Addr+"): set its own cluster.self")
+		return
+	}
 	c.node.UnremovePeer(peer.Addr)
 	c.node.UnremoveFp(peer.Fp) // a token is an administrator's decision to let this identity in
 	newcomer := peer.NodeID != "" && !c.knowsNode(peer.NodeID)
@@ -1036,6 +1040,9 @@ func (c *Cluster) Join(ctx context.Context, code, by string) error {
 		// listed among its alternatives.
 		if addr != res.Server.Addr && !containsStr(res.Server.Alts, addr) {
 			res.Server.Alts = append([]string{addr}, res.Server.Alts...)
+		}
+		if res.Server.Addr == c.node.Self().Addr || res.PrimaryAddr == c.node.Self().Addr {
+			return fmt.Errorf("this node and the cluster both call themselves %s: give this node its own address (cluster.self) and try again", c.node.Self().Addr)
 		}
 		c.noteGoodAddr(res.Server, addr)
 		res.Server.Fp = jc.Fp
@@ -1452,9 +1459,8 @@ type ClusterView struct {
 	LastSyncError string     `json:"last_sync_error,omitempty"`
 	Conflict      string     `json:"conflict,omitempty"`
 	Warnings      []string   `json:"warnings"`
-	// Failover is the setting ("" automatic, "on", "off") and FailoverOn whether it is in force with this many members
-	Failover   string `json:"failover"`
-	FailoverOn bool   `json:"failover_on"`
+	// FailoverOn says whether automatic failover is in force with this many members (from three)
+	FailoverOn bool `json:"failover_on"`
 }
 
 func (c *Cluster) View() ClusterView {
@@ -1469,8 +1475,7 @@ func (c *Cluster) View() ClusterView {
 		Conflict: c.conflict, Peers: []PeerView{}, Warnings: []string{},
 	}
 	v.Joinable = snap.Role == RolePrimary && len(snap.Peers) == 0 && snap.Epoch == 1
-	v.Failover = c.mg.upd.Intent().Failover
-	v.FailoverOn = failoverEnabled(v.Failover, len(snap.Peers)+1)
+	v.FailoverOn = failoverEnabled(len(snap.Peers) + 1)
 	v.Peers = append(v.Peers, PeerView{
 		Addr: snap.SelfAddr, NodeID: snap.NodeID, Fingerprint: c.node.Fingerprint(), Self: true, Reachable: true,
 		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Version: version(),
@@ -1500,7 +1505,7 @@ func (c *Cluster) View() ClusterView {
 	if !c.cfg.Enabled {
 		v.Warnings = append(v.Warnings, "clustering is disabled on this node (cluster.enabled is false)")
 	}
-	if snap.Role == RoleReplica {
+	if snap.Role == RoleReplica && snap.PrimaryAddr != snap.SelfAddr {
 		pri := false
 		for _, p := range v.Peers {
 			if p.Addr == snap.PrimaryAddr && p.Reachable {

@@ -7,22 +7,10 @@ import (
 )
 
 func TestFailoverEnabled(t *testing.T) {
-	for _, c := range []struct {
-		mode    string
-		members int
-		want    bool
-	}{{"", 1, false}, {"", 2, false}, {"", 3, true}, {"", 5, true}, {"on", 2, true}, {"off", 5, false}} {
-		if got := failoverEnabled(c.mode, c.members); got != c.want {
-			t.Errorf("mode %q with %d members: %v, want %v", c.mode, c.members, got, c.want)
+	for members, want := range map[int]bool{1: false, 2: false, 3: true, 5: true} {
+		if got := failoverEnabled(members); got != want {
+			t.Errorf("%d members: %v, want %v", members, got, want)
 		}
-	}
-	for in, want := range map[string]string{"": "", "auto": "", "default": "", "on": "on", "off": "off"} {
-		if got, err := normalizeFailover(in); err != nil || got != want {
-			t.Errorf("normalizeFailover(%q) = %q, %v", in, got, err)
-		}
-	}
-	if _, err := normalizeFailover("maybe"); err == nil {
-		t.Error("an unknown mode was accepted")
 	}
 }
 
@@ -92,7 +80,7 @@ func TestAutomaticFailover(t *testing.T) {
 	}
 }
 
-// With failover off, or with two members, nothing promotes however long the primary is gone.
+// With two members nothing promotes however long the primary is gone.
 func TestFailoverStaysManual(t *testing.T) {
 	defer func(d time.Duration) { failoverAfter = d }(failoverAfter)
 	failoverAfter = 20 * time.Millisecond
