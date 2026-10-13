@@ -1,5 +1,21 @@
 # Changelog
 
+## [v7] - 2026-10-12 — Updates: "Downloading…"; Controller greyed with several gateways
+
+Taken from the Anyname DNS Director v379. Its other recent changes (server names registered in DNS, Rename registering in DNS, policy-based resolution) are DNS-only; its v369-v374 changes were already here.
+
+### Changed
+- Fetching an update from online says "Downloading…" while it works, not "Downloading from GitHub…".
+
+### Fixed
+- With more than one gateway, a node that was already the controller (and primary) still offered **Controller** in its menu, because the check also counted gateways the node is not a member of (another subnet, removed from it), where it can never hold the role. It now counts only the gateways the node is a member of. A paused node still shows "Paused: resume it first".
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
+
+### Not verified
+- In a browser; the multi-gateway case was reasoned from the code, not reproduced.
+
 ## [v6] - 2026-10-12 — README and screenshots refreshed for NTP
 
 ### Changed
