@@ -421,10 +421,13 @@
     clear(bar);
     const rows = [];
     if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
-      const tz = h("select", { id: "tz-pick", "aria-label": "Time zone of the clock", onchange: (e) => { setTz(e.target.value); tickClock(true); } });
-      for (const z of tzList()) tz.append(h("option", { value: z }, tzLabel(z)));
-      tz.value = getTz();
-      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz));
+      // a box you can type in: the list narrows as you type (the browser filters a datalist); the whole list shows on focus
+      const list = h("datalist", { id: "tz-list" }, tzList().map((z) => h("option", { value: z, label: tzLabel(z) })));
+      const tz = h("input", { id: "tz-pick", type: "text", list: "tz-list", autocomplete: "off", spellcheck: "false", "aria-label": "Time zone of the clock", value: getTz(),
+        onfocus: (e) => { e.target.placeholder = e.target.value; e.target.value = ""; },
+        oninput: (e) => { const z = tzList().find((x) => x.toLowerCase() === e.target.value.trim().toLowerCase()); if (z) { setTz(z); tickClock(true); } },
+        onblur: (e) => { const z = tzList().find((x) => x.toLowerCase() === e.target.value.trim().toLowerCase()); e.target.value = z || getTz(); e.target.placeholder = ""; } });
+      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz, list));
     }
     if (state.nodes.length >= 2) {
       const sel = h("select", { id: "node-pick", "aria-label": "Node to configure and monitor", onchange: (e) => setTarget(e.target.value || null) });

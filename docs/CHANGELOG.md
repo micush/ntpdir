@@ -1,5 +1,16 @@
 # Changelog
 
+## [v23] - 2026-10-13 — Type in the Time zone box
+
+### Changed
+- The Time zone picker is a box you can type in: it shows the whole list when you click it and narrows as you type (the browser filters the list; each entry shows its UTC offset). Picking an entry, or typing a full zone name, applies it; anything else you typed is put back to the zone in use when you leave the box.
+
+### Verified
+- The box's focus, typing and blur logic in headless Chromium; `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- How the narrowing list looks in Firefox and Safari (it is the browser's own list).
+
 ## [v22] - 2026-10-13 — Pickers stay open while the page refreshes
 
 ### Fixed
