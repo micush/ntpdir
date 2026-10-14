@@ -310,11 +310,12 @@ dialog.cv-dialog .dlg-x:hover { color: var(--text); background: var(--info-bg); 
 svg.cv text.ip { font-family: var(--mono); font-weight: 600; font-size: 12px; }
 
 /* ── v22: node picker ── */
-.topbar { display: flex; justify-content: flex-end; align-items: center; gap: .6rem; max-width: 1150px; margin: 0 auto; padding: .6rem 1.25rem 0; }
+.topbar { display: flex; flex-direction: column; justify-content: flex-start; align-items: flex-end; gap: .35rem; max-width: 1150px; margin: 0 auto; padding: .6rem 1.25rem 0; }
 /* The picker stays where it is when the page scrolls (zooming the drawing in scrolls it), as the "?" does.  The bar's
    own empty space lets clicks through to what is under it. */
 .topbar { position: sticky; top: 0; z-index: 20; pointer-events: none; }
 .topbar > * { pointer-events: auto; }
+.tbrow { display: flex; align-items: center; gap: .6rem; }
 .topbar label { white-space: nowrap; background: var(--bg); padding: .1rem .35rem; border-radius: 4px; }
 .topbar select { width: auto; flex: none; min-width: 14rem; max-width: 100%; }
 .topbar.hidden { display: none; }

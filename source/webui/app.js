@@ -411,30 +411,71 @@
     const bar = document.getElementById("topbar");
     if (!bar) return;
     clear(bar);
-    bar.classList.toggle("hidden", state.nodes.length < 2);
-    if (state.nodes.length < 2) return;
-    const sel = h("select", { id: "node-pick", "aria-label": "Node to configure and monitor", onchange: (e) => setTarget(e.target.value || null) });
-    const self = selfNode();
-    sel.append(h("option", { value: "" }, nodeLabel(self) + " (this node)"));
-    for (const n of state.nodes.filter((x) => !x.self)) {
-      const o = h("option", { value: n.addr }, nodeLabel(n) + (n.is_primary ? " · primary" : "") + (n.reachable ? "" : " · unreachable"));
-      if (!n.reachable && n.addr !== state.target) o.disabled = true;
-      sel.append(o);
+    const rows = [];
+    if (state.nodes.length >= 2) {
+      const sel = h("select", { id: "node-pick", "aria-label": "Node to configure and monitor", onchange: (e) => setTarget(e.target.value || null) });
+      const self = selfNode();
+      sel.append(h("option", { value: "" }, nodeLabel(self) + " (this node)"));
+      for (const n of state.nodes.filter((x) => !x.self)) {
+        const o = h("option", { value: n.addr }, nodeLabel(n) + (n.is_primary ? " · primary" : "") + (n.reachable ? "" : " · unreachable"));
+        if (!n.reachable && n.addr !== state.target) o.disabled = true;
+        sel.append(o);
+      }
+      if (CLUSTER_TABS.includes(state.tab)) sel.append(h("option", { value: CLUSTER }, "Cluster (" + state.nodes.length + ")"));
+      sel.value = state.target || "";
+      rows.push(h("div", { class: "tbrow" }, h("label", { for: "node-pick", class: "muted small" }, "Node"), sel));
     }
-    if (CLUSTER_TABS.includes(state.tab)) sel.append(h("option", { value: CLUSTER }, "Cluster (" + state.nodes.length + ")"));
-    sel.value = state.target || "";
-    bar.append(h("label", { for: "node-pick", class: "muted small" }, "Node"), sel);
+    if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
+      const tz = h("select", { id: "tz-pick", "aria-label": "Time zone of the clock", onchange: (e) => { setTz(e.target.value); tickClock(true); } });
+      for (const z of tzList()) tz.append(h("option", { value: z }, tzLabel(z)));
+      tz.value = getTz();
+      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz));
+    }
+    bar.classList.toggle("hidden", rows.length === 0);
+    bar.append(...rows);
   }
 
   // The clock in the gateway circle: the time of the node being looked at, from that node (asked every 15 s, and counted by the
-  // second in between), in UTC; the tooltip says how chrony rates it.
+  // second in between), in the zone picked under the node picker; the tooltip says how chrony rates it.
   const clock = { skew: null, info: null, asked: 0 };
-  const clockText = () => (clock.skew === null ? "--:--:--" : new Date(Date.now() + clock.skew).toISOString().slice(11, 19) + " UTC");
+  // The zone list is the browser's own (every IANA zone it knows, plus UTC); the choice is a cookie, so each person's browser keeps its own.
+  const TZ_COOKIE = "ntpdir_tz";
+  let tzNames = null;
+  const tzList = () => {
+    if (!tzNames) {
+      let l = [];
+      try { l = Intl.supportedValuesOf("timeZone"); } catch (_) { /* an old browser: UTC only */ }
+      tzNames = ["UTC"].concat(l.filter((z) => z !== "UTC"));
+    }
+    return tzNames;
+  };
+  const tzOffset = (z) => {
+    try { return new Intl.DateTimeFormat("en-GB", { timeZone: z, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName").value.replace("GMT", "UTC"); } catch (_) { return ""; }
+  };
+  const tzLabel = (z) => (z === "UTC" ? "UTC" : z.replace(/_/g, " ") + " (" + tzOffset(z) + ")");
+  function getTz() {
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)ntpdir_tz=([^;]+)/);
+      if (m) { const z = decodeURIComponent(m[1]); if (tzList().includes(z)) return z; }
+    } catch (_) { /* no cookies: UTC */ }
+    return "UTC";
+  }
+  function setTz(z) {
+    try { document.cookie = TZ_COOKIE + "=" + encodeURIComponent(z) + "; max-age=31536000; path=/; SameSite=Strict" + (location.protocol === "https:" ? "; Secure" : ""); } catch (_) { /* kept for this page only */ }
+  }
+  const tzFmt = {};
+  const tzTime = (ms, z) => {
+    try {
+      const f = tzFmt[z] || (tzFmt[z] = new Intl.DateTimeFormat("en-GB", { timeZone: z, hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }));
+      return f.format(new Date(ms)).replace(/GMT/, "UTC");
+    } catch (_) { return new Date(ms).toISOString().slice(11, 19) + " UTC"; }
+  };
+  const tzDate = (ms, z) => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: z }).format(new Date(ms)); } catch (_) { return new Date(ms).toISOString().slice(0, 10); } };
+  const clockText = () => (clock.skew === null ? "--:--:--" : tzTime(Date.now() + clock.skew, getTz()));
   const clockTip = () => {
     const i = clock.info;
     if (!i) return "Time of this node";
-    const d = new Date(Date.now() + (clock.skew || 0)).toISOString().slice(0, 10);
-    return d + " — " + (!i.running ? "chrony is not running" : !i.synced ? "chrony is not synchronised yet" : "stratum " + i.stratum + (i.ref ? ", " + i.ref : "") + ", clock " + (i.offset_ms >= 0 ? "+" : "") + Number(i.offset_ms).toFixed(3) + " ms off");
+    return tzDate(Date.now() + (clock.skew || 0), getTz()) + " — " + (!i.running ? "chrony is not running" : !i.synced ? "chrony is not synchronised yet" : "stratum " + i.stratum + (i.ref ? ", " + i.ref : "") + ", clock " + (i.offset_ms >= 0 ? "+" : "") + Number(i.offset_ms).toFixed(3) + " ms off");
   };
   async function loadClock() {
     clock.asked = Date.now();

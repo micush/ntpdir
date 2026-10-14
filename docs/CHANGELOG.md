@@ -1,5 +1,16 @@
 # Changelog
 
+## [v20] - 2026-10-13 — Time zone picker
+
+### Added
+- Topology: a **Time zone** picker under the node picker (the bar is also shown on a single node). It lists UTC and every zone the browser knows (`Intl.supportedValuesOf`), each with its current UTC offset; picking one changes the zone of the time in the gateway circle at once. The choice is stored in the cookie `ntpdir_tz` (one year, `SameSite=Strict`, `Secure` over HTTPS; a plain cookie the page reads, holding only the zone name), so each person's browser keeps the zone they last chose. UTC until one is chosen. The node's time itself is unchanged: only its display.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The picker and the cookie in a browser (layout of the two rows, light and dark; a cookie that is refused falls back to UTC).
+
 ## [v19] - 2026-10-13 — Serve only with a good clock; offset on the server boxes
 
 ### Added
