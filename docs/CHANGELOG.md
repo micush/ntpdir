@@ -1,5 +1,13 @@
 # Changelog
 
+## [v25] - 2026-10-13 — Topology: addresses like the names
+
+### Changed
+- The IP addresses in the gateway circle and in the server boxes are drawn like the names: the same size and the same muted colour. The circle is sized for the clock line.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
 ## [v24] - 2026-10-13 — Topology: lines reordered
 
 ### Changed

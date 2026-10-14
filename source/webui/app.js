@@ -727,7 +727,7 @@
       // up to a full 39-character IPv6 address (monospace 12px ≈ 7.3px per character).
       const ip4 = (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
-      const textW = Math.max(ip4.length, ip6.length, 9) * 7.3;
+      const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);   // wide enough for the clock line too
       const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
       const own = g.extra_vips || [], dds = g.dnsdir_vips || [], anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
       const AW = Math.max(170, Math.ceil(Math.max(0, ...anys.map((a) => a.length)) * 7.3 + 28));  // wide enough for the longest address in full (monospace 12px)
@@ -859,8 +859,8 @@
         sv("title", {}, gwTip(g, st, dual)),
         sv("circle", { cx, cy: CY, r: R }),
         ...(dual
-          ? [clockEl(cx, CY - 22), label(cx, CY - 4, ip4, "ip plain"), label(cx, CY + 14, ip6, "ip plain"), label(cx, CY + 32, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")]
-          : [clockEl(cx, CY - 10), label(cx, CY + 8, ip4 || ip6, "ip plain"), label(cx, CY + 26, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")])));
+          ? [clockEl(cx, CY - 22), label(cx, CY - 4, ip4, "t2"), label(cx, CY + 14, ip6, "t2"), label(cx, CY + 32, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")]
+          : [clockEl(cx, CY - 10), label(cx, CY + 8, ip4 || ip6, "t2"), label(cx, CY + 26, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")])));
       anys.forEach((addr, i) => {
         const at = anyAt(i), x = cx + at.x, y = at.y;
         const a = st.anycast.find((z) => z.addr === addr);
@@ -927,7 +927,7 @@
           sv("title", {}, srvTitle(g, addr) + " — " + ss.why + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
           label(mx, SY + (srvName(g, addr) ? 19 : 20), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t1 strong"),   // the offset first, in bold
-          label(mx, SY + 35, fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "400 13px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t1 plain"),   // the star: the source chrony has selected
+          label(mx, SY + 35, fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "400 11px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t2"),   // the star: the source chrony has selected
           ...(srvName(g, addr) ? [label(mx, SY + 51, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : [])));
       });
       svg.append(...lines, ...shapes);
