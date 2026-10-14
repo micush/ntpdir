@@ -1,5 +1,13 @@
 # Changelog
 
+## [v26] - 2026-10-13 — The star on the offset
+
+### Changed
+- The star that marks the source chrony has selected is after the offset (`-0.23 ms *`), no longer after the address.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
 ## [v25] - 2026-10-13 — Topology: addresses like the names
 
 ### Changed
