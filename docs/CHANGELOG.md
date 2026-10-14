@@ -1,5 +1,16 @@
 # Changelog
 
+## [v21] - 2026-10-13 — Time zone picker beside the node picker
+
+### Changed
+- The Time zone picker is on the same line as the node picker, at the left of the Topology page (the node picker stays at the right), instead of in a second row under it.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds. The layout was agreed from a mockup.
+
+### Not verified
+- The layout in the real page.
+
 ## [v20] - 2026-10-13 — Time zone picker
 
 ### Added

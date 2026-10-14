@@ -412,6 +412,12 @@
     if (!bar) return;
     clear(bar);
     const rows = [];
+    if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
+      const tz = h("select", { id: "tz-pick", "aria-label": "Time zone of the clock", onchange: (e) => { setTz(e.target.value); tickClock(true); } });
+      for (const z of tzList()) tz.append(h("option", { value: z }, tzLabel(z)));
+      tz.value = getTz();
+      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz));
+    }
     if (state.nodes.length >= 2) {
       const sel = h("select", { id: "node-pick", "aria-label": "Node to configure and monitor", onchange: (e) => setTarget(e.target.value || null) });
       const self = selfNode();
@@ -423,13 +429,7 @@
       }
       if (CLUSTER_TABS.includes(state.tab)) sel.append(h("option", { value: CLUSTER }, "Cluster (" + state.nodes.length + ")"));
       sel.value = state.target || "";
-      rows.push(h("div", { class: "tbrow" }, h("label", { for: "node-pick", class: "muted small" }, "Node"), sel));
-    }
-    if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
-      const tz = h("select", { id: "tz-pick", "aria-label": "Time zone of the clock", onchange: (e) => { setTz(e.target.value); tickClock(true); } });
-      for (const z of tzList()) tz.append(h("option", { value: z }, tzLabel(z)));
-      tz.value = getTz();
-      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz));
+      rows.push(h("div", { class: "tbrow tbnode" }, h("label", { for: "node-pick", class: "muted small" }, "Node"), sel));
     }
     bar.classList.toggle("hidden", rows.length === 0);
     bar.append(...rows);
