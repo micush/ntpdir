@@ -1,5 +1,16 @@
 # Changelog
 
+## [v22] - 2026-10-13 — Pickers stay open while the page refreshes
+
+### Fixed
+- The Time zone and Node pickers closed themselves when the node list refreshed (every 6 s), because the whole bar was redrawn each time. It is now redrawn only when what it shows changes (page, node picked, node list), and never while one of its pickers has the focus.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- In a browser with a list held open across a refresh.
+
 ## [v21] - 2026-10-13 — Time zone picker beside the node picker
 
 ### Changed

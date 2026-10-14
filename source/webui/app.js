@@ -410,6 +410,14 @@
   function renderTopbar() {
     const bar = document.getElementById("topbar");
     if (!bar) return;
+    // The nodes are asked for every few seconds; the bar is only redrawn when what it shows changed, and not at all while one of its
+    // pickers has the focus (redrawing it shut an open list).
+    const view = [state.tab, state.target];
+    const sig = JSON.stringify([view, state.nodes.map((n) => [n.addr, nodeLabel(n), n.is_primary, n.reachable, !!n.self])]);
+    if (bar.dataset.sig === sig) return;
+    if (bar.contains(document.activeElement) && bar.dataset.view === JSON.stringify(view)) return;
+    bar.dataset.sig = sig;
+    bar.dataset.view = JSON.stringify(view);
     clear(bar);
     const rows = [];
     if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
