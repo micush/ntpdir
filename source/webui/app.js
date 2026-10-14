@@ -1190,7 +1190,8 @@
       const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 250, height: 20 + 18 * (series.length + 1) });
       const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
       const tipRows = series.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
-      tip.append(tipBg, tipHead, ...tipRows);
+      const qpsRow = qpsView ? null : sv("g", { transform: `translate(10 ${36 + 18 * shown.length})` }, sv("rect", { class: "sw qpsw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, ""));   // the rate at this point, beside the counts
+      tip.append(tipBg, tipHead, ...tipRows, ...(qpsRow ? [qpsRow] : []));
       const hit = sv("rect", { class: "qhit", x: L, y: T, width: pw, height: ph,
         onmousemove: (e) => {
           const r = svg.getBoundingClientRect();
@@ -2673,7 +2674,7 @@
     const TYPE_CLS = { "NTPv4": "t1", "NTPv3": "t2", "NTPv2": "t3", "NTPv1": "t4" };
     const OUTCOME_CLS = Object.fromEntries(SERIES.filter((x) => x.key !== "total").map((x) => [x.label, x.cls]));   // chrony cannot tell the NTP version of a client, so the card shows how the requests ended
     const PROTO_CLS = { IPv4: "t1", IPv6: "t2" };
-    const RANGES = [["1h", "Last Hour"], ["1d", "Last Day"], ["7d", "Last Week"], ["30d", "Last Month"], ["custom", "Custom"]];
+    const RANGES = [["now", "Now"], ["1h", "Last Hour"], ["1d", "Last Day"], ["7d", "Last Week"], ["30d", "Last Month"], ["custom", "Custom"]];
     const REFRESH_MS = 10000;
     const n0 = (n) => Number(n || 0).toLocaleString();
     // a share is rounded to two decimals at most, but never to 100% unless it is all of them (99.99%) or to 0% unless it is none (<0.01%)
@@ -2776,7 +2777,7 @@
       const cross = sv("line", { class: "qcross hidden", y1: T, y2: T + ph });
       const dots = shown.map((s) => sv("circle", { class: "qdot hidden " + s.cls, r: 4, cx: 0, cy: 0 }));
       const tip = sv("g", { class: "qtip hidden" });
-      const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 210, height: 20 + 18 * (shown.length + 1) });
+      const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 210, height: 20 + 18 * (shown.length + 1 + (qpsView ? 0 : 1)) });
       const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
       const tipRows = shown.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
       tip.append(tipBg, tipHead, ...tipRows);
@@ -2789,6 +2790,7 @@
           shown.forEach((s, k) => { dots[k].classList.remove("hidden"); dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", y(d[s.key][i])); });
           tipHead.textContent = when((d.start + i * d.step) * 1000);
           shown.forEach((s, k) => { tipRows[k].lastChild.textContent = s.label + ": " + (qpsView ? fq(d[s.key][i]) : n0(d[s.key][i])); });
+          if (qpsRow) qpsRow.lastChild.textContent = "RPS" + (only ? " — " + qs.label : "") + ": " + fq(d[only || "total"][i] / (d.step || 60));
           const tx = x(i) > W / 2 ? x(i) - 220 : x(i) + 12;
           tip.setAttribute("transform", `translate(${tx} ${T + 6})`); tip.classList.remove("hidden");
         },

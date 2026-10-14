@@ -477,7 +477,7 @@ The PAM binding uses cgo, so build natively with `libpam0g-dev` (Debian and Ubun
 | `--update-repo` | Configure ▸ General ▸ **Upgrade** card (Online repository) |
 | `--update-cancel` | command line only (the Upgrade tab shows what is queued) |
 | `--stats-clear` `[--all-nodes]`, `--scan ADDR`, `--ping ADDR\|NAME`, `--traceroute ADDR\|NAME` | Statistics page: **Clear**; right-click a client ▸ **Scan**, **Ping**, **Traceroute** |
-| `--stats` `[--stats-range 1h\|1d\|7d\|30d] [--stats-outcome KIND] [--stats-client ADDR \| --stats-server ADDR] [--all-nodes]`, `--whois ADDR` | Statistics page (Monitor); `--whois` is right-click ▸ **Whois** |
+| `--stats` `[--stats-range now\|1h\|1d\|7d\|30d] [--stats-outcome KIND] [--stats-client ADDR \| --stats-server ADDR] [--all-nodes]`, `--whois ADDR` | Statistics page (Monitor); `--whois` is right-click ▸ **Whois** |
 | `--host` `[--host-range 1h\|1d\|7d\|30d] [--all-nodes]` | Host page (Monitor); `--all-nodes` is the Node menu's **Cluster** entry (also on Statistics) |
 | `--capture IFACE` `[--capture-seconds N] [--capture-filter EXPR] [--capture-file FILE] [--all-nodes]`, `--capture-interfaces` | Capture page (Monitor); `--all-nodes` is the Node menu's **Cluster** entry there |
 | `--tshoot` `[--all-nodes] [--tshoot-file F]` | Log page ▸ tshoot |
@@ -673,6 +673,7 @@ ntpdir --stats --stats-outcome failed          (also answered, kod, refused)
 ntpdir --stats --stats-client 192.0.2.7        (the servers that answered that client)
 ntpdir --stats --stats-server 10.0.0.124       (the clients that server served)
 ntpdir --whois 192.0.2.7                       (registry record of an address)
+ntpdir --stats --stats-range now
 ntpdir --stats --stats-range 1d
 ntpdir --stats --stats-range 30d
 ntpdir --stats --all-nodes                     (every cluster node's numbers added together)

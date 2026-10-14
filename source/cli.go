@@ -857,7 +857,7 @@ func runLog(sock string, f *cliFlags) {
 	}
 }
 
-// runStats is --stats [--stats-range 1h|1d|7d|30d] [--stats-outcome answered|failed|kod|refused]: totals, NTP versions, address families and the
+// runStats is --stats [--stats-range now|1h|1d|7d|30d] [--stats-outcome answered|failed|kod|refused]: totals, NTP versions, address families and the
 // top clients and servers of the last hour (or day, week, month).  Memory only, last 30 days.
 func runStats(sock string, f *cliFlags) {
 	rng := *f.statsRange

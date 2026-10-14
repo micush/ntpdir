@@ -1,5 +1,17 @@
 # Changelog
 
+## [v31] - 2026-10-14 — Statistics: a "Now" range, RPS in the chart tooltip
+
+### Added
+- **Now** button before **Last Hour** on the Statistics page; CLI `--stats --stats-range now`. It covers the current 10-minute period so far, and reaches back one more period when fewer than 5 minutes of it have passed (so 5 to 15 minutes). The top lists are stored in 10-minute slots, so this is the closest they can come to the present; starting on a slot boundary makes the totals, the chart (one point per minute) and the top lists cover the same period. In a cluster the receiving node fixes the period once.
+- Hovering the Statistics chart in the counts view shows an **RPS** line, with a black box in front of it, under the values (of the picked outcome when a tile is picked, otherwise of all requests).
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
+
+### Not verified
+- In a browser, and on a live multi-node cluster.
+
 ## [v30] - 2026-10-14 — Stray dot on the statistics chart
 
 ### Fixed

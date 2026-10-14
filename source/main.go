@@ -122,7 +122,7 @@ the web GUI):
                    --update-cancel all|ADDR,...  --update-auto on|off
                    --update-repo URL|default   (where "fetch online" downloads from;
                    default https://github.com/micush/ntpdir)
-  Statistics       --stats [--stats-range 1h|1d|7d|30d]
+  Statistics       --stats [--stats-range now|1h|1d|7d|30d]
                    [--stats-outcome answered|failed|kod|refused]
                    [--stats-client ADDR | --stats-server ADDR]
                    [--all-nodes]   (every cluster node's numbers added together)
