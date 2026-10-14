@@ -286,6 +286,8 @@
     refreshNodes();
     state.topoTimer = setInterval(() => { if (!document.hidden) refreshTopoNav(); }, 4000);
     state.nodesTimer = setInterval(() => { if (!document.hidden) refreshNodes(); }, 6000);
+    loadClock();
+    state.clockTimer = setInterval(tickClock, 1000);
     let wanted = location.hash.slice(1);
     if (wanted === "canvas") wanted = "topology"; // the page's old name: keep old bookmarks working
     if (wanted === "neighbors") wanted = "nodes"; // likewise
@@ -424,11 +426,36 @@
     bar.append(h("label", { for: "node-pick", class: "muted small" }, "Node"), sel);
   }
 
+  // The clock in the gateway circle: the time of the node being looked at, from that node (asked every 15 s, and counted by the
+  // second in between), in UTC; the tooltip says how chrony rates it.
+  const clock = { skew: null, info: null, asked: 0 };
+  const clockText = () => (clock.skew === null ? "--:--:--" : new Date(Date.now() + clock.skew).toISOString().slice(11, 19) + " UTC");
+  const clockTip = () => {
+    const i = clock.info;
+    if (!i) return "Time of this node";
+    const d = new Date(Date.now() + (clock.skew || 0)).toISOString().slice(0, 10);
+    return d + " — " + (!i.running ? "chrony is not running" : !i.synced ? "chrony is not synchronised yet" : "stratum " + i.stratum + (i.ref ? ", " + i.ref : "") + ", clock " + (i.offset_ms >= 0 ? "+" : "") + Number(i.offset_ms).toFixed(3) + " ms off");
+  };
+  async function loadClock() {
+    clock.asked = Date.now();
+    try {
+      const r = (await api("GET", "/api/time")).data;
+      clock.skew = r.now_ms - Date.now(); clock.info = r;
+    } catch (_) { /* the next tick asks again */ }
+    tickClock(true);
+  }
+  function tickClock(redraw) {
+    if (document.hidden && redraw !== true) return;
+    if (Date.now() - clock.asked > 15000) loadClock();
+    for (const el of document.querySelectorAll(".vipclock")) { el.firstChild.nodeValue = clockText(); const t = el.querySelector("title"); if (t) t.textContent = clockTip(); }
+  }
+
   function setTarget(addr) {
     if ((addr || null) === state.target) return;
     state.target = addr || null;
     document.body.classList.toggle("remote", !!state.target && state.target !== CLUSTER);   // another node's page is marked; the cluster's is no node
     renderTopbar();
+    clock.skew = null; clock.info = null; loadClock();
     state.topo.action = null;   // the gateway picked stays picked: the sidebar list is the signed-in node's, whichever node is driven
     refreshTopoNav();
     certBanner();
@@ -449,7 +476,8 @@
     stopPolling();
     if (state.topoTimer) clearInterval(state.topoTimer);
     if (state.nodesTimer) clearInterval(state.nodesTimer);
-    state.topoTimer = state.nodesTimer = null;
+    if (state.clockTimer) clearInterval(state.clockTimer);
+    state.topoTimer = state.nodesTimer = state.clockTimer = null;
   }
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.timer && VIEWS[state.tab].poll) VIEWS[state.tab].poll().catch(() => {});
@@ -648,7 +676,7 @@
       const ip4 = (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
       const textW = Math.max(ip4.length, ip6.length, 9) * 7.3;
-      const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 24 : 14)));
+      const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
       const own = g.extra_vips || [], dds = g.dnsdir_vips || [], anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
       const AW = Math.max(170, Math.ceil(Math.max(0, ...anys.map((a) => a.length)) * 7.3 + 28));  // wide enough for the longest address in full (monospace 12px)
       const waiting = cv.nodeWait || {};
@@ -719,6 +747,8 @@
         const el = svgHost.querySelector("svg"); if (el) el.focus({ preventScroll: true }); // keep the Delete key working after the redraw
       };
       const label = (x, y, t, cls) => sv("text", { x, y, "text-anchor": "middle", class: cls || "" }, t);
+      // the time of the node being looked at, kept by the clock timer (see tickClock); it is the time every node serving the gateway hands out
+      const clockEl = (x, y) => sv("text", { x, y, "text-anchor": "middle", class: "t1 vipclock" }, clockText(), sv("title", {}, clockTip()));
       const lines = [];
       const shapes = [];
       // Drag a server left/right, or an anycast address up/down to another place.  The shape follows the pointer, a dashed outline shows where it will land, and letting go saves the new
@@ -777,8 +807,8 @@
         sv("title", {}, gwTip(g, st, dual)),
         sv("circle", { cx, cy: CY, r: R }),
         ...(dual
-          ? [label(cx, CY - 14, ip4, "ip"), label(cx, CY + 4, ip6, "ip"), label(cx, CY + 24, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")]
-          : [label(cx, CY - 2, ip4 || ip6, "ip"), label(cx, CY + 18, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")])));
+          ? [label(cx, CY - 22, ip4, "ip"), label(cx, CY - 4, ip6, "ip"), label(cx, CY + 14, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), clockEl(cx, CY + 32)]
+          : [label(cx, CY - 10, ip4 || ip6, "ip"), label(cx, CY + 8, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), clockEl(cx, CY + 26)])));
       anys.forEach((addr, i) => {
         const at = anyAt(i), x = cx + at.x, y = at.y;
         const a = st.anycast.find((z) => z.addr === addr);
@@ -846,7 +876,7 @@
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
           label(mx, SY + (srvName(g, addr) ? 19 : 20), fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "600 13px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t1"),   // the star: the source chrony has selected
           ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),
-          label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? info.ms + " ms" : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
+          label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
       });
       svg.append(...lines, ...shapes);
       // The scrolling box (.cv-wrap) is made once and kept: only the drawing inside it is swapped on each refresh, so its
@@ -1836,6 +1866,7 @@
     { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", min: 1, max: 15 },
     { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", min: 0, max: 60000 },
     { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", min: 0, max: 60000 },
+    { shared: true, k: "serve_offset_ms", l: "Serve only within (ms, 0 = off)", t: "int", min: 0, max: 3600000 },
     { shared: true, k: "max_offset_ms", l: "Falseticker offset (ms, 0 = off)", t: "int", min: 0, max: 3600000 },
     { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", min: 1 },
     { section: "Serving" },

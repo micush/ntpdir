@@ -1,5 +1,30 @@
 # Changelog
 
+## [v19] - 2026-10-13 — Serve only with a good clock; offset on the server boxes
+
+### Added
+- `serve_offset_ms` (Configure ▸ NTP ▸ Health, "Serve only within (ms, 0 = off)", default 50): a node serves, and keeps the gateway address and anycast addresses, only while its clock is within that of what chrony measures against the servers. Beyond it chrony is told to answer nobody and the node leaves like one whose chrony is down; it comes back once within 80% of the limit (no flapping at the edge). In a container this is the host's clock against the servers, which `-x` chrony measures but cannot correct. The gateway's tooltip says why a node is not serving.
+
+### Changed
+- The third line of a server box on the Topology page is the server's clock offset (`+1.25 ms`), no longer the round trip; the round trip stays in the tooltip.
+
+### Verified
+- A test for the limit (edge, hysteresis, off), gofmt, vet, tests, cross-builds.
+
+### Not verified
+- Against a real chronyd with a skewed clock, and the drawing in a browser.
+
+## [v18] - 2026-10-13 — The time in the gateway circle
+
+### Added
+- The gateway circle on the Topology page shows the time of the node being looked at (UTC, to the second); the tooltip gives the date and chrony's stratum, reference and offset. It is asked of the node every 15 s (`GET /api/time`, relayed to the picked node) and counted locally in between. `ntpdir --show-ntp` prints the time too. The circle is a little taller to fit the extra line.
+
+### Verified
+- gofmt, vet, tests, `node --check`, cross-builds.
+
+### Not verified
+- The drawing in a browser (circle size with the extra line, light and dark).
+
 ## [v17] - 2026-10-12 — Topology: a star on the selected source
 
 ### Added

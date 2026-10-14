@@ -178,3 +178,32 @@ func TestNoServerInServiceMutesChronyAndRestoresIt(t *testing.T) {
 		t.Fatalf("a server back restores the clients without a restart:\n%s", read())
 	}
 }
+
+func TestNodeClockReportsNowAndChrony(t *testing.T) {
+	hookChrony(t)
+	c := nodeClock()
+	if d := time.Since(time.UnixMilli(c.NowMS)); d < 0 || d > 5*time.Second {
+		t.Fatalf("now_ms is %v off", d)
+	}
+}
+
+func TestTooFarHasHysteresisAndCanBeOff(t *testing.T) {
+	m := &chronyMgr{warned: map[string]time.Time{}}
+	st := func(off float64) ChronyState { return ChronyState{Running: true, Synced: true, OffsetMS: off} }
+	if m.tooFar(st(500)) {
+		t.Fatal("no limit set: never too far")
+	}
+	m.setOffsetLimit(50)
+	for _, c := range []struct {
+		off  float64
+		want bool
+	}{{10, false}, {50, false}, {51, true}, {-45, true}, {-41, true}, {39, false}, {-39, false}, {60, true}} {
+		if got := m.tooFar(st(c.off)); got != c.want {
+			t.Fatalf("offset %v: tooFar = %v, want %v", c.off, got, c.want)
+		}
+	}
+	m.setOffsetLimit(0)
+	if m.tooFar(st(900)) {
+		t.Fatal("0 turns the check off")
+	}
+}

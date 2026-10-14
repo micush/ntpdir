@@ -47,6 +47,7 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/log", w.authed(w.op("log.view", []string{"level", "q", "since", "n"})))
 	mux.HandleFunc("GET /api/host", w.authed(w.op("host.get", []string{"from", "to"})))
 	mux.HandleFunc("GET /api/serverstats", w.authed(w.op("ntp.serverstats", []string{"addr", "from", "to"})))
+	mux.HandleFunc("GET /api/time", w.authed(w.op("time.now", nil)))
 	mux.HandleFunc("GET /api/hostlookup", w.authed(w.op("host.lookup", []string{"lookup"})))
 	mux.HandleFunc("GET /api/whois", w.authed(w.op("whois.get", []string{"lookup"})))
 	mux.HandleFunc("GET /api/qstats", w.authed(w.op("qstats.get", []string{"from", "to", "outcome", "client", "server", "cmatch", "smatch"})))

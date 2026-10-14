@@ -495,7 +495,11 @@ type NTPConfig struct {
 	MaxOffsetMS       int `json:"max_offset_ms"`
 	// MaxRTTMS is the longest round trip a server may have and still be used (default 500, 0 = off): a server that
 	// is further away than that is too slow and is taken out as a source.
-	MaxRTTMS        int `json:"max_rtt_ms"`
+	MaxRTTMS int `json:"max_rtt_ms"`
+	// ServeOffsetMS is how far this node's clock may be from what chrony measures against the servers (default 50, 0 = off) and
+	// the node still serves: beyond it chrony answers nobody and the node leaves the gateway and its anycast addresses, so
+	// every serving node is within this of the same servers.
+	ServeOffsetMS   int `json:"serve_offset_ms"`
 	ProbeIntervalMS int `json:"probe_interval_ms"`
 	ProbeTimeoutMS  int `json:"probe_timeout_ms"`
 	QueryTimeoutMS  int `json:"query_timeout_ms"`
@@ -583,6 +587,7 @@ func defaultNTP() NTPConfig {
 		MaxRootDistanceMS: 1500,
 		MaxOffsetMS:       128,
 		MaxRTTMS:          500,
+		ServeOffsetMS:     50,
 		ProbeIntervalMS:   16000,
 		ProbeTimeoutMS:    1000,
 		QueryTimeoutMS:    800,
@@ -729,6 +734,9 @@ func (d *NTPConfig) Validate() error {
 	}
 	if d.ListenPort < 1 || d.ListenPort > 65535 {
 		return errors.New("ntp: listen_port must be 1-65535")
+	}
+	if d.ServeOffsetMS < 0 || d.ServeOffsetMS > 3600000 {
+		return errors.New("ntp: serve_offset_ms must be 0-3600000 (0 = off)")
 	}
 	if d.MaxRTTMS < 0 || d.MaxRTTMS > 60000 {
 		return errors.New("ntp: max_rtt_ms must be 0-60000 (0 = off)")

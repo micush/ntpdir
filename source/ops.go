@@ -306,6 +306,9 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	// a name for an address (reverse lookup) or an address for a name, for the Add NTP server form
 	case "host.lookup":
 		return hostLookup(a.Lookup)
+	// this node's clock, for the clock in the gateway circle (and --show-ntp)
+	case "time.now":
+		return nodeClock(), nil
 	// pause the whole node
 	case "node.status":
 		return m.NodePauseStatus()

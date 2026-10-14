@@ -56,7 +56,9 @@ func (s *Supervisor) syncChrony() {
 		_ = chrony.applyClients(s.sharedNTP())
 	}
 	servers, empty := s.chronySources()
-	chrony.setServing(len(servers) > 0, s.sharedNTP())
+	nd := s.sharedNTP()
+	chrony.setOffsetLimit(nd.ServeOffsetMS)
+	chrony.setServing(len(servers) > 0 && !chrony.tooFar(st), nd)
 	if err := chrony.applySources(servers, empty); err != nil {
 		chrony.warnEvery("sources", err.Error())
 	}

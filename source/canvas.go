@@ -239,6 +239,9 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 				cf.Status, cf.Detail = "warn", "this node is not serving the gateway yet (state: "+state+")"
 			case !answering:
 				cf.Status, cf.Detail = "warn", "the gateway is up but NTP is not answering yet"
+				if chronyNow.Running && chronyNow.Synced && chrony.tooFar(chronyNow) {
+					cf.Detail = fmt.Sprintf("this node's clock is %+.1f ms off, more than serve_offset_ms: not serving until it is back within the limit", chronyNow.OffsetMS)
+				}
 			case len(cg.Servers) == 0:
 				cf.Status, cf.Detail = "warn", "running, but no NTP server is configured yet, so clients cannot be answered"
 			case anyDown:

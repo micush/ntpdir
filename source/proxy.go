@@ -33,7 +33,7 @@ type proxyCtxKey struct{}
 // operator logged in to.
 var proxyPrefixes = []string{
 	"/api/gateways", "/api/neighbors", "/api/ntp", "/api/canvas", "/api/assert-agc",
-	"/api/config", "/api/versions", "/api/tls", "/api/cluster", "/api/update", "/api/power", "/api/users", "/api/nodepause", "/api/noderename", "/api/bgp", "/api/log", "/api/qstats", "/api/scan", "/api/nettool", "/api/whois", "/api/host", "/api/serverstats", "/api/hostlookup", "/api/capture", "/api/vmactest", "/api/tshoot/node",
+	"/api/config", "/api/versions", "/api/tls", "/api/cluster", "/api/update", "/api/power", "/api/users", "/api/nodepause", "/api/noderename", "/api/bgp", "/api/log", "/api/qstats", "/api/scan", "/api/nettool", "/api/whois", "/api/host", "/api/serverstats", "/api/hostlookup", "/api/time", "/api/capture", "/api/vmactest", "/api/tshoot/node",
 }
 
 // proxyAllowed reports why method+rawPath may not be relayed, or nil.

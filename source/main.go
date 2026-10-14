@@ -175,6 +175,7 @@ NTP ("ntp" block at the top level of the config):
   max_stratum        a server answering with a higher stratum counts as down (default 15)
   max_root_distance_ms  a server whose root distance is larger counts as down (default 1500)
   max_rtt_ms         a server whose round trip is longer is too slow and counts as down (default 500; 0 = off)
+  serve_offset_ms    this node serves only while its clock is within this of what chrony measures (default 50; 0 = off)
   max_offset_ms      with three or more servers, one whose clock differs from the median by more than this is
                      a falseticker and counts as down (default 128; 0 = off)
   probe_interval_ms  default 16000    probe_timeout_ms  default 1000
@@ -658,6 +659,7 @@ func showNTPTable(sock string) {
 	}
 	decodeData(res, &d)
 	c := d.Chrony
+	fmt.Println("time: " + time.Now().UTC().Format("2006-01-02 15:04:05") + " UTC")
 	switch {
 	case !c.Running:
 		fmt.Println("chrony: not running (" + orDefault(c.Err, "no answer") + "); this node cannot serve NTP; in a container, run the installer again so chrony starts with -x")

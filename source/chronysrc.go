@@ -217,6 +217,8 @@ type chronyMgr struct {
 	pending  bool     // the file was written but chrony has not yet taken it
 	state    ChronyState
 	confBody string                  // the client file as last written, "" before the first look
+	offLimit int                     // how far the clock may be off and still serve, ms (0: no limit)
+	offOver  bool                    // the clock is beyond that now
 	muted    bool                    // no server is in service: chrony is told to answer nobody
 	allowed  bool                    // the allow rules were put into the running chrony at least once
 	keyFile  string                  // where the port and rate limit chrony runs with are remembered ("": not kept)
@@ -553,7 +555,32 @@ func (m *chronyMgr) State() ChronyState {
 }
 
 // chronyServing says whether chrony is up and keeping time (replaceable in tests): it answers clients while it is.
-var chronyServingFn = func() bool { s := chrony.State(); return s.Running && s.Synced }
+var chronyServingFn = func() bool { s := chrony.State(); return s.Running && s.Synced && !chrony.tooFar(s) }
+
+// setOffsetLimit sets how far the clock may be off (ms; 0 = no limit) and still serve.
+func (m *chronyMgr) setOffsetLimit(ms int) {
+	m.mu.Lock()
+	m.offLimit = ms
+	m.mu.Unlock()
+}
+
+// tooFar says whether the clock is further from what chrony measures than the limit.  Once over, it takes a reading
+// within 80% of the limit to be trusted again, so a clock at the edge does not flap.
+func (m *chronyMgr) tooFar(s ChronyState) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.offLimit <= 0 || !s.Running || !s.Synced {
+		m.offOver = false
+		return false
+	}
+	off := math.Abs(s.OffsetMS)
+	if m.offOver {
+		m.offOver = off > 0.8*float64(m.offLimit)
+	} else {
+		m.offOver = off > float64(m.offLimit)
+	}
+	return m.offOver
+}
 
 // ServerStats is chrony's own count of the NTP packets it has handled.
 type ServerStats struct {
