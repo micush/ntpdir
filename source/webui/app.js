@@ -859,8 +859,8 @@
         sv("title", {}, gwTip(g, st, dual)),
         sv("circle", { cx, cy: CY, r: R }),
         ...(dual
-          ? [label(cx, CY - 22, ip4, "ip"), label(cx, CY - 4, ip6, "ip"), label(cx, CY + 14, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), clockEl(cx, CY + 32)]
-          : [label(cx, CY - 10, ip4 || ip6, "ip"), label(cx, CY + 8, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), clockEl(cx, CY + 26)])));
+          ? [clockEl(cx, CY - 22), label(cx, CY - 4, ip4, "ip plain"), label(cx, CY + 14, ip6, "ip plain"), label(cx, CY + 32, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")]
+          : [clockEl(cx, CY - 10), label(cx, CY + 8, ip4 || ip6, "ip plain"), label(cx, CY + 26, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2")])));
       anys.forEach((addr, i) => {
         const at = anyAt(i), x = cx + at.x, y = at.y;
         const a = st.anycast.find((z) => z.addr === addr);
@@ -926,9 +926,9 @@
           onkeydown: (e) => { if (e.key === "Enter") pick("srv", addr)(e); } },
           sv("title", {}, srvTitle(g, addr) + " — " + ss.why + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
-          label(mx, SY + (srvName(g, addr) ? 19 : 20), fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "600 13px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t1"),   // the star: the source chrony has selected
-          ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),
-          label(mx, SY + (srvName(g, addr) ? 51 : 35), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t2")));
+          label(mx, SY + (srvName(g, addr) ? 19 : 20), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t1 strong"),   // the offset first, in bold
+          label(mx, SY + 35, fitPx(shortAddr(addr), SW - 44 - (info && info.chrony === "*" ? 12 : 0), "400 13px system-ui, sans-serif") + (info && info.chrony === "*" ? " *" : ""), "t1 plain"),   // the star: the source chrony has selected
+          ...(srvName(g, addr) ? [label(mx, SY + 51, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : [])));
       });
       svg.append(...lines, ...shapes);
       // The scrolling box (.cv-wrap) is made once and kept: only the drawing inside it is swapped on each refresh, so its

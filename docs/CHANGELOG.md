@@ -1,5 +1,14 @@
 # Changelog
 
+## [v24] - 2026-10-13 — Topology: lines reordered
+
+### Changed
+- Gateway circle: the time is the top line, then the IPv4 and IPv6 addresses (no longer bold), then the name.
+- Server boxes: the offset is the top line, in bold, then the address (no longer bold), then the name. The round trip stays in the tooltip.
+
+### Verified
+- Both shapes rendered with the real stylesheet in Chromium; `node --check`, gofmt, vet, tests, cross-builds.
+
 ## [v23] - 2026-10-13 — Type in the Time zone box
 
 ### Changed
