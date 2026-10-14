@@ -1,5 +1,16 @@
 # Changelog
 
+## [v32] - 2026-10-14 — Fix: the chart tooltip did not show
+
+### Fixed
+- Monitor ▸ Statistics: hovering the chart showed no tooltip since v31. The RPS row was added in the wrong chart's code (the server/gateway statistics chart) and left out of the Statistics chart, so the hover handler hit an undefined name. The row now lives only in the Statistics chart; the other chart's code is as in v30. Checked by diffing `app.js` against v30: the only differences are the Now button and the RPS row.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`, diff of `app.js` against v30.
+
+### Not verified
+- In a browser. The v31 mistake got through because the page was never opened; this fix was found by reading the code and the diff.
+
 ## [v31] - 2026-10-14 — Statistics: a "Now" range, RPS in the chart tooltip
 
 ### Added

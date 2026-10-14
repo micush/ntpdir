@@ -1190,8 +1190,7 @@
       const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 250, height: 20 + 18 * (series.length + 1) });
       const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
       const tipRows = series.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
-      const qpsRow = qpsView ? null : sv("g", { transform: `translate(10 ${36 + 18 * shown.length})` }, sv("rect", { class: "sw qpsw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, ""));   // the rate at this point, beside the counts
-      tip.append(tipBg, tipHead, ...tipRows, ...(qpsRow ? [qpsRow] : []));
+      tip.append(tipBg, tipHead, ...tipRows);
       const hit = sv("rect", { class: "qhit", x: L, y: T, width: pw, height: ph,
         onmousemove: (e) => {
           const r = svg.getBoundingClientRect();
@@ -2780,7 +2779,8 @@
       const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 210, height: 20 + 18 * (shown.length + 1 + (qpsView ? 0 : 1)) });
       const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
       const tipRows = shown.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
-      tip.append(tipBg, tipHead, ...tipRows);
+      const qpsRow = qpsView ? null : sv("g", { transform: `translate(10 ${36 + 18 * shown.length})` }, sv("rect", { class: "sw qpsw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, ""));   // the rate at this point, beside the counts
+      tip.append(tipBg, tipHead, ...tipRows, ...(qpsRow ? [qpsRow] : []));
       const hit = sv("rect", { class: "qhit", x: L, y: T, width: pw, height: ph,
         onmousemove: (e) => {
           const r = svg.getBoundingClientRect();
