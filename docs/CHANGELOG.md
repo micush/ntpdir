@@ -1,5 +1,31 @@
 # Changelog
 
+## [v30] - 2026-10-14 — Stray dot on the statistics chart
+
+### Fixed
+- Monitor ▸ Statistics: a small coloured dot sat in the top-left corner of the chart. It was the hover marker of each line, drawn at (0, 0) and never hidden until the mouse was over the chart. The markers are hidden until hovered, and now hidden again when the mouse leaves (this also applies to the gateway and host charts, whose markers stayed where the mouse left them).
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The chart in a browser.
+
+## [v29] - 2026-10-13 — README and screenshots brought up to date
+
+### Changed
+- README: the container install (`chronyd -x`), the FRR reload script and where it is looked for, "Serving only with the right time" (`serve_offset_ms`), the time and the Time zone picker, what the server boxes show (offset, name, address, `*`) and the blue links, the gateway clock offset and root delay charts, the Outcome donut, and the refusal to join at the same cluster address. The quick start has the same notes in short.
+- Every screenshot under `snaps/` was taken again from the current build.
+
+### Verified
+- The screenshots come from a two-node demo cluster (network namespaces, stub NTP servers, generated client traffic) running this build.
+
+### Verified (tests)
+- gofmt, vet, `go test -count=1 ./...` and the five cross-builds pass. `TestAddVIPDoesNotStealOutboundRoute` fails while the demo network (198.51.100.0/24) exists on the same machine, so the full suite was run after it was removed.
+
+### Not verified
+- In that demo a small script stands in for `chronyc`, because chrony in the sandbox does not open its command socket; the numbers on the NTP, Statistics and clock pages are therefore simulated, not real chrony output.
+
 ## [v28] - 2026-10-13 — FRR reload script found on RPM-style paths
 
 ### Fixed

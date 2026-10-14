@@ -7,6 +7,7 @@ What you get:
 - **One shared address, answered by every node.** Clients are spread across the nodes, and the address survives the loss of any of them.
 - **chrony answers the clients on each node, from the servers you define.** AnyTime tests your upstream servers with real NTP requests and gives chrony only the ones that pass; a server that fails, is a falseticker, is too far out of sync or is too slow is taken out of chrony's sources on every node within seconds, and put back when it recovers.
 - **chrony is also the node's own clock.** The installer sets chrony 4.0 or newer up as a prerequisite and switches off the servers it came with, so the servers you define are its only sources.
+- **A node with the wrong time does not serve.** A node whose clock is more than `serve_offset_ms` (default 50 ms) off what chrony measures against the servers answers nobody and leaves the gateway and its anycast addresses until it is back in step; a gateway with no server in service is muted the same way.
 - **Client access and rate limiting** (chrony's `allow` and `ratelimit`), set from one page.
 - **Anycast addresses over BGP.** Gateways can announce extra addresses to your routers through FRR, and withdraw them when no upstream server is healthy.
 - **A web GUI and a command line** that manage the whole cluster. Draw gateways and NTP servers on a topology page, watch live statistics, and keep shared settings, config versions, certificates and software updates in step across all your nodes.
@@ -74,9 +75,11 @@ The installer builds AnyTime from the source tree, installing only the prerequis
 
 - **chrony** (enabled and started; see below), **gcc and the PAM headers**, **iproute2**, **FRR** (for the Anycast pages) **nmap**, **ping** and **mtr** (for Scan, Ping and Traceroute on the Statistics page).
 - **A Go toolchain, version 1.24 or newer.** It is taken from the distribution's own package (`golang-1.2x-go`, `golang-go`, `golang` or `go`) when that is recent enough. Otherwise it is downloaded from go.dev with a checksum check. A downloaded toolchain is kept in `/usr/local/share/ntpdir/go`, because the daemon rebuilds itself with it when you apply an update; `--no-keep-go` removes it.
-- FRR comes from the distribution's `frr` package (EPEL on the RHEL family). If that fails the installer only warns, and AnyTime leaves FRR untouched until a local AS is set on the Anycast page. A failed nmap, ping or mtr install is a warning too; only Scan, Ping and Traceroute need them.
+- FRR comes from the distribution's `frr` package (EPEL on the RHEL family). Its reload script, `frr-reload.py`, is in the separate `frr-pythontools` package on Debian and Ubuntu (the installer adds it) and part of `frr` on the RPM distributions; it is looked for in `/usr/lib/frr` and `/usr/libexec/frr`, and without it every BGP change restarts FRR and drops the sessions briefly. If installing FRR fails the installer only warns, and AnyTime leaves FRR untouched until a local AS is set on the Anycast page. A failed nmap, ping or mtr install is a warning too; only Scan, Ping and Traceroute need them.
 
 **chrony.** chrony 4.0 or newer (it needs `sourcedir`) answers NTP clients and keeps the node's clock. The installer adds a marked block to its configuration (`/etc/chrony/chrony.conf` on Debian and Ubuntu, `/etc/chrony.conf` elsewhere) with `sourcedir /etc/chrony/ntpdir.sources.d` and `confdir /etc/chrony/ntpdir.conf.d`, creates both directories, and switches off the servers chrony came with: its `pool`, `server` and `peer` lines are commented out with a `#ntpdir-off#` marker and the distribution's `sources.d/*.sources` files are renamed to `*.ntpdir-off`. Until you define NTP servers in AnyTime, the node therefore has no time source, and the installer says so. chrony is enabled and restarted when the block changes. The uninstaller removes the block and puts the servers back (it leaves chrony installed; `--purge` also removes the two directories).
+
+**In a container.** An LXC container (Proxmox, for example) cannot set the clock, and Ubuntu's chrony unit then refuses to start ("start condition unmet"). When the installer finds it cannot set the clock, it adds a systemd drop-in (`ntpdir.conf` in the chrony unit's `.d` directory) that starts chrony as `chronyd -x` and clears those start conditions. chrony then answers the clients with the clock of the container's host, and still measures how far that clock is from your servers, so [Serve only within](#serving-only-with-the-right-time) shows when the host is wrong. It does not take its time from the servers you define. Use a virtual machine, or a physical host, when the node must set its own clock. The uninstaller removes the drop-in.
 
 It then installs `/usr/local/sbin/ntpdir`, the state directory `/var/lib/ntpdir` (mode 0700), the `ntpdir` group, `/etc/pam.d/ntpdir`, a NetworkManager drop-in that leaves the `ntpdir*` macvlan interfaces alone, and the `ntpdir` systemd unit.
 
@@ -114,6 +117,12 @@ In the GUI, the settings are under Configure ▸ NTP, on three tabs: **Servers**
 
 **When no server passes.** chrony keeps the sources it has, and the fallback servers become sources only while no normal server passes. With no fallback either (every server down or paused) the gateway is red and the node answers no clients: ntpdir tells chrony to allow nobody, live and in its file, and the allowed clients come back as soon as one server passes. If every server is paused, the sources file is emptied.
 
+### Serving only with the right time
+
+A node answers clients only while its own clock agrees with the servers. **`serve_offset_ms`** (Configure ▸ NTP ▸ Health ▸ *Serve only within*, default 50, 0 turns it off) is how far the node's clock may be from what chrony measures against the servers. Beyond it the node behaves like a node whose chrony is down: chrony is told to answer nobody, the node leaves the gateway and its anycast addresses, and the other nodes carry on. It comes back when the offset is within 80% of the limit, so a clock on the edge does not flap. Every node serving a gateway therefore has the same time, within the limit.
+
+A gateway that is red (no server in service, no fallback) is muted the same way. The offset is shown on the topology (the circle's tooltip, and the third line of a server box shows each server's offset). In a container chrony cannot set the clock, so the node serves the host's clock; when the host is off by more than the limit the node leaves the gateway, which is what you want.
+
 ### Choosing the upstream servers
 
 - **Probing.** Every `probe_interval_ms` (default 16000) AnyTime sends each server a real NTP client request (timeout `probe_timeout_ms`, default 1000). The offset and delay come from the four timestamps (RFC 5905).
@@ -122,7 +131,7 @@ In the GUI, the settings are under Configure ▸ NTP, on three tabs: **Servers**
 
 chrony then does its own selection among the servers it is given. The old forwarding relay's ranking, spreading (`spread`, `spread_band`, `max_attempts`, `latency_alpha`, `query_timeout_ms`) and its per-client exemptions and limits (`client_exempt`, `client_limits`) no longer exist; the keys are still accepted in a file but have no effect.
 
-**Where the health settings live.** Highest stratum, largest root distance, falseticker offset and failures before down are the Settings values, shared by the cluster. A gateway can have its own set (Topology ▸ right-click the gateway ▸ Edit ▸ Health checks ▸ own values; CLI `--canvas-set gateway … --max-stratum …`).
+**Where the health settings live.** Highest stratum, largest root distance, falseticker offset, failures before down and the serve-only-within limit are the Settings values, shared by the cluster. A gateway can have its own set (Topology ▸ right-click the gateway ▸ Edit ▸ Health checks ▸ own values; CLI `--canvas-set gateway … --max-stratum …`).
 
 ### Fallback servers
 
@@ -178,9 +187,13 @@ The colours come from the running daemon.
 
 A gateway's dot in the sidebar is the state of the gateway for the **cluster as a whole**, built from its nodes and the same whichever node the Node menu has selected. It is green while any node serves it, amber while it is only served degraded, dashed grey when every node has it paused, and red when no node serves it. A node on another subnet that does not run the gateway does not count against it.
 
-The circle shows just the address (no prefix length) and sizes itself to fit even a full IPv6 address. A dual-stack gateway shows both, with a small green, yellow or red chip for each family, and the gateway's own colour is the worst of the two (an IPv6 engine that is not serving is yellow even if IPv4 is fine). Hover the circle to see which cluster nodes are serving the gateway right now: which is this node, which is the controller, and each node's slot.
+The circle shows the **time**, the gateway's name and its address (no prefix length), and sizes itself to fit even a full IPv6 address. A dual-stack gateway shows both addresses, with a small green, yellow or red chip for each family, and the gateway's own colour is the worst of the two (an IPv6 engine that is not serving is yellow even if IPv4 is fine). Hover the circle to see which cluster nodes are serving the gateway right now: which is this node, which is the controller, and each node's slot.
 
 A server is probed with real NTP requests (see [How NTP is served](#how-ntp-is-served)); a server that is down, a falseticker, too slow, or above the stratum or root-distance limit is red.
+
+**The time and the time zone.** The time in the circle is the time of the node you are looking at, counted by the second and checked against the node every 15 seconds (hover it for the date, chrony's stratum, reference and the clock's offset). Every node serving the gateway has the same time, so it belongs to the gateway. The **Time zone** picker at the top left, on the line of the node picker, chooses the zone it is shown in: UTC, or any zone your browser knows. Click it for the list or type part of a name (`phoe`, `kolkata`) to narrow it. The choice is kept in a cookie in your browser, so each person sees the zone they last picked.
+
+**What a server box shows.** From the top: the server's **clock offset** in bold (`+2.81 ms`; `down` or `paused` when it is not answering), its name when it has one, and its address. A `*` after the offset marks the source chrony has selected. The line from the gateway to a server is **blue** when chrony takes the time from it: the selected source (`*`) and the sources it combines with it (`+`). Chrony makes that choice itself, from the servers' own measurements, so it follows the offsets and the delays, not just who answered fastest; a server it leaves out, or that is not in service, has a grey line.
 
 Every tooltip ends with the item's **uptime**: how long the gateway, anycast address, server has been online since it last came back, or how long it has been down, and how many failures it has had ("Online for 1m 1s - 0 failures"). Green and yellow count as online; paused and grey items show nothing. A sampler in the daemon notes the changes every 2 seconds (no browser needed), in memory only, so the counting, failures included, restarts with ntpdir. `ntpdir --canvas` prints the same in brackets.
 
@@ -247,7 +260,7 @@ Right-click a square or the circle ▸ *Statistics* for graphs over the last hou
 ![Statistics for a gateway: answer time, errors, availability and requests per second](snaps/gateway-stats.png)
 
 - A **server** (square) shows **round trip** (the average and worst of its probes), **clock offset** and **failed probes** (the share of the server's own probes that failed, which is what decides whether it is up).
-- The **gateway** (circle) shows its **availability** (the share of the 2-second checks, the same ones that drive the circle's uptime, that found the gateway working; paused or not-yet-started time is not counted). Answer time and request rates per gateway are not recorded: chrony answers the clients and does not report them per gateway. See Statistics for chrony's totals.
+- The **gateway** (circle) shows its **availability** (the share of the 2-second checks, the same ones that drive the circle's uptime, that found the gateway working; paused or not-yet-started time is not counted), and the node's **clock offset** and **root delay** against the servers, which is what decides whether it serves. Answer time and request rates per gateway are not recorded: chrony answers the clients and does not report them per gateway. See Statistics for chrony's totals.
 
 A server's graphs are the picked node's own view. A gateway's graphs add up every reachable node of the cluster, since which node answers a client is up to the clients; the dialog says "All 3 nodes counted together", or how many were counted and how many did not answer (a single node shows just this node). A gap means nothing happened in that time: paused, the node was down, or, for a server, nothing was asked of it. The history is kept per node for 7 days, one slot per minute, and saved with the other statistics (`stats.json.gz`, every 5 minutes and when AnyTime stops), so a restart keeps it; the time AnyTime was down is a gap. A server address listed by two gateways is one series, and a gateway's series covers all its addresses (IPv4, IPv6, anycast) on this node.
 
@@ -580,7 +593,7 @@ One node is the **primary** and the rest are **replicas**. A new node is the pri
 1. On any member, run `ntpdir --cluster-token`. It prints a join code (single use, valid for one hour).
 2. On the new node, run `ntpdir --cluster-join 'ntpdir-join-v1:…'`. In the GUI, use Cluster tab ▸ Create join code / Join.
 
-Joining replaces the new node's *shared* settings with the cluster's, after saving a snapshot of what it had.
+Joining replaces the new node's *shared* settings with the cluster's, after saving a snapshot of what it had. A node cannot join a cluster while it has the same cluster address (`cluster.self`) as a member, for instance a cloned machine: both sides refuse, and the message says to give the new node its own address first.
 
 ### What is shared and what is per node
 
@@ -627,8 +640,8 @@ Monitor ▸ Statistics (or `ntpdir --stats`) shows what chrony has done (read fr
 - the total number of requests and how they ended (Answered, Refused; Failed and Kiss-o'-death are always 0 because chrony does not report them), and the **RPS** (requests per second in the last finished interval, with the peak of the range under it; click it to draw the rate in the chart),
 - the number of different clients,
 - a line chart over time (hover for the values, click a name in the legend to hide a line),
-- donuts for the NTP version (v1 to v4) and the IP family, and
-- the top clients (with the reverse-DNS name once it is known). The top-servers list shows one entry, `chrony`. The NTP version donut shows "Other" because chrony does not report versions.
+- donuts for the outcome (answered, refused, kiss-o'-death, failed) and the IP family, and
+- the top clients (with the reverse-DNS name once it is known). The top-servers list shows one entry, `chrony`.
 
 ![Monitor ▸ Statistics: request rates, outcomes, IP families and top clients](snaps/statistics.png)
 

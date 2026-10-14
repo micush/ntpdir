@@ -55,6 +55,8 @@ Add a second server the same way for redundancy. Hover any shape for its status 
 
 Colours: **green** working, **yellow** degraded (the gateway runs but something is down), **red** down, **grey** not known yet. A server is taken out of service when it stops answering, reports a stratum or root distance above the limits, or its clock disagrees with the others or answers too slowly (change the limits on Configure ▸ NTP ▸ Health). It is then removed from chrony's sources on every node, and added again when it recovers.
 
+The circle shows the time (pick the zone with the Time zone box at the top left), and each server box shows its clock offset in bold; a blue line is a server chrony takes the time from, and the `*` marks the selected one. A node whose clock is more than 50 ms off the servers stops serving until it is back in step (Configure ▸ NTP ▸ Health ▸ Serve only within).
+
 ## 4. Try it
 
 From another machine on the network, ask the shared address for the time:
@@ -67,6 +69,8 @@ ntpdate -q 192.168.1.123
 Then open **Monitor ▸ NTP** to see chrony's state and each server's health, round trip, offset, stratum and whether chrony uses it. **Monitor ▸ Statistics** shows requests over time and top clients.
 
 Point your clients (or your DHCP server) at the shared address when you are happy with it.
+
+Running in an LXC container? chrony cannot set the clock there, so the installer starts it with `-x` and the node serves the host's clock. Use a virtual machine if the node must set its own.
 
 ## 5. Add more nodes (optional, for redundancy)
 
