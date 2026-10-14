@@ -1,5 +1,15 @@
 # Changelog
 
+## [v28] - 2026-10-13 — FRR reload script found on RPM-style paths
+
+### Fixed
+- FRR's `frr-reload.py` is also looked for in `/usr/libexec/frr` (where Ubuntu 26.04 and the RPM distributions put it); the "cannot reload" warning no longer appears when it is there, and the installer no longer tries `frr-pythontools` on RPM distributions.
+
+## [v27] - 2026-10-13 — Name above the addresses
+
+### Changed
+- Topology: in the gateway circle and the server boxes the name now sits above the IP addresses.
+
 ## [v26] - 2026-10-13 — The star on the offset
 
 ### Changed

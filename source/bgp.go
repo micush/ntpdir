@@ -480,10 +480,15 @@ func (b *BGPManager) applyNow(dc *DaemonConfig) *BGPApplied {
 }
 
 // frrCanReload says whether "systemctl reload frr" can work: FRR's reload script
-// lives in the separate frr-pythontools package on Debian and the RHEL family.
+// lives in the separate frr-pythontools package on Debian (and, depending on the
+// release, in /usr/lib/frr or /usr/libexec/frr); the RHEL family ships it in frr itself.
 var frrCanReload = func() bool {
-	_, err := os.Stat("/usr/lib/frr/frr-reload.py")
-	return err == nil
+	for _, p := range []string{"/usr/lib/frr/frr-reload.py", "/usr/libexec/frr/frr-reload.py", "/usr/sbin/frr-reload.py", "/usr/bin/frr-reload.py"} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // frrRestart restarts FRR.  A failed unit is reset first: systemd refuses to start
@@ -691,7 +696,7 @@ func (m *Mgmt) BGPStatus() (*BGPStatus, error) {
 	}
 	if st.Config.Active() {
 		if st.Installed && !frrCanReload() {
-			st.Notes = append(st.Notes, "FRR cannot reload its config here (the frr-pythontools package is missing), so every BGP change restarts FRR and drops the sessions briefly. Install frr-pythontools.")
+			st.Notes = append(st.Notes, "FRR cannot reload its config here (frr-reload.py is missing; on Debian and Ubuntu install frr-pythontools), so every BGP change restarts FRR and drops the sessions briefly.")
 		}
 		if len(st.Announce) == 0 {
 			st.Notes = append(st.Notes, "Nothing is announced yet: add an anycast address to a gateway on the Topology page.")

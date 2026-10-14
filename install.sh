@@ -433,9 +433,9 @@ install_frr() {
     [ "$DRY" = 1 ] || have vtysh || warn "FRR installed but 'vtysh' is not on the PATH"
   fi
   # FRR's reload (how ntpdir applies a changed BGP setting without dropping the sessions)
-  # needs frr-reload.py, which Debian and the RHEL family ship in a separate package;
-  # on Arch it is part of frr.  Without it ntpdir has to restart FRR for every change.
-  if [ "$FAMILY" != arch ] && { assumed_missing frr-reload || [ ! -e /usr/lib/frr/frr-reload.py ]; }; then
+  # needs frr-reload.py, which Debian ships in a separate package;
+  # on the RPM distributions and Arch it is part of frr.  Without it ntpdir has to restart FRR for every change.
+  if [ "$FAMILY" = debian ] && { assumed_missing frr-reload || { [ ! -e /usr/lib/frr/frr-reload.py ] && [ ! -e /usr/libexec/frr/frr-reload.py ]; }; }; then
     info "installing frr-pythontools (lets FRR reload a changed config without dropping BGP sessions)"
     (pkg_install frr-pythontools) || warn "frr-pythontools could not be installed; AnyTime will restart FRR (briefly dropping BGP sessions) when the BGP setting changes."
   fi
