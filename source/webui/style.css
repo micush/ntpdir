@@ -569,3 +569,8 @@ table.qtop.plain tbody tr { height: 2.6667rem; }   /* twelve of these are as tal
 .fam-tag { margin-left: .4rem; font-size: .7rem; font-family: inherit; color: var(--muted); border: 1px solid var(--border); border-radius: .6rem; padding: 0 .35rem; }
 .fam-tag.use { color: var(--ok); border-color: var(--ok); }
 .fam-tag.bad { color: var(--bad); border-color: var(--bad); }
+.pwwrap { display: flex; align-items: center; gap: .25rem; }
+.pwwrap input { flex: 1; min-width: 0; }
+.pweye { flex: none; background: none; border: 1px solid transparent; border-radius: .4rem; cursor: pointer; padding: .1rem .3rem; line-height: 1; color: var(--muted); opacity: .7; }
+.pweye:hover, .pweye:focus-visible { opacity: 1; border-color: var(--border); }
+.pweye.on { opacity: 1; color: var(--accent); }
