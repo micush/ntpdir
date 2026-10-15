@@ -164,7 +164,7 @@ The whole `ntp` block hot-reloads when you edit the file or use the GUI; a gatew
 
 ## Topology
 
-The first page of the GUI is a drawing of your configuration. Each **gateway is an item under Topology** in the sidebar (right-click it ▸ **Rename** or **Delete**), with *＋ New gateway…* at the end. A gateway you create (the GUI form or `--canvas-add gateway`) starts with four NTP servers, `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`; they are ordinary servers, so delete the ones you do not want. A gateway already in a config file, and the shared server list, are not changed.
+The first page of the GUI is a drawing of your configuration. Each **gateway is an item under Topology** in the sidebar (right-click it ▸ **Rename** or **Delete**), with *＋ New gateway* at the end. A gateway you create (the GUI form or `--canvas-add gateway`) starts with four NTP servers, `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`; they are ordinary servers, so delete the ones you do not want. A gateway already in a config file, and the shared server list, are not changed.
 
 The drawing has two kinds of shape, plus the anycast pills:
 

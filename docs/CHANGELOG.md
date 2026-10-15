@@ -1,5 +1,17 @@
 # Changelog
 
+## [v36] - 2026-10-15 — "New gateway" without the dots
+
+### Changed
+- The sidebar's **＋ New gateway**, the right-click menu entry on the empty drawing, the text on the empty Topology page, the help, README and QUICKSTART no longer end in "…". The other right-click entries are unchanged.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+
+### Not verified
+- The page in a browser (a text change only).
+- Flaky tests: in two full `-race` runs, `TestBGPOperateAPIAndStatus` (v35's run) and `TestLogServerFlips` (this one) each failed once and passed on their own and on a rerun. Neither is touched by these changes; the causes were not found.
+
 ## [v35] - 2026-10-15 — Help: a Find box; the circle's tooltip counts nodes, not nodes × families
 
 ### Added

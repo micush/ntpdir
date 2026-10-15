@@ -40,7 +40,7 @@ Browse to **https://&lt;this machine's address&gt;:12380** and sign in with that
 
 A new install has no gateways. Topology is the first page.
 
-1. **Right-click** the empty drawing and choose **New gateway…**
+1. **Right-click** the empty drawing and choose **New gateway**
 2. Fill in the form:
    - **Group number**: leave the suggestion (100: group numbers start at 100).
    - **Name (optional)**: a label such as "Office NTP".
