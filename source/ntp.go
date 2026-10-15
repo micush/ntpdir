@@ -26,6 +26,127 @@ func dialUDP(ctx context.Context, addr string) (*net.UDPConn, error) {
 	return c.(*net.UDPConn), nil
 }
 
+// ── Probing over both address families ───────────────────────────────────────
+
+// A server named by host is probed over IPv4 and over IPv6 (when it has an A and an AAAA record), each on a socket of its own.
+// The server is up when either family answers well; the measurements that count (round trip, offset, stratum) are IPv4's when
+// IPv4 answers well, IPv6's only when it does not — IPv4 is preferred.  A server given as an address has the one family.
+const (
+	fam4 = 0
+	fam6 = 1
+)
+
+var famName = [2]string{"IPv4", "IPv6"}
+
+// lookupServerIPs resolves host for one family ("ip4" or "ip6"); replaced in tests.
+var lookupServerIPs = func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, network, host)
+}
+
+// famResult is what one family's probe of a server came to.
+type famResult struct {
+	Tried bool   // the server has an address of this family
+	Addr  string // the address (host:port) that was probed
+	s     ntpSample
+	err   error // the probe failed or the answer was not good enough (see NTPConfig.judge)
+}
+
+// probeFamilies probes addr (host:port) over each family it has an address for.  The families are probed at the same time.
+func (p *Pool) probeFamilies(ctx context.Context, addr string) (res [2]famResult) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		res[fam4] = famResult{Tried: true, Addr: addr, err: err}
+		return res
+	}
+	timeout := p.cfg.probeTimeout()
+	var target [2]string
+	var lookupErr [2]error
+	if ip, perr := netip.ParseAddr(host); perr == nil {
+		ip = ip.Unmap()
+		f := fam6
+		if ip.Is4() {
+			f = fam4
+		}
+		target[f] = addr
+	} else {
+		lctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		var wg sync.WaitGroup
+		for f, network := range [2]string{"ip4", "ip6"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ips, err := lookupServerIPs(lctx, network, host)
+				if err != nil {
+					lookupErr[f] = err
+				}
+				if len(ips) > 0 {
+					target[f] = net.JoinHostPort(ips[0].Unmap().String(), port)
+				}
+			}()
+		}
+		wg.Wait()
+		if target[fam4] == "" && target[fam6] == "" {
+			err := lookupErr[fam4]
+			if err == nil {
+				err = lookupErr[fam6]
+			}
+			if err == nil {
+				err = errors.New("no address")
+			}
+			res[fam4] = famResult{Tried: true, Addr: addr, err: fmt.Errorf("cannot resolve %s: %v", host, err)}
+			return res
+		}
+	}
+	var wg sync.WaitGroup
+	for f := range target {
+		if target[f] == "" {
+			continue
+		}
+		res[f].Tried, res[f].Addr = true, target[f]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			smp, err := ntpProbe(ctx, target[f], timeout)
+			if err == nil {
+				err = p.cfg.judge(smp)
+			}
+			res[f].s, res[f].err = smp, err
+		}()
+	}
+	wg.Wait()
+	return res
+}
+
+// foldFamilies is the one result a server has for the round: the first family (IPv4, then IPv6) that answered well, else
+// the failure, which names both families when both were tried.  via is the family the result comes from.
+func foldFamilies(res [2]famResult) (smp ntpSample, err error, via int) {
+	for f := range res {
+		if res[f].Tried && res[f].err == nil {
+			return res[f].s, nil, f
+		}
+	}
+	var msgs []string
+	via = fam4
+	first := true
+	for f := range res {
+		if !res[f].Tried {
+			continue
+		}
+		if first {
+			smp, via, first = res[f].s, f, false
+		}
+		msgs = append(msgs, res[f].err.Error())
+	}
+	switch len(msgs) {
+	case 0:
+		return smp, errors.New("no address to probe"), via
+	case 1:
+		return smp, errors.New(msgs[0]), via
+	}
+	return smp, fmt.Errorf("IPv4: %s; IPv6: %s", msgs[0], msgs[1]), via
+}
+
 // ntpSample is what one probe of a server found out.
 type ntpSample struct {
 	RTT       time.Duration // round trip as this side measured it
@@ -155,12 +276,23 @@ type Server struct {
 	haveInfo    bool
 	falseticker bool        // the last round found its time far from that of the other servers
 	round       *probeRound // this round's result, until the pool has judged all servers together
+	fam         [2]famState // what each address family found at the last probe
+	via         int         // the family the server's numbers come from (IPv4 whenever it answers well)
 }
 
 // probeRound is one server's result in the round under way.
 type probeRound struct {
 	s   ntpSample
 	err error
+}
+
+// famState is what a server's probes over one address family have found, for the server list.
+type famState struct {
+	tried bool
+	addr  string
+	ok    bool
+	ewma  float64 // ms
+	err   string
 }
 
 // ServerStat is the exported snapshot of a Server.
@@ -182,6 +314,18 @@ type ServerStat struct {
 	// Falseticker: its time differs from that of the other servers by more than max_offset_ms.
 	Chrony      string `json:"chrony,omitempty"` // chrony's mark for this server when it is one of its sources (see ChronySrc)
 	Falseticker bool   `json:"falseticker,omitempty"`
+	// Which address families the server was probed over; Via is the one its numbers come from (IPv4 when it answers well).
+	Via      string    `json:"via,omitempty"`
+	Families []FamStat `json:"families,omitempty"`
+}
+
+// FamStat is one address family's part of a server's probes.
+type FamStat struct {
+	Family string  `json:"family"` // IPv4 or IPv6
+	Addr   string  `json:"addr"`   // the address that was probed
+	OK     bool    `json:"ok"`
+	EWMAMS float64 `json:"ewma_ms,omitempty"`
+	Error  string  `json:"error,omitempty"`
 }
 
 // TimeStat is what a server's last answer said about its clock.
@@ -343,14 +487,30 @@ func (p *Pool) nNormal() int {
 
 // probeServer asks s for the time once and keeps the answer for judgeRound.
 func (p *Pool) probeServer(ctx context.Context, s *Server) {
-	smp, err := ntpProbe(ctx, s.Addr, p.cfg.probeTimeout())
+	res := p.probeFamilies(ctx, s.Addr)
 	if ctx.Err() != nil {
 		return
 	}
-	if err == nil {
-		err = p.cfg.judge(smp)
-	}
+	smp, err, via := foldFamilies(res)
 	s.mu.Lock()
+	for f := range res {
+		st := &s.fam[f]
+		st.tried, st.addr, st.ok, st.err = res[f].Tried, res[f].Addr, res[f].Tried && res[f].err == nil, ""
+		switch {
+		case !res[f].Tried:
+			st.ewma = 0
+		case res[f].err != nil:
+			st.err = res[f].err.Error()
+		default:
+			m := ms(res[f].s.RTT)
+			if st.ewma == 0 {
+				st.ewma = m
+			} else {
+				st.ewma = p.cfg.LatencyAlpha*m + (1-p.cfg.LatencyAlpha)*st.ewma
+			}
+		}
+	}
+	s.via = via
 	s.round = &probeRound{s: smp, err: err}
 	if smp.RTT > 0 || smp.Stratum > 0 || smp.KoD != "" {
 		s.info, s.haveInfo = smp, true
@@ -502,6 +662,14 @@ func (p *Pool) Snapshot() []ServerStat {
 				OffsetMS: round2(ms(i.Offset)), DelayMS: round2(ms(i.Delay)),
 				RootDelay: round2(ms(i.RootDelay)), RootDisp: round2(ms(i.RootDisp)), RootDist: round2(ms(i.RootDist)),
 				KissOfDeth: i.KoD,
+			}
+		}
+		if !s.lastProbe.IsZero() {
+			st.Via = famName[s.via]
+		}
+		for f, fs := range s.fam {
+			if fs.tried {
+				st.Families = append(st.Families, FamStat{Family: famName[f], Addr: fs.addr, OK: fs.ok, EWMAMS: round2(fs.ewma), Error: fs.err})
 			}
 		}
 		if !s.lastProbe.IsZero() {

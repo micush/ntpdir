@@ -1,5 +1,31 @@
 # Changelog
 
+## [v43] - 2026-10-15 — Servers are probed over IPv4 and IPv6; IPv4 preferred
+
+### Changed
+- A server named by host name is probed over IPv4 (its A record) and over IPv6 (its AAAA record), each on its own socket, at the same time. Before, the system picked one address and only that family was ever tested.
+- The server is up when either family answers well. IPv4 is preferred: the round trip, offset, stratum and root distance that are shown and used (ranking, falseticker check) are IPv4's whenever IPv4 passes, and IPv6's only when it does not. A dead IPv6 path no longer shows as an error on a server that IPv4 reaches; both failing gives `IPv4: …; IPv6: …`.
+- The server list marks `v4` / `v6` next to the address of a host-named server (green: the family the numbers come from; red: it failed, hover for the reason). `/api/ntp` and the status data carry `via` and `families` for each server. A server given as an address is probed over its own family only, as before.
+
+### Verified
+- Go tests (with `-race`), including: both families answering with IPv4 chosen although slower; IPv6 dead while the server stays up; IPv4 dead and IPv6 carrying the server; neither answering; a name that does not resolve. In this sandbox (no IPv6 in the kernel) the tests stand in for an AAAA record with a second loopback address, since the family is the one the name was looked up as.
+
+### Not verified
+- Not run over a real IPv6 network, and the literal-IPv6-address server test is skipped where the machine has no IPv6.
+- The `v4` / `v6` marks were not looked at in a browser.
+
+## [v42] - 2026-10-15 — Top lists hold 500 names
+
+### Changed
+- Top Clients and Top Servers return the top 500 names (was 100), plus the “(others)” row, ten or twelve to a page. Also applies to the cluster-wide totals.
+- How many distinct names each time slot remembers is unchanged (it bounds memory), so a list can hold fewer than 500 when few names were seen.
+
+### Verified
+- Go test suite.
+
+### Not verified
+- Not run with real traffic; the larger reply is a few tens of KB more JSON per refresh.
+
 ## [v41] - 2026-10-15 — Top cards keep one size
 
 ### Changed

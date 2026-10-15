@@ -77,9 +77,19 @@ func (f *fakeNTP) answer(q []byte) []byte {
 
 func newFakeNTP(t *testing.T) *fakeNTP {
 	t.Helper()
-	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	f, err := newFakeNTPOn(t, "udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
+	}
+	return f
+}
+
+// newFakeNTPOn is a fake server on the given network and address (an error when the machine cannot listen there).
+func newFakeNTPOn(t *testing.T, network, laddr string) (*fakeNTP, error) {
+	t.Helper()
+	pc, err := net.ListenPacket(network, laddr)
+	if err != nil {
+		return nil, err
 	}
 	f := &fakeNTP{addr: pc.LocalAddr().String(), pc: pc}
 	f.stratum.Store(2)
@@ -99,7 +109,7 @@ func newFakeNTP(t *testing.T) *fakeNTP {
 		}
 	}()
 	t.Cleanup(func() { pc.Close() })
-	return f
+	return f, nil
 }
 
 // testNTPCfg is a pool configuration with short timeouts for the given servers.

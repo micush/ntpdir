@@ -1940,7 +1940,10 @@
               h("thead", {}, h("tr", {}, ["Server name", "Server IP", "State", "In chrony", "Stratum", "Offset (ms)", "Root dist. (ms)", "Round trip (ms)", "Last (ms)", "OK", "Fail", "Last error"].map((t, i) => h("th", { class: i >= 4 && i <= 10 ? "num" : "" }, t)))),
               h("tbody", {}, p.servers.map((s) => h("tr", {},
                 h("td", { class: "sname", title: s.name || null }, s.name || "–"),   // a long name is cut short; the whole is the tooltip
-                h("td", { class: "mono" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null),
+                h("td", { class: "mono" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null,
+                  // a server named by host is probed over IPv4 and over IPv6; the one whose numbers count is marked
+                  (s.families || []).length > 1 || s.via === "IPv6" ? (s.families || []).map((f) => h("span", { class: "fam-tag " + (!f.ok ? "bad" : f.family === s.via ? "use" : ""),
+                    title: f.family + " " + f.addr + ": " + (f.ok ? (f.ewma_ms ? fmtMs(f.ewma_ms) + " ms" : "answers") : f.error || "no answer") + (f.ok && f.family === s.via ? " (the numbers shown are from this family)" : "") }, f.family === "IPv4" ? "v4" : "v6")) : null),
                 h("td", {}, s.falseticker ? pill("falseticker", "bad") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad")),
                 h("td", {}, s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted" }, "no")),
                 h("td", { class: "num", title: s.time ? "Reference: " + s.time.refid : null }, s.time ? s.time.stratum : "–"),

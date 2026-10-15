@@ -566,3 +566,6 @@ table.qtop td .small { margin-top: 0; line-height: 1.2; }
 .card.qcard > .body .empty { padding-top: 2rem; }
 .card > footer.qpager { margin-top: auto; }
 table.qtop.plain tbody tr { height: 2.6667rem; }   /* twelve of these are as tall as ten rows with a host name under them */
+.fam-tag { margin-left: .4rem; font-size: .7rem; font-family: inherit; color: var(--muted); border: 1px solid var(--border); border-radius: .6rem; padding: 0 .35rem; }
+.fam-tag.use { color: var(--ok); border-color: var(--ok); }
+.fam-tag.bad { color: var(--bad); border-color: var(--bad); }

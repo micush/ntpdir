@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -371,3 +374,129 @@ func TestConfigParsing(t *testing.T) {
 }
 
 var _ = binary.BigEndian
+
+// ── both address families ────────────────────────────────────────────────────
+
+// dualHost makes the name "ntp.test" resolve to the given IPv4 and IPv6 addresses for the test.
+func dualHost(t *testing.T, v4, v6 []netip.Addr) {
+	t.Helper()
+	old := lookupServerIPs
+	lookupServerIPs = func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+		if host != "ntp.test" {
+			return nil, errors.New("no such host")
+		}
+		if network == "ip4" {
+			return v4, nil
+		}
+		return v6, nil
+	}
+	t.Cleanup(func() { lookupServerIPs = old })
+}
+
+var (
+	loop4 = []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	loop6 = []netip.Addr{netip.MustParseAddr("::ffff:127.0.0.2")} // stands in for an AAAA record: this machine may have no IPv6, and the family is the one it was looked up as
+)
+
+func famByName(st ServerStat, name string) *FamStat {
+	for i := range st.Families {
+		if st.Families[i].Family == name {
+			return &st.Families[i]
+		}
+	}
+	return nil
+}
+
+func TestServerIsProbedOverBothFamiliesAndIPv4Wins(t *testing.T) {
+	f4 := newFakeNTP(t)
+	_, port, _ := net.SplitHostPort(f4.addr)
+	f6, err := newFakeNTPOn(t, "udp4", "127.0.0.2:"+port)
+	if err != nil {
+		t.Skipf("cannot listen on 127.0.0.2: %v", err)
+	}
+	f4.delay.Store(int64(30 * time.Millisecond)) // IPv4 is the slower one, and still the one that counts
+	f4.stratum.Store(2)
+	f6.stratum.Store(5)
+	dualHost(t, loop4, loop6)
+	p := NewPool(testNTPCfg("ntp.test:" + port))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if !st.Healthy || st.Via != "IPv4" || st.Time == nil || st.Time.Stratum != 2 || st.EWMAMS < 25 {
+		t.Fatalf("IPv4 should supply the numbers: %+v", st)
+	}
+	if v4, v6 := famByName(st, "IPv4"), famByName(st, "IPv6"); v4 == nil || v6 == nil || !v4.OK || !v6.OK {
+		t.Fatalf("both families should have answered: %+v", st.Families)
+	}
+	if f4.hits.Load() == 0 || f6.hits.Load() == 0 {
+		t.Fatalf("each family should have been probed: v4 %d, v6 %d", f4.hits.Load(), f6.hits.Load())
+	}
+}
+
+func TestServerStaysUpOnIPv4WhenIPv6IsDead(t *testing.T) {
+	f4 := newFakeNTP(t)
+	_, port, _ := net.SplitHostPort(f4.addr)
+	dualHost(t, loop4, loop6) // nothing listens on 127.0.0.2:port
+	p := NewPool(testNTPCfg("ntp.test:" + port))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if !st.Healthy || st.Via != "IPv4" || st.LastError != "" {
+		t.Fatalf("a dead IPv6 must not hurt the server: %+v", st)
+	}
+	if v6 := famByName(st, "IPv6"); v6 == nil || v6.OK || v6.Error == "" {
+		t.Fatalf("IPv6 should show its failure: %+v", st.Families)
+	}
+}
+
+func TestServerFallsBackToIPv6WhenIPv4IsDead(t *testing.T) {
+	f6, err := newFakeNTPOn(t, "udp4", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("cannot listen on 127.0.0.2: %v", err)
+	}
+	_, port, _ := net.SplitHostPort(f6.addr)
+	dualHost(t, loop4, loop6) // nothing listens on 127.0.0.1:port
+	p := NewPool(testNTPCfg("ntp.test:" + port))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if !st.Healthy || st.Via != "IPv6" || st.Time == nil || st.Rank != 1 {
+		t.Fatalf("IPv6 should carry the server when IPv4 does not answer: %+v", st)
+	}
+	if v4 := famByName(st, "IPv4"); v4 == nil || v4.OK {
+		t.Fatalf("IPv4 should show its failure: %+v", st.Families)
+	}
+}
+
+func TestServerDownWhenNeitherFamilyAnswers(t *testing.T) {
+	f4 := newFakeNTP(t)
+	f4.mode.Store(fakeDrop)
+	_, port, _ := net.SplitHostPort(f4.addr)
+	dualHost(t, loop4, loop6)
+	p := NewPool(testNTPCfg("ntp.test:" + port))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if st.Healthy || !strings.Contains(st.LastError, "IPv4:") || !strings.Contains(st.LastError, "IPv6:") {
+		t.Fatalf("the error should name both families: %+v", st)
+	}
+}
+
+func TestServerWithOnlyAnIPv6AddressIsProbedOverIPv6(t *testing.T) {
+	f6, err := newFakeNTPOn(t, "udp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	p := NewPool(testNTPCfg(f6.addr))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if !st.Healthy || st.Via != "IPv6" || len(st.Families) != 1 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestServerThatDoesNotResolveIsDown(t *testing.T) {
+	dualHost(t, nil, nil)
+	p := NewPool(testNTPCfg("ntp.test:123"))
+	p.ProbeNow(context.Background())
+	st := p.Snapshot()[0]
+	if st.Healthy || !strings.Contains(st.LastError, "cannot resolve ntp.test") {
+		t.Fatalf("%+v", st)
+	}
+}
