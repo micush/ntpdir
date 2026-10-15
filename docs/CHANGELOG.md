@@ -1,5 +1,19 @@
 # Changelog
 
+## [v33] - 2026-10-14 — Statistics: Top servers names the node that answered
+
+### Changed
+- Monitor ▸ Statistics: **Top servers** lists the node that answered, by its host name, instead of the fixed word "chrony". chrony answers the clients on every node, so "chrony" told the nodes apart from nothing; with the Node menu on **Cluster** the list now has one row per node, and picking a row filters Top clients to the clients that node answered. The name is read each time the counts are taken, so a renamed node counts under its new name; a node with no host name still counts as "chrony". Counts recorded before this version stay under "chrony" until they age out of the history (or **Clear**). Two nodes with the same host name count as one row.
+- The Statistics help topic says so.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- New test `TestSampleClientsNamesTheNode`.
+- Live: a private `chronyd -x` as the node (sources and clients through `NTPDIR_CHRONY_SOURCEDIR`, `NTPDIR_CHRONY_CONFDIR` and `NTPDIR_CHRONYC_ARGS`), a second one as the upstream, and one real daemon with a gateway on `lo`. 30 NTP requests were answered and `--stats` listed 30 answered under Top servers as the host name (`vm`). Daemon, chronyds and the VIP removed afterwards.
+
+### Not verified
+- The Statistics page and the help panel in a browser, the Real PAM login check (only help text changed in `webui/`), and the Cluster view with more than one node (the per-node rows are the same host names the cluster view already adds up; not run with two daemons).
+
 ## [v32] - 2026-10-14 — Fix: the chart tooltip did not show
 
 ### Fixed

@@ -635,8 +635,15 @@ func readClients() ([]chronyClient, error) {
 	return parseClients(out), nil
 }
 
-// qsServer is what the statistics call the thing that answered: chrony, on this node.
-const qsServer = "chrony"
+// qsServerName is what the statistics call the thing that answered: this node, by its host name (chrony answers on every
+// node, so the name is what tells the nodes apart in Top servers, and the cluster view adds up the same name).  A node
+// with no host name falls back to "chrony".
+func qsServerName() string {
+	if h := strings.TrimSpace(hostCurrent()); h != "" {
+		return h
+	}
+	return "chrony"
+}
 
 // sampleClients folds what chrony reports per client into the statistics: the requests each client has made since the
 // last look.  The first look only learns the totals (chrony has been counting since before ntpdir started).
@@ -656,6 +663,7 @@ func (m *chronyMgr) sampleClients(rec *QStats) {
 	if first {
 		return
 	}
+	node := qsServerName()
 	for _, c := range cl {
 		ip, err := netip.ParseAddr(c.Addr)
 		if err != nil {
@@ -673,7 +681,7 @@ func (m *chronyMgr) sampleClients(rec *QStats) {
 		if dd > dp {
 			dd = dp
 		}
-		rec.RecordN(ip.Unmap(), qsServer, 0, outAnswered, uint32(min(dp-dd, 1<<30)))
-		rec.RecordN(ip.Unmap(), qsServer, 0, outRefused, uint32(min(dd, 1<<30)))
+		rec.RecordN(ip.Unmap(), node, 0, outAnswered, uint32(min(dp-dd, 1<<30)))
+		rec.RecordN(ip.Unmap(), node, 0, outRefused, uint32(min(dd, 1<<30)))
 	}
 }

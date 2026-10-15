@@ -349,3 +349,22 @@ func TestSampleClientsCountsTheDifference(t *testing.T) {
 		t.Fatalf("answered %d, want 58", r.Sums.Answered)
 	}
 }
+
+// Top servers names the node that answered, so the nodes of a cluster can be told apart.
+func TestSampleClientsNamesTheNode(t *testing.T) {
+	old := hostCurrent
+	hostCurrent = func() string { return "ntp-b" }
+	defer func() { hostCurrent = old }()
+	f := hookChrony(t)
+	qs := NewQStats()
+	m := chrony
+	f.answers["-n -c clients"] = "10.0.0.1,100,10,-5,127,0,0,0,127,4294967295\n"
+	m.sampleClients(qs)
+	f.answers["-n -c clients"] = "10.0.0.1,150,10,-5,127,0,0,0,127,4294967295\n"
+	m.sampleClients(qs)
+	qs.flush()
+	r := qs.Query(time.Now().Add(-time.Hour), time.Now().Add(time.Minute), QFilter{})
+	if len(r.Servers) != 1 || r.Servers[0].Name != "ntp-b" {
+		t.Fatalf("servers %+v, want the one node ntp-b", r.Servers)
+	}
+}
