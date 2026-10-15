@@ -1,5 +1,17 @@
 # Changelog
 
+## [v48] - 2026-10-15 — Configure ▸ NTP: the Servers tab has its cards again
+
+### Fixed
+- Configure ▸ NTP: the Servers tab was empty because its card (Upstream Servers, with Servers and Fallback servers) sat under Clients. The card headings went to title case in v38 and the tab code matched cards to tabs by their exact old spelling. The match now ignores case, and the tab shows its card.
+- (v47 hid the tab while the shared lists were empty; that is undone. The tab is always there, as before.)
+
+### Verified
+- Headless Chromium: the Servers tab holds Upstream Servers, Health holds Health and Timing, Clients holds Serving and Client Rate Limiting; no script errors. The project builds.
+
+### Not verified
+- Go tests not re-run (UI-only change; they passed on v46).
+
 ## [v46] - 2026-10-15 — Block a client from Statistics
 
 ### Added
