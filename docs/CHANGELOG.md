@@ -1,5 +1,17 @@
 # Changelog
 
+## [v45] - 2026-10-15 — Server statistics: the clock offset graph has data
+
+### Fixed
+- Topology ▸ right-click a server ▸ Statistics: the *Clock offset* graph was always empty. The probes measured each server's offset but never put it into the server's history (only the gateway's graph was fed, from chrony). Every real, synchronised answer now adds its offset to the minute under way — a falseticker's too, which is what the graph is for; a refusal (kiss-o'-death) or an unsynchronised clock is left out.
+- The graph fills from now on; the minutes recorded before this version have no offset to show.
+
+### Verified
+- Go tests (with `-race`): a probe of a server 250 ms ahead leaves one offset sample of about 250 ms; an unsynchronised server leaves none. The full suite passes.
+
+### Not verified
+- The graph itself was not looked at in a browser.
+
 ## [v44] - 2026-10-15 — Eye button on the BGP neighbor password
 
 ### Changed

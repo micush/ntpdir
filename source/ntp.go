@@ -583,6 +583,11 @@ func (p *Pool) apply(s *Server, smp ntpSample, err error, falseticker bool) {
 		}
 	}
 	s.falseticker = falseticker
+	// the offset graph of the server's statistics: every real, synchronised answer counts, a falseticker's too (that is what
+	// the graph is for), but not a refusal or an unsynchronised clock
+	if smp.xmit != 0 && smp.recv != 0 && smp.KoD == "" && smp.Leap != ntpLeapUnsynch && smp.Stratum < 16 {
+		s.hist.off(smp.Offset)
+	}
 	if err == nil {
 		s.sample(smp.RTT, p.cfg.LatencyAlpha)
 		s.okCount++

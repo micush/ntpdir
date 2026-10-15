@@ -500,3 +500,29 @@ func TestServerThatDoesNotResolveIsDown(t *testing.T) {
 		t.Fatalf("%+v", st)
 	}
 }
+
+func TestProbesFeedTheServersOffsetGraph(t *testing.T) {
+	f := newFakeNTP(t)
+	f.offset.Store(int64(250 * time.Millisecond))
+	p := NewPool(testNTPCfg(f.addr))
+	p.ProbeNow(context.Background())
+	h := p.servers[0].hist
+	h.mu.Lock()
+	n, sum := h.offN, h.offSum
+	h.mu.Unlock()
+	if n != 1 || sum < 230_000 || sum > 270_000 {
+		t.Fatalf("offset samples %d, sum %d µs: want one sample of about 250 ms", n, sum)
+	}
+	// an unsynchronised clock's offset means nothing and is not graphed
+	g := newFakeNTP(t)
+	g.mode.Store(fakeUnsync)
+	q := NewPool(testNTPCfg(g.addr))
+	q.ProbeNow(context.Background())
+	h = q.servers[0].hist
+	h.mu.Lock()
+	n = h.offN
+	h.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("an unsynchronised server left %d offset samples", n)
+	}
+}
