@@ -1,5 +1,16 @@
 # Changelog
 
+## [v39] - 2026-10-15 — Top Clients / Top Servers paginate
+
+### Changed
+- The Top Clients / Top Servers cards no longer have More / Fewer buttons. They list every result the server returns (up to 100 names plus “(others)”), ten to a page, with ‹ › buttons and “1–10 of n” in the card header. A new filter, tile, pick or range starts again on page one.
+
+### Verified
+- Headless Chromium with 25 clients: ten rows a page, "1–10 of 25", Page 1 of 3, ‹ › step through, the last page holds 5, a new filter or pick returns to page one, no More/Fewer button left.
+
+### Not verified
+- Not run against a live daemon with real traffic.
+
 ## [v38] - 2026-10-15 — Card headings in title case; Statistics: "Top Clients: Answered"
 
 ### Changed

@@ -2757,7 +2757,7 @@
     };
 
     let status, bar, cnote, tiles, chartBox, pies, tops, foot, rangeBtns, fromIn, toIn, customRow;
-    let range = "1h", qpsView = false, sel = "", pickClient = "", pickServer = "", hidden = new Set(), last = null, lastAt = 0, seq = 0, clientsMore = false, serversMore = false, cFilter = "", sFilter = "", filterTimer = 0;
+    let range = "1h", qpsView = false, sel = "", pickClient = "", pickServer = "", hidden = new Set(), last = null, lastAt = 0, seq = 0, topPage = { c: 0, d: 0 }, topKey = "", cFilter = "", sFilter = "", filterTimer = 0;
 
     // ── fetching ──
     // the picked node (Node menu in the top bar) answers; pick another member there
@@ -3042,15 +3042,26 @@
       clearTimeout(filterTimer);
       filterTimer = setTimeout(load, 300);
     }
-    function topTable(title, items, total, more, onMore, withHost, o) {
+    const TOP_PAGE = 10;
+    function topTable(title, items, total, withHost, o) {
       const filtered = !!(withHost ? cFilter : sFilter);
-      const rows = (more || filtered ? items : items.slice(0, 10));   // a filter lists every match
+      const pk = withHost ? "c" : "d";
+      const pages = Math.max(1, Math.ceil(items.length / TOP_PAGE));
+      topPage[pk] = Math.min(Math.max(topPage[pk], 0), pages - 1);
+      const from = topPage[pk] * TOP_PAGE;
+      const rows = items.slice(from, from + TOP_PAGE);   // every result is listed, a page at a time
+      const go = (d) => () => { topPage[pk] += d; draw(last); };
+      const pager = pages > 1 ? h("span", { class: "pager" },
+        h("span", { class: "muted small" }, (from + 1) + "–" + (from + rows.length) + " of " + items.length),
+        h("button", { class: "btn small", type: "button", "aria-label": "Previous page", disabled: topPage[pk] === 0, onclick: go(-1) }, "‹"),
+        h("span", { class: "muted small" }, "Page " + (topPage[pk] + 1) + " of " + pages),
+        h("button", { class: "btn small", type: "button", "aria-label": "Next page", disabled: topPage[pk] >= pages - 1, onclick: go(1) }, "›")) : null;
       const mine = withHost ? "Client" : "Server";
       return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc(title)), h("span", { class: "grow" }),
         h("input", { type: "text", class: "qfilter", placeholder: "Filter", "aria-label": "Filter " + (withHost ? "clients" : "servers"), autocomplete: "off", spellcheck: "false",
           value: withHost ? cFilter : sFilter, oninput: (ev) => onFilter(withHost, ev.currentTarget.value),
           onkeydown: (ev) => { if (ev.key === "Escape" && ev.currentTarget.value) { ev.currentTarget.value = ""; onFilter(withHost, ""); } } }),
-        items.length > 10 && !filtered ? h("button", { class: "btn", type: "button", onclick: onMore }, more ? "Fewer" : "More") : null),
+        pager),
         h("div", { class: "hint qnote" }, o.note ? [o.note, " ", h("button", { class: "qlink", type: "button", onclick: o.onClear }, "Show all")] : "\u00a0"),
         h("div", { class: "body flush" }, rows.length
           ? h("div", { class: "scroll" }, h("table", { class: "qtop" }, h("thead", {}, h("tr", {}, h("th", {}, mine), h("th", { class: "num" }, "Requests"), h("th", { class: "num" }, "Share"))),
@@ -3092,10 +3103,12 @@
       drawChart(d);
       clear(pies).append(donut("Outcome" + kindLabel(), SERIES.filter((x) => x.key !== "total").map((x) => ({ name: x.label, count: d.sums[x.key] || 0 })).filter((x) => x.count > 0), OUTCOME_CLS, 4), donut("IP family" + kindLabel(), d.families, PROTO_CLS, 2));
       const sumOf = (l) => l.reduce((a, e) => a + e.count, 0);
+      const tk = [range, sel, pickClient, pickServer, cFilter, sFilter].join("|");   // a different question starts on page one
+      if (tk !== topKey) { topKey = tk; topPage = { c: 0, d: 0 }; }
       fill(tops,
-        topTable("Top Clients" + kindLabel(": "), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), clientsMore, () => { clientsMore = !clientsMore; draw(last); }, true,
+        topTable("Top Clients" + kindLabel(": "), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), true,
           { picked: pickClient, onPick: pickC, note: pickServer ? "Clients that " + pickServer + " answered" : "", onClear: () => pickD("") }),
-        topTable("Top Servers" + kindLabel(": "), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), serversMore, () => { serversMore = !serversMore; draw(last); }, false,
+        topTable("Top Servers" + kindLabel(": "), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), false,
           { picked: pickServer, onPick: pickD, note: pickClient ? "Servers that answered " + pickClient : "", onClear: () => pickC("") }));
       clear(cnote).append(...clusterNote(d.cluster));   // which nodes are added together, when the Node menu says Cluster
       foot.hidden = true;
