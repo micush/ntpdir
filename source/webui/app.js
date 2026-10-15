@@ -2018,9 +2018,9 @@
     { k: "min_password_length", l: "Minimum password length", t: "int", min: 0, max: 128, hint: "0 = 8" },
   ];
   const SNMP_FIELDS = [
-    { k: "communities", l: "Community strings", t: "list", wide: true, hint: "One per line. SNMP is on while there is at least one and off when the list is empty. Each gives read-only access, over IPv4 and IPv6." },
-    { k: "location", l: "Location", t: "text", hint: "What snmpd reports as sysLocation, e.g. Rack 4, Phoenix DC" },
-    { k: "contact", l: "Contact", t: "text", hint: "What snmpd reports as sysContact, e.g. noc@example.com" },
+    { shared: true, k: "snmp_communities", l: "Community strings", t: "list", wide: true, hint: "One per line. SNMP is on while there is at least one and off when the list is empty. Each gives read-only access, over IPv4 and IPv6." },
+    { k: "location", l: "Location", t: "text", hint: "What snmpd reports as sysLocation, e.g. Rack 4, Phoenix DC. Differs from node to node, so it is not shared." },
+    { shared: true, k: "snmp_contact", l: "Contact", t: "text", hint: "What snmpd reports as sysContact, e.g. noc@example.com" },
   ];
   const CLUSTER_FIELDS = [
     { k: "listen", l: "Binding address", t: "port", hint: "the port, default 12381 (all addresses); or an address with the port: 10.0.0.1:12381" },
@@ -2100,8 +2100,10 @@
       const web = fieldset(WEB_FIELDS, cfg.web);
       const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
-      const snmp = fieldset(SNMP_FIELDS, cfg.snmp || {});
+      const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
       // what snmpd is doing, under the form (refreshed after every save)
+      const snmpShared = () => { const v = snmp.get(); return { snmp_communities: v.snmp_communities, snmp_contact: v.snmp_contact }; };
+      const snmpLocal = () => { const v = snmp.get(); return { location: v.location }; };
       const snmpNote = h("div", { "aria-live": "polite" });
       refreshSNMP = async () => {
         try {
@@ -2168,11 +2170,11 @@
         ...general.get(),
         // keep what this form has no fields for (a gateway's own NTP pool)
         groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...g.fs.get() })),
-        ntp: { ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get() },
+        ntp: { ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
         web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get() },
         cluster: cluster.get(),
-        snmp: snmp.get(),
+        snmp: snmpLocal(),
         ...(cfg.bgp ? { bgp: cfg.bgp } : {}), // edited on the Anycast page
         ...(cfg.node_paused ? { node_paused: true } : {}), // set on the Node page
         ...(cfg.paused_servers_here ? { paused_servers_here: cfg.paused_servers_here } : {}), // set on the Topology page

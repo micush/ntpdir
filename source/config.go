@@ -472,6 +472,11 @@ type NTPConfig struct {
 	// the more specific rule even when it names a network inside an allowed one.  Statistics ▸ Top Clients ▸ right-click ▸
 	// Block adds an address here.  This node itself (loopback) cannot be blocked.
 	BlockedClients []string `json:"blocked_clients,omitempty"`
+	// SNMPCommunities and SNMPContact are the cluster-wide part of the SNMP settings (Configure ▸ SNMP), replicated like
+	// AllowedClients: every node answers the same communities and reports the same contact.  The location is per node and
+	// lives in DaemonConfig.SNMP.  See snmp.go.
+	SNMPCommunities []string `json:"snmp_communities,omitempty"`
+	SNMPContact     string   `json:"snmp_contact,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
 	// is no limit. ClientBurst is how many it may send at once (0 = twice the rate, at least 10). ClientAction is what
 	// a client over its rate gets: "drop" (the default, kept as empty in the file) or "kod" (a kiss-o'-death RATE,
@@ -1027,7 +1032,19 @@ func (dc *DaemonConfig) Validate() error {
 	if err := dc.Web.Validate(); err != nil {
 		return err
 	}
+	{
+		sc := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact}
+		if err := sc.Validate(); err != nil {
+			return err
+		}
+		dc.NTP.SNMPCommunities, dc.NTP.SNMPContact = sc.Communities, sc.Contact
+	}
 	if dc.SNMP != nil {
+		// v49 kept communities and contact on the node; they are cluster settings now, so move them over once
+		if len(dc.NTP.SNMPCommunities) == 0 && dc.NTP.SNMPContact == "" && (len(dc.SNMP.Communities) > 0 || dc.SNMP.Contact != "") {
+			dc.NTP.SNMPCommunities, dc.NTP.SNMPContact = dc.SNMP.Communities, dc.SNMP.Contact
+		}
+		dc.SNMP.Communities, dc.SNMP.Contact = nil, ""
 		if err := dc.SNMP.Validate(); err != nil {
 			return err
 		}
@@ -1455,4 +1472,13 @@ func (g GroupConfig) pausedAnycast() map[string]string {
 		out[a] = "all"
 	}
 	return out
+}
+
+// snmpSettings is the whole SNMP configuration of this node: the cluster's communities and contact, this node's location.
+func (dc *DaemonConfig) snmpSettings() SNMPConfig {
+	c := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact}
+	if dc.SNMP != nil {
+		c.Location = dc.SNMP.Location
+	}
+	return c
 }

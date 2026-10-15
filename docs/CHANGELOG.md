@@ -1,5 +1,14 @@
 # Changelog
 
+## [v50] - 2026-10-15 — SNMP community strings and contact are shared
+
+### Changed
+- Configure ▸ SNMP: the **community strings and the contact are now cluster settings** (replicated like Allowed clients: edit them on any node, every node answers the same communities and reports the same contact; a node that is the only member behaves as before). The **location stays local** to each node. They moved from the node's `snmp` block to `ntp.snmp_communities` and `ntp.snmp_contact`; a v49 config's local communities and contact are moved there automatically on the first start.
+- The community strings still stay out of support bundles, and the history says only how many there are.
+
+### Verified
+- Go tests: replication to a replica (location untouched), emptying on the primary, the v49 migration, validation of the shared strings, history never showing the strings.
+
 ## [v49] - 2026-10-15 — SNMP
 
 ### Added

@@ -15,7 +15,8 @@ import (
 //	location     what snmpd reports as sysLocation
 //	contact      what snmpd reports as sysContact
 //
-// The settings are local to the node (a location differs from node to node) and never replicated.  ntpdir owns
+// The communities and the contact are cluster settings (NTPConfig.SNMPCommunities/SNMPContact, replicated); the location is
+// local to the node (DaemonConfig.SNMP) because it differs from node to node.  ntpdir owns
 // /etc/snmp/snmpd.conf while it is in use: the file it writes starts with snmpHeader, an snmpd.conf that was there before
 // is kept once as snmpd.conf.ntpdir-orig and put back when the communities are emptied.  An snmpd that ntpdir never took
 // over (no header) is left alone when the communities are empty.
@@ -124,13 +125,9 @@ var snmpWarned time.Time
 // applySNMP makes snmpd match the settings: written, enabled and (re)started when a community is set; switched off, and the
 // file it replaced put back, when the communities are emptied after ntpdir had taken it over.  It is cheap when nothing
 // changed, so it runs at start and after every configuration change.
-func applySNMP(c *SNMPConfig) {
+func applySNMP(cfg SNMPConfig) {
 	snmpMu.Lock()
 	defer snmpMu.Unlock()
-	var cfg SNMPConfig
-	if c != nil {
-		cfg = *c
-	}
 	curB, readErr := os.ReadFile(snmpConfPath)
 	cur := string(curB)
 	managed := strings.HasPrefix(cur, snmpHeader)
@@ -203,11 +200,7 @@ func applySNMP(c *SNMPConfig) {
 }
 
 // snmpStatus is what Configure ▸ SNMP shows under the form.
-func snmpStatus(c *SNMPConfig) map[string]any {
-	var cfg SNMPConfig
-	if c != nil {
-		cfg = *c
-	}
+func snmpStatus(cfg SNMPConfig) map[string]any {
 	st := map[string]any{"enabled": cfg.enabled(), "installed": snmpInstalled(), "running": false}
 	if _, err := snmpRun("is-active", "--quiet", snmpUnit); err == nil {
 		st["running"] = true

@@ -492,13 +492,7 @@ func configSections(a, b *DaemonConfig) []Section {
 
 	// snmp: the community strings are secrets, so only their number is said
 	{
-		var sa, sb SNMPConfig
-		if a.SNMP != nil {
-			sa = *a.SNMP
-		}
-		if b.SNMP != nil {
-			sb = *b.SNMP
-		}
+		sa, sb := a.snmpSettings(), b.snmpSettings()
 		var parts []string
 		if !reflect.DeepEqual(sa.Communities, sb.Communities) {
 			switch {
@@ -567,7 +561,7 @@ func configSections(a, b *DaemonConfig) []Section {
 		}
 		out = append(out, Section{"NTP servers", strings.Join(parts, ", ")})
 	}
-	if f := changedFields(toMap(a.NTP), toMap(b.NTP), "servers", "paused_servers"); len(f) > 0 {
+	if f := changedFields(toMap(a.NTP), toMap(b.NTP), "servers", "paused_servers", "snmp_communities", "snmp_contact"); len(f) > 0 {
 		out = append(out, Section{"NTP settings", named(f)})
 	}
 	if f := changedFields(toMap(a.Web), toMap(b.Web)); len(f) > 0 {

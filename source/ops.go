@@ -108,7 +108,7 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return snmpStatus(dc.SNMP), nil
+		return snmpStatus(dc.snmpSettings()), nil
 
 	// certificate
 	case "tls.status":

@@ -96,15 +96,15 @@ func TestSNMPEnablesWhenACommunityIsSetAndDisablesWhenEmptied(t *testing.T) {
 		t.Fatal(err)
 	}
 	// empty and never taken over: left strictly alone
-	applySNMP(nil)
+	applySNMP(SNMPConfig{})
 	if len(*calls) != 0 {
 		t.Fatalf("an snmpd that was never ours must not be touched: %v", *calls)
 	}
 	// a community: the file is written, the original kept, snmpd enabled and restarted
-	cfg := &SNMPConfig{Communities: []string{"public"}, Location: "lab"}
+	cfg := SNMPConfig{Communities: []string{"public"}, Location: "lab"}
 	applySNMP(cfg)
 	got, _ := os.ReadFile(conf)
-	if string(got) != snmpdConfBody(*cfg) {
+	if string(got) != snmpdConfBody(cfg) {
 		t.Fatalf("conf: %q", got)
 	}
 	if b, _ := os.ReadFile(conf + snmpBackupSuffix); string(b) != orig {
@@ -124,13 +124,13 @@ func TestSNMPEnablesWhenACommunityIsSetAndDisablesWhenEmptied(t *testing.T) {
 	}
 	// another community: restarted
 	*calls = nil
-	applySNMP(&SNMPConfig{Communities: []string{"public", "second"}, Location: "lab"})
+	applySNMP(SNMPConfig{Communities: []string{"public", "second"}, Location: "lab"})
 	if !strings.Contains(strings.Join(*calls, "|"), "restart snmpd") {
 		t.Fatalf("a changed file must restart snmpd: %v", *calls)
 	}
 	// emptied: snmpd is switched off and the original file is back
 	*calls = nil
-	applySNMP(&SNMPConfig{Location: "lab"})
+	applySNMP(SNMPConfig{Location: "lab"})
 	if strings.Join(*calls, "|") != "disable --now snmpd" {
 		t.Fatalf("calls: %v", *calls)
 	}
@@ -142,7 +142,7 @@ func TestSNMPEnablesWhenACommunityIsSetAndDisablesWhenEmptied(t *testing.T) {
 	}
 	// and a second empty apply does nothing (the file is not ours any more)
 	*calls = nil
-	applySNMP(nil)
+	applySNMP(SNMPConfig{})
 	if len(*calls) != 0 {
 		t.Fatalf("calls: %v", *calls)
 	}
@@ -150,11 +150,11 @@ func TestSNMPEnablesWhenACommunityIsSetAndDisablesWhenEmptied(t *testing.T) {
 
 func TestSNMPWithoutAnOriginalFileRemovesOurs(t *testing.T) {
 	_, conf := hookSNMP(t)
-	applySNMP(&SNMPConfig{Communities: []string{"public"}})
+	applySNMP(SNMPConfig{Communities: []string{"public"}})
 	if _, err := os.Stat(conf + snmpBackupSuffix); err == nil {
 		t.Fatal("there was nothing to keep")
 	}
-	applySNMP(nil)
+	applySNMP(SNMPConfig{})
 	if _, err := os.Stat(conf); err == nil {
 		t.Fatal("our file should be removed when the communities are emptied and there was no original")
 	}
@@ -163,32 +163,80 @@ func TestSNMPWithoutAnOriginalFileRemovesOurs(t *testing.T) {
 func TestSNMPNotInstalledDoesNothing(t *testing.T) {
 	calls, conf := hookSNMP(t)
 	snmpInstalled = func() bool { return false }
-	applySNMP(&SNMPConfig{Communities: []string{"public"}})
+	applySNMP(SNMPConfig{Communities: []string{"public"}})
 	if _, err := os.Stat(conf); err == nil || len(*calls) != 0 {
 		t.Fatalf("with no snmpd nothing is written or run: %v", *calls)
 	}
-	st := snmpStatus(&SNMPConfig{Communities: []string{"public"}})
+	st := snmpStatus(SNMPConfig{Communities: []string{"public"}})
 	if st["installed"] != false || st["enabled"] != true {
 		t.Fatalf("%v", st)
 	}
 }
 
 func TestSNMPCommunitiesAreRedactedInSupportBundles(t *testing.T) {
-	v, n := redactJSON(map[string]any{"snmp": map[string]any{"communities": []any{"public", "x"}, "location": "lab"}})
-	m := v.(map[string]any)["snmp"].(map[string]any)
-	if m["communities"] != tshootRedacted || m["location"] != "lab" || n != 1 {
+	v, n := redactJSON(map[string]any{"ntp": map[string]any{"snmp_communities": []any{"public", "x"}, "snmp_contact": "noc"}, "snmp": map[string]any{"location": "lab"}})
+	m := v.(map[string]any)["ntp"].(map[string]any)
+	if m["snmp_communities"] != tshootRedacted || m["snmp_contact"] != "noc" || n != 1 {
 		t.Fatalf("%v (%d)", m, n)
 	}
 }
 
 func TestSNMPConfigHistoryHidesTheStrings(t *testing.T) {
 	a, b := newDaemonConfig(), newDaemonConfig()
-	b.SNMP = &SNMPConfig{Communities: []string{"verysecret"}, Location: "lab"}
+	b.NTP.SNMPCommunities = []string{"verysecret"}
+	b.SNMP = &SNMPConfig{Location: "lab"}
 	var text string
 	for _, s := range configSections(a, b) {
 		text += s.Label + ": " + s.Detail + "\n"
 	}
 	if !strings.Contains(text, "SNMP switched on with 1 community string(s)") || !strings.Contains(text, "location changed") || strings.Contains(text, "verysecret") {
 		t.Fatalf("%q", text)
+	}
+}
+
+func TestSNMPCommunitiesAndContactAreSharedLocationIsNot(t *testing.T) {
+	a := newDaemonConfig()
+	a.NTP.SNMPCommunities = []string{"public", "ro2"}
+	a.NTP.SNMPContact = "noc@example.com"
+	a.SNMP = &SNMPConfig{Location: "rack A"}
+	sh := sharedOf(a)
+	if len(sh.NTP.SNMPCommunities) != 2 || sh.NTP.SNMPContact != "noc@example.com" {
+		t.Fatalf("not replicated: %+v", sh.NTP)
+	}
+	b := newDaemonConfig()
+	b.SNMP = &SNMPConfig{Location: "rack B"}
+	if _, err := mergeShared(b, sh, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := b.snmpSettings()
+	if len(got.Communities) != 2 || got.Contact != "noc@example.com" || got.Location != "rack B" {
+		t.Fatalf("%+v", got)
+	}
+	// emptying on the primary empties the replica
+	a.NTP.SNMPCommunities = nil
+	if _, err := mergeShared(b, sharedOf(a), nil); err != nil {
+		t.Fatal(err)
+	}
+	if b.snmpSettings().enabled() {
+		t.Fatal("communities should be gone")
+	}
+}
+
+func TestV49LocalSNMPCommunitiesMoveToTheSharedSettings(t *testing.T) {
+	dc := newDaemonConfig()
+	dc.SNMP = &SNMPConfig{Communities: []string{"public"}, Contact: "noc", Location: "lab"}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(dc.NTP.SNMPCommunities) != 1 || dc.NTP.SNMPContact != "noc" || dc.SNMP == nil || dc.SNMP.Location != "lab" || len(dc.SNMP.Communities) != 0 {
+		t.Fatalf("%+v %+v", dc.NTP, dc.SNMP)
+	}
+}
+
+func TestSharedSNMPCommunitiesAreValidated(t *testing.T) {
+	dc := newDaemonConfig()
+	dc.NTP.SNMPCommunities = []string{"bad one"}
+	if err := dc.Validate(); err == nil {
+		t.Fatal("a community with a space should be refused")
 	}
 }
