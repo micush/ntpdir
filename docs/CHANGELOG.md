@@ -1,5 +1,20 @@
 # Changelog
 
+## [v49] - 2026-10-15 — SNMP
+
+### Added
+- Configure ▸ SNMP: community strings (any number, one per line, up to 16), a Location and a Contact. **A community string set: snmpd is enabled and running. None: snmpd is disabled.** Each community gives read-only access over IPv4 and IPv6 on UDP 161; Location and Contact become `sysLocation` and `sysContact`. The page also says whether snmpd is installed and running.
+- ntpdir writes `/etc/snmp/snmpd.conf` (mode 0600, first line marks it as managed) and enables/restarts/disables `snmpd` when the settings change and when it starts. An existing `snmpd.conf` is kept once as `snmpd.conf.ntpdir-orig` and put back when the communities are emptied; an snmpd that ntpdir never took over is left alone.
+- Installer prerequisite: `snmpd` (`net-snmp` on Fedora, RHEL and Arch). A failed install is a warning. A freshly installed snmpd is switched off at once (Debian starts it on install), so with no community string SNMP is off. The uninstaller switches snmpd off again and puts the original `snmpd.conf` back; snmpd stays installed.
+- The settings are local to the node (a location differs per node) and not replicated. The community strings are left out of support bundles, and the history says only how many there are.
+
+### Verified
+- Go tests (with `-race`): validation, the generated snmpd.conf, enable / restart only when the file changed / disable and restore the original, a foreign snmpd left alone, snmpd not installed, redaction and history wording. Headless Chromium: the page, saving through `/api/config`, the status line. The uninstall step on temporary files; the installer in `--dry-run`.
+- The full suite passes.
+
+### Not verified
+- Not run against a real snmpd (no snmpd or systemd in the build sandbox): the `agentaddress`, `rocommunity` and `rocommunity6` lines are from net-snmp's documentation. Try `snmpwalk -v2c -c <community> <node> system` after setting a community.
+
 ## [v48] - 2026-10-15 — Configure ▸ NTP: the Servers tab has its cards again
 
 ### Fixed

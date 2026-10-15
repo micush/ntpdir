@@ -174,6 +174,17 @@ for cu in chrony.service chronyd.service; do
   fi
 done
 
+# snmpd: when ntpdir was running it (Configure ▸ SNMP), switch it off and put back the snmpd.conf it replaced.  snmpd stays installed.
+SNMP_CONF="${NTPDIR_SNMP_CONF:-/etc/snmp/snmpd.conf}"
+if [ -f "$SNMP_CONF" ] && grep -q '^# Managed by ntpdir (Configure' "$SNMP_CONF"; then
+  if [ "$HAVE_SYSTEMD" = 1 ]; then run "$SYSTEMCTL" disable --now snmpd >/dev/null 2>&1 || true; fi
+  if [ -f "$SNMP_CONF.ntpdir-orig" ]; then
+    run mv -f "$SNMP_CONF.ntpdir-orig" "$SNMP_CONF"; info "put back the original $SNMP_CONF and switched snmpd off (snmpd itself is left installed)"
+  else
+    run rm -f "$SNMP_CONF"; info "removed $SNMP_CONF written by ntpdir and switched snmpd off (snmpd itself is left installed)"
+  fi
+fi
+
 # PAM service
 if [ -f "$PAM_FILE" ]; then
   if [ "$PURGE" = 1 ]; then

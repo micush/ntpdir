@@ -417,6 +417,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	sup := NewSupervisor(ctx, dc)
 	sup.StartAll()
 	qstats.SetNames(dc.NTP.ClientNames)
+	go applySNMP(dc.SNMP)
 	go memguard.Run(ctx.Done())
 
 	st := NewStatusServer(sockPath, sup)
@@ -479,6 +480,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 		infof("Config file changed — reloading")
 		sup.Reload(nu)
 		qstats.SetNames(nu.NTP.ClientNames)
+		go applySNMP(nu.SNMP)
 		mg.OnConfigLoaded(nu)
 		if web != nil {
 			go web.Apply(nu.Web) // async: a listener restart must not wait on the request that triggered it

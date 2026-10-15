@@ -804,6 +804,9 @@ type DaemonConfig struct {
 	// BGP is this node's FRR/BGP settings (see bgp.go).  A pointer with omitempty so
 	// a config that never used BGP has no "bgp" key and older versions still read it.
 	BGP *BGPConfig `json:"bgp,omitempty"`
+	// SNMP is this node's snmpd settings (see snmp.go).  A pointer with omitempty so a config that never used SNMP has no
+	// "snmp" key and older versions still read it.  Local to the node, never replicated.
+	SNMP *SNMPConfig `json:"snmp,omitempty"`
 	// NodePaused takes the whole node out of service for maintenance, the same as
 	// pausing every gateway on it (present and future): it resigns, stops answering
 	// and stops probing, and the other nodes carry on.  Local to the node, never
@@ -1023,6 +1026,14 @@ func (dc *DaemonConfig) Validate() error {
 	}
 	if err := dc.Web.Validate(); err != nil {
 		return err
+	}
+	if dc.SNMP != nil {
+		if err := dc.SNMP.Validate(); err != nil {
+			return err
+		}
+		if dc.SNMP.empty() {
+			dc.SNMP = nil
+		}
 	}
 	if dc.BGP != nil {
 		if err := dc.BGP.Validate(); err != nil {

@@ -490,6 +490,37 @@ func configSections(a, b *DaemonConfig) []Section {
 		out = append(out, Section{"Groups changed", strings.Join(changed, "; ")})
 	}
 
+	// snmp: the community strings are secrets, so only their number is said
+	{
+		var sa, sb SNMPConfig
+		if a.SNMP != nil {
+			sa = *a.SNMP
+		}
+		if b.SNMP != nil {
+			sb = *b.SNMP
+		}
+		var parts []string
+		if !reflect.DeepEqual(sa.Communities, sb.Communities) {
+			switch {
+			case len(sa.Communities) == 0:
+				parts = append(parts, fmt.Sprintf("SNMP switched on with %d community string(s)", len(sb.Communities)))
+			case len(sb.Communities) == 0:
+				parts = append(parts, "SNMP switched off (no community string)")
+			default:
+				parts = append(parts, fmt.Sprintf("community strings changed (%d now)", len(sb.Communities)))
+			}
+		}
+		if sa.Location != sb.Location {
+			parts = append(parts, "location changed")
+		}
+		if sa.Contact != sb.Contact {
+			parts = append(parts, "contact changed")
+		}
+		if len(parts) > 0 {
+			out = append(out, Section{"SNMP", strings.Join(parts, "; ")})
+		}
+	}
+
 	if a.NodePaused != b.NodePaused {
 		if b.NodePaused {
 			out = append(out, Section{"Node", "paused — this node is out of service"})

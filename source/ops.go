@@ -102,6 +102,14 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		dc, err := m.ConfigImport([]byte(a.Config), actor, a.Note)
 		return map[string]any{"config": dc}, err
 
+	// SNMP
+	case "snmp.status":
+		dc, _, err := m.LiveConfig()
+		if err != nil {
+			return nil, err
+		}
+		return snmpStatus(dc.SNMP), nil
+
 	// certificate
 	case "tls.status":
 		return m.certs.Status(), nil
