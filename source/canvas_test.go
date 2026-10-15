@@ -728,3 +728,32 @@ func TestMergeFamilyMembersCountsNodes(t *testing.T) {
 		}
 	}
 }
+
+// A dual-stack gateway elects its controllers per family: each node says which families it is the controller for, and
+// the merge keeps that apart (the drawing shows the IPv6-only controller in blue).
+func TestMergeFamilyMembersKeepsControllerFamilies(t *testing.T) {
+	var rows []SnapshotRow
+	names := map[string]string{}
+	for i := 1; i <= 2; i++ {
+		v4, v6 := "192.168.5."+string(rune('0'+i)), "fe80::"+string(rune('0'+i))
+		names[v4], names[v6] = "ntp"+string(rune('0'+i)), "ntp"+string(rune('0'+i))
+		rows = append(rows,
+			SnapshotRow{GroupID: 1, AF: "v6", PeerIP: v6, AfnID: i, State: "active", Local: i == 1, AGCIP: "fe80::2"},
+			SnapshotRow{GroupID: 1, AF: "v4", PeerIP: v4, AfnID: i, State: "active", Local: i == 1, AGCIP: "192.168.5.1"})
+	}
+	gs := []CanvasGateway{{GroupID: 1, Members: membersOf(rows, 1)}}
+	mergeFamilyMembers(gs, names)
+	ms := gs[0].Members
+	if len(ms) != 2 || ms[0].IP != "192.168.5.1" || ms[0].AGCAFs != "v4" || ms[1].IP != "192.168.5.2" || ms[1].AGCAFs != "v6" || !ms[0].AGC || !ms[1].AGC {
+		t.Fatalf("IPv4 controller on ntp1, IPv6 controller on ntp2: %+v", ms)
+	}
+	// both families on one node: one entry that says both
+	for i := range rows {
+		rows[i].AGCIP = map[string]string{"v4": "192.168.5.1", "v6": "fe80::1"}[rows[i].AF]
+	}
+	gs = []CanvasGateway{{GroupID: 1, Members: membersOf(rows, 1)}}
+	mergeFamilyMembers(gs, names)
+	if ms := gs[0].Members; ms[0].AGCAFs != "v4+v6" || ms[1].AGC || ms[1].AGCAFs != "" {
+		t.Fatalf("both controllers on ntp1: %+v", ms)
+	}
+}
