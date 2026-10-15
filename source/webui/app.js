@@ -57,6 +57,11 @@
   // fill(el, ...kids): what `clear(el).append(...kids)` does, but el keeps the elements it already has (see morph), so the
   // scroll boxes inside it are not destroyed and re-created by every poll.
   const fill = (el, ...kids) => { morph(el, h("div", {}, ...kids)); return el; };
+  // tc(text): a card heading in title case ("Upload a release" -> "Upload a Release").  Short joining words stay small (but not
+  // first); a word that already has a capital after its first letter (BGP, NTS, GUI) is left as it is, and so is what follows a
+  // hyphen ("Kiss-o'-death", "Policy-Based").
+  const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "per", "the", "to", "via", "vs"]);
+  const tc = (t) => (typeof t !== "string" ? t : t.replace(/(?<![\w'’-])[A-Za-z][A-Za-z'’]*/g, (w, i) => ((i > 0 && SMALL_WORDS.has(w)) || /[A-Z]/.test(w.slice(1)) ? w : w[0].toUpperCase() + w.slice(1))));
   // Width (in chart units) the y-axis labels need: the chart's left margin grows with the longest label so big
   // numbers are never cut off.  ~6.6 units a character at the 11px axis font, plus the gap and a little edge room.
   const axisMargin = (labels, min) => Math.max(min, Math.ceil(Math.max(0, ...labels.map((t) => String(t).length)) * 6.6) + 14);
@@ -1256,7 +1261,7 @@
         onmouseleave: () => { cross.classList.add("hidden"); tip.classList.add("hidden"); dots.forEach((c) => c.classList.add("hidden")); } });
       svg.append(cross, ...dots, hit, tip);
       const legend = series.length > 1 || o.legend ? h("div", { class: "qlegend" }, series.map((s) => h("span", { class: "qchip " + s.cls }, h("span", { class: "sw" }), s.label))) : null;
-      return h("div", { class: "tsc" }, h("h3", {}, title), legend, svg);
+      return h("div", { class: "tsc" }, h("h3", {}, tc(title)), legend, svg);
     }
 
     // The statistics dialog for a server or a gateway.  It is built once; choosing another
@@ -1861,7 +1866,7 @@
             h("td", { class: "mono" }, m.vmac || "–"),
             h("td", {}, pill(m.ntp_listening ? "answering" : "not answering", m.ntp_listening ? "ok" : "warn"))));
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, g.name ? g.name + " · group " + g.group_id : "Group " + g.group_id),
+            h("header", {}, h("h2", {}, g.name ? g.name + " · Group " + g.group_id : "Group " + g.group_id),
               h("span", { class: "mono muted" }, "VIP " + g.vip),
               g.agc ? h("span", { class: "muted" }, "AGC ", h("span", { class: "mono" }, g.agc)) : null),
             h("div", { class: "scroll" }, h("table", { class: "tight" },
@@ -1884,7 +1889,7 @@
         if (c && c.data) {
           const v = c.data;
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, "Cluster members"), h("span", { class: "muted" }, "Nodes sharing these settings."),
+            h("header", {}, h("h2", {}, tc("Cluster members")), h("span", { class: "muted" }, "Nodes sharing these settings."),
               v.conflict ? pill("conflict", "bad") : null),
             membersTable(v, null, true)));
         }
@@ -1923,7 +1928,7 @@
         for (const p of pools) {
           const maxE = Math.max(1, ...p.servers.filter((s) => s.healthy).map((s) => s.ewma_ms));
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared servers" + (p.groups.length ? " (group " + p.groups.join(", ") + ")" : "")),
+            h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared Servers" + (p.groups.length ? " (Group " + p.groups.join(", ") + ")" : "")),
               p.max_stratum ? h("span", { class: "muted small" }, "stratum up to " + p.max_stratum + " · root distance up to " + p.max_root_distance_ms + " ms · " + (p.max_rtt_ms ? "round trip up to " + p.max_rtt_ms + " ms" : "round trip not checked") + " · " + (p.max_offset_ms ? "falseticker beyond " + p.max_offset_ms + " ms" : "falseticker check off")) : null,
               p.using_fallback ? pill("every server is down: using the fallback servers", "warn") : null,
               h("span", { class: "spacer" }),
@@ -2028,11 +2033,11 @@
     for (const f of specs) {
       if (f.section) {
         if (!asCards) { // a heading inside the one grid
-          grid.append(h("div", { class: "fsec" }, h("h3", {}, f.section), f.note ? h("p", { class: "hint nomargin" }, f.note) : null));
+          grid.append(h("div", { class: "fsec" }, h("h3", {}, tc(f.section)), f.note ? h("p", { class: "hint nomargin" }, f.note) : null));
           continue;
         }
         grid = h("div", { class: f.cols === 3 ? "grid c3" : "grid" });
-        wrap.append(h("div", { class: "card" }, h("header", {}, h("h2", {}, f.section)),
+        wrap.append(h("div", { class: "card" }, h("header", {}, h("h2", {}, tc(f.section))),
           h("div", { class: "body" }, f.note ? h("p", { class: "hint" }, f.note) : null, grid)));
         continue;
       }
@@ -2136,7 +2141,7 @@
         groupsEl.append(card);
       };
       cfg.groups.forEach(addGroup);
-      const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, title)), h("div", { class: "body" }, ...kids));
+      const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, tc(title))), h("div", { class: "body" }, ...kids));
       collect = () => ({
         ...general.get(),
         // keep what this form has no fields for (a gateway's own NTP pool)
@@ -2313,7 +2318,7 @@
   const say = (el, kind, ...msg) => kind !== "bad" ? clear(el) : clear(el).append(h("div", { class: "notice " + kind, role: kind === "bad" ? "alert" : "status" }, ...msg));
   const fail = (el) => (e) => { if (e.message !== "unauthenticated") say(el, "bad", e.message); };
   const kv = (rows) => h("dl", { class: "kv" }, rows.filter(Boolean).map(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]));
-  const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, title)), h("div", { class: "body" }, ...kids));
+  const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, tc(title))), h("div", { class: "body" }, ...kids));
   const copyBtn = (getText) => h("button", { class: "btn small", type: "button", onclick: async (ev) => {
     try { await navigator.clipboard.writeText(getText()); ev.target.textContent = "Copied"; setTimeout(() => { ev.target.textContent = "Copy"; }, 1500); }
     catch (_) { ev.target.textContent = "Select and copy manually"; }
@@ -2364,7 +2369,7 @@
       const rows = (d.lines || []).map((l) => h("tr", { class: "dl " + ({ "+": "add", "-": "del", "@": "skip" }[l.op] || "ctx") },
         h("td", { class: "op" }, l.op === "@" ? "" : l.op), h("td", { class: "mono ln" }, l.op === "@" ? "… " + l.text : l.text)));
       clear(panel).append(h("div", { class: "card" },
-        h("header", {}, h("h2", {}, "Changes"), h("span", { class: "mono muted" }, d.a.id + " → " + d.b.id),
+        h("header", {}, h("h2", {}, tc("Changes")), h("span", { class: "mono muted" }, d.a.id + " → " + d.b.id),
           h("span", { class: "spacer" }), h("button", { class: "btn small", type: "button", onclick: () => clear(panel) }, "Close")),
         h("div", { class: "body" },
           d.same ? h("div", { class: "empty" }, "The two versions are identical.") : [
@@ -2466,7 +2471,7 @@
       if (tools) tools.classList.toggle("hidden", c.source === "files");
       const left = c.expired ? pill("Expired", "bad") : pill(c.days_left + " days left", c.expires_soon ? "warn" : "ok");
       clear(info).append(h("div", { class: "card" },
-        h("header", {}, h("h2", {}, "Current certificate"), pill(c.source === "self-signed" ? "Not trusted by browsers" : "Custom", c.source === "self-signed" ? "warn" : "ok"), c.error ? pill("problem", "bad") : left),
+        h("header", {}, h("h2", {}, tc("Current certificate")), pill(c.source === "self-signed" ? "Not trusted by browsers" : "Custom", c.source === "self-signed" ? "warn" : "ok"), c.error ? pill("problem", "bad") : left),
         h("div", { class: "body" }, c.error ? h("div", { class: "notice bad" }, c.error) : kv([
           ["Where it comes from", sourceLabel[c.source] || c.source],
           ["Issued to", c.subject], ["Issued by", c.issuer + (c.self_signed ? " (itself)" : "")],
@@ -2564,9 +2569,9 @@
         stat("This node", v.self, true), stat("Role", v.role.toUpperCase()), stat("Epoch", v.epoch),
         stat("Primary", v.primary_addr, true), stat("Shared settings rev.", v.shared_rev)));
       dyn.append(h("div", { class: "card" },
-        h("header", {}, h("h2", {}, "Members")),
+        h("header", {}, h("h2", {}, tc("Members"))),
         membersTable(v, (p) => act("/api/cluster/peers/remove", { addr: p.addr }, "Remove " + p.addr + " from the cluster? It resets itself to a single-node cluster.", p.addr + " removed."))));
-      if (v.removed.length) dyn.append(h("div", { class: "card" }, h("header", {}, h("h2", {}, "Removed nodes")), h("div", { class: "body" },
+      if (v.removed.length) dyn.append(h("div", { class: "card" }, h("header", {}, h("h2", {}, tc("Removed nodes"))), h("div", { class: "body" },
         h("p", { class: "hint" }, "These cannot be re-added by gossip. Lift the block to let one join again with a new code."),
         v.removed.map((a) => h("div", { class: "toolbar" }, h("span", { class: "mono" }, a),
           h("button", { class: "btn small", type: "button", onclick: () => act("/api/cluster/peers/unremove", { addr: a }, null, "Block lifted for " + a) }, "Allow again"))))));
@@ -2600,7 +2605,7 @@
               try {
                 const r = (await api("POST", "/api/cluster/token", {})).data;
                 const ta = h("textarea", { rows: 4, readonly: true, class: "pem", "aria-label": "Join code" }); ta.value = r.code;
-                clear(tokenBox).append(h("div", { class: "card" }, h("header", {}, h("h2", {}, "Join code"), h("span", { class: "muted" }, "single use, valid until " + when(r.expires))),
+                clear(tokenBox).append(h("div", { class: "card" }, h("header", {}, h("h2", {}, tc("Join code")), h("span", { class: "muted" }, "single use, valid until " + when(r.expires))),
                   h("div", { class: "body" }, ta, h("div", { class: "toolbar" }, copyBtn(() => ta.value),
                     h("span", { class: "hint" }, "Paste it on the new node (Cluster → Join) or run: ntpdir --cluster-join '<code>'")))));
               } catch (e) { fail(status)(e); }
@@ -2659,7 +2664,7 @@
       });
       const heads = (v.clustered ? [""] : []).concat(["Node", "Reachable", "Running", "Source", "Queued", "State"]);
       const off = v.clustered ? 1 : 0;
-      dyn.append(h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "Nodes"), h("span", { class: "grow" }), go),
+      dyn.append(h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("Nodes")), h("span", { class: "grow" }), go),
         h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, heads.map((t, i) => h("th", { class: i === 2 + off || i === 3 + off ? "num" : "" }, t)))), h("tbody", {}, rows)))));
       const row = (e) => h("tr", {}, h("td", {}, when(e.at)), h("td", { class: "mono" }, e.node), h("td", {}, pill(e.kind, e.kind === "failed" || e.kind === "rolled-back" ? "bad" : e.kind === "applied" ? "ok" : "info")),
         h("td", { class: "num" }, (e.from ? e.from + " → " : "") + (e.to || "")), h("td", { class: "wrap" }, [e.detail, e.by ? " (by " + e.by + ")" : ""].join("")));
@@ -2672,7 +2677,7 @@
         h("button", { class: "btn small", type: "button", disabled: histPage === 0, onclick: go2(-1) }, "‹ Newer"),
         h("span", { class: "muted small" }, "Page " + (histPage + 1) + " of " + pages),
         h("button", { class: "btn small", type: "button", disabled: histPage >= pages - 1, onclick: go2(1) }, "Older ›")) : null;
-      dyn.append(h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "History"), h("span", { class: "grow" }), pager),
+      dyn.append(h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("History")), h("span", { class: "grow" }), pager),
         shown.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["When", "Node", "Event", "Version", "Detail"].map((t) => h("th", {}, t)))), h("tbody", {}, shown.map(row))))
           : h("div", { class: "empty" }, "No update activity yet.")));
     }
@@ -2702,7 +2707,7 @@
           } catch (e) { if (e.message !== "unauthenticated") { note.textContent = e.message; note.classList.add("bad-text"); } } finally { ev.target.disabled = false; }
         } }, "Upload");
         main.append(stats, status,
-          h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "Upload a release"), h("span", { class: "grow" }), up),
+          h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("Upload a release")), h("span", { class: "grow" }), up),
             h("div", { class: "body" },
               h("p", { class: "hint" }, "Select a release archive. It is checked and staged on this node; other cluster members pull it from here."),
               h("div", { class: "toolbar tight" }, file, h("label", { class: "check" }, online, " Fetch from online"), note))),
@@ -2867,7 +2872,7 @@
 
     function donut(title, items, clsOf, keep) {
       const total = items.reduce((a, e) => a + e.count, 0);
-      const card = h("div", { class: "qdonut" }, h("h3", {}, title));
+      const card = h("div", { class: "qdonut" }, h("h3", {}, tc(title)));
       if (!total) return card.appendChild(h("div", { class: "empty" }, "No requests in this range.")), card;
       // fold everything beyond the named, coloured ones into "Other"
       const rows = [];
@@ -2909,7 +2914,7 @@
         w.updated && "Updated: " + w.updated, w.expires && "Expires: " + w.expires, (w.name_servers || []).length && "Name servers: " + w.name_servers.join(", "), "From: " + w.server].filter(Boolean).join("\n");
     };
     // A row is a button: picking a client lists the servers that answered it, picking a
-    // server lists its clients in Top clients.  o.picked is this list's picked row,
+    // server lists its clients in Top Clients.  o.picked is this list's picked row,
     // o.note says the list is filtered, o.onClear drops that filter.
     // Clear: forget the counts and the top lists (of every node when the Node menu says Cluster)
     async function clearStats() {
@@ -3010,7 +3015,7 @@
           close(); setClientName(addr, lc);
         } },
         h("label", { class: "f wide" }, "Name", input,
-          h("span", { class: "hint" }, "The full host name, shown under the address in Top clients instead of the reverse-DNS name. Empty removes it.")),
+          h("span", { class: "hint" }, "The full host name, shown under the address in Top Clients instead of the reverse-DNS name. Empty removes it.")),
         err,
         h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "submit" }, "Save"), h("button", { class: "btn", type: "button", onclick: close }, "Cancel"))));
       root.append(d);
@@ -3041,7 +3046,7 @@
       const filtered = !!(withHost ? cFilter : sFilter);
       const rows = (more || filtered ? items : items.slice(0, 10));   // a filter lists every match
       const mine = withHost ? "Client" : "Server";
-      return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, title), h("span", { class: "grow" }),
+      return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc(title)), h("span", { class: "grow" }),
         h("input", { type: "text", class: "qfilter", placeholder: "Filter", "aria-label": "Filter " + (withHost ? "clients" : "servers"), autocomplete: "off", spellcheck: "false",
           value: withHost ? cFilter : sFilter, oninput: (ev) => onFilter(withHost, ev.currentTarget.value),
           onkeydown: (ev) => { if (ev.key === "Escape" && ev.currentTarget.value) { ev.currentTarget.value = ""; onFilter(withHost, ""); } } }),
@@ -3066,7 +3071,7 @@
     }
 
     const shareBase = (d) => { const k = Object.keys(KINDS).find((x) => KINDS[x] === sel); return k ? d.sums[k] : d.sums.total; };
-    const kindLabel = () => { const s = SERIES.find((x) => KINDS[x.key] === sel); return s ? " — " + s.label : ""; };
+    const kindLabel = (sep = " — ") => { const s = SERIES.find((x) => KINDS[x.key] === sel); return s ? sep + s.label : ""; };   // the donuts say "Outcome — Refused", the top lists "Top Clients: Refused"
     // picking a client clears the server and the other way round: one drill-down at a time
     function pickC(c) { if (c === pickClient) return; pickClient = c; pickServer = ""; load(); }
     function pickD(n) { if (n === pickServer) return; pickServer = n; pickClient = ""; load(); }
@@ -3088,9 +3093,9 @@
       clear(pies).append(donut("Outcome" + kindLabel(), SERIES.filter((x) => x.key !== "total").map((x) => ({ name: x.label, count: d.sums[x.key] || 0 })).filter((x) => x.count > 0), OUTCOME_CLS, 4), donut("IP family" + kindLabel(), d.families, PROTO_CLS, 2));
       const sumOf = (l) => l.reduce((a, e) => a + e.count, 0);
       fill(tops,
-        topTable("Top clients" + kindLabel(), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), clientsMore, () => { clientsMore = !clientsMore; draw(last); }, true,
+        topTable("Top Clients" + kindLabel(": "), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), clientsMore, () => { clientsMore = !clientsMore; draw(last); }, true,
           { picked: pickClient, onPick: pickC, note: pickServer ? "Clients that " + pickServer + " answered" : "", onClear: () => pickD("") }),
-        topTable("Top servers" + kindLabel(), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), serversMore, () => { serversMore = !serversMore; draw(last); }, false,
+        topTable("Top Servers" + kindLabel(": "), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), serversMore, () => { serversMore = !serversMore; draw(last); }, false,
           { picked: pickServer, onPick: pickD, note: pickClient ? "Servers that answered " + pickClient : "", onClear: () => pickC("") }));
       clear(cnote).append(...clusterNote(d.cluster));   // which nodes are added together, when the Node menu says Cluster
       foot.hidden = true;
@@ -3223,7 +3228,7 @@
         onmouseleave: () => { cross.classList.add("hidden"); tip.classList.add("hidden"); dots.forEach((c) => c.classList.add("hidden")); } });
       svg.append(cross, ...dots, hit, tip);
       const legend = series.length > 1 || o.legend ? h("div", { class: "qlegend" }, series.map((s) => h("span", { class: "qchip " + s.cls }, h("span", { class: "sw" }), s.label))) : null;
-      return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, title)), h("div", { class: "body" }, legend, svg));
+      return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc(title))), h("div", { class: "body" }, legend, svg));
     }
 
     function draw(d) {
@@ -3256,10 +3261,10 @@
       const ifRows = (n.ifaces || []).map((i) => h("tr", { class: i.counted ? null : "muted" }, h("td", { class: "mono" }, i.name), h("td", { title: i.counted ? null : "Not in the totals" }, i.up ? "up" : "down", i.counted ? "" : " *"),
         h("td", { class: "num" }, i.speed ? i.speed + " Mb/s" : "–"), h("td", { class: "num" }, bits(i.rx_bps)), h("td", { class: "num" }, bits(i.tx_bps)), h("td", { class: "num" }, i.util_pct >= 0 ? pc(i.util_pct) : "–")));
       fill(tables, 
-        h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "Filesystems")), h("div", { class: "body flush" }, fsRows.length
+        h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("Filesystems"))), h("div", { class: "body flush" }, fsRows.length
           ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Mount"), h("th", {}, "Device"), h("th", { class: "num" }, "Used"), h("th", { class: "num" }, "Use"))), h("tbody", {}, fsRows))
           : h("div", { class: "empty" }, "No disk filesystems found."))),
-        h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "Network interfaces")), h("div", { class: "body flush" }, ifRows.length
+        h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("Network interfaces"))), h("div", { class: "body flush" }, ifRows.length
           ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Interface"), h("th", {}, "State"), h("th", { class: "num" }, "Speed"), h("th", { class: "num" }, "In"), h("th", { class: "num" }, "Out"), h("th", { class: "num" }, "Link use"))), h("tbody", {}, ifRows)))
           : h("div", { class: "empty" }, "No interfaces found."))));
       clear(cnote).append(...clusterNote(d.cluster));   // which nodes are added together, when the Node menu says Cluster
@@ -3835,7 +3840,7 @@
         const exp = h("input", { type: "date" });
         const add = () => call("add", { username: name.value.trim(), password: pw.value, expires: toUnix(exp.value) }, () => { sel = name.value.trim(); mode = "user"; });
         pw.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
-        detail.append(h("header", {}, h("h2", {}, "New user")), h("div", { class: "body" },
+        detail.append(h("header", {}, h("h2", {}, tc("New user"))), h("div", { class: "body" },
           h("div", { class: "grid c3" }, h("label", { class: "f" }, "Name", name), h("label", { class: "f" }, "Password", pw), h("label", { class: "f" }, "Expires (blank = never)", exp)),
           h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "button", onclick: add }, "Add user"))));
         name.focus();
@@ -3845,7 +3850,7 @@
         const who = h("input", { type: "text", list: "users-others", autocomplete: "off", spellcheck: "false", autocapitalize: "none", maxlength: "32" });
         const grant = () => call("grant", { username: who.value.trim() }, () => { sel = who.value.trim(); mode = "user"; });
         who.addEventListener("keydown", (e) => { if (e.key === "Enter") grant(); });
-        detail.append(h("header", {}, h("h2", {}, "Add an existing account")), h("div", { class: "body" },
+        detail.append(h("header", {}, h("h2", {}, tc("Add an existing account"))), h("div", { class: "body" },
           h("p", { class: "muted small" }, "An account that already exists on this host can be allowed to sign in here by adding it to the " + group + " group."),
           h("div", { class: "grid c3" }, h("label", { class: "f" }, "Name", who, otherList)),
           h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "button", onclick: grant }, "Add to group"))));
@@ -3899,7 +3904,7 @@
         filterIn = h("input", { type: "text", class: "ufilter", placeholder: "Filter", "aria-label": "Filter users", autocomplete: "off", spellcheck: "false", oninput: drawList });
         sel = null; mode = "user";
         const left = h("div", { class: "card ulistcard" },
-          h("header", { class: "bar" }, h("h2", {}, "Users"), h("span", { class: "grow" }),
+          h("header", { class: "bar" }, h("h2", {}, tc("Users")), h("span", { class: "grow" }),
             h("button", { class: "btn primary small", type: "button", onclick: () => { mode = "new"; drawList(); drawDetail(); } }, "+ New")),
           h("div", { class: "ufilterbar" }, filterIn),
           listBox,

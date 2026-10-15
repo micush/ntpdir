@@ -1,5 +1,17 @@
 # Changelog
 
+## [v38] - 2026-10-15 — Card headings in title case; Statistics: "Top Clients: Answered"
+
+### Changed
+- Every card heading on every page is in title case: "Upload a Release", "Join an Existing Cluster", "Anycast Addresses", the Configure sections, the Statistics donuts and charts ("IP Family", "Clock Offset"), the Host charts, and so on. Short joining words stay small (a, an, of, on, per, the …) except first; a word with a capital inside it (BGP, NTS, GUI) and anything after a hyphen ("Kiss-o'-death", "Policy-Based") are left alone. Headings that are data (a user name, a gateway's own name) and dialog titles are unchanged. One helper, `tc()`, does it where the headings are built, so a new card is covered too. Ported from dnsdir v400.
+- Statistics: with a tile picked, the two top lists are titled `Top Clients: Answered` and `Top Servers: Answered` (also Kiss-o'-death, Refused, Failed), not `Top clients — Answered`. The two donuts (Outcome, IP Family) and the chart keep the dash. The help and README say Top Clients / Top Servers too.
+
+### Verified
+- `node --check`, gofmt, vet, `go test -race -count=1`. `tc()` on sample headings. Headless Chromium against the real `app.js` with a mocked Statistics answer: clicking each of the four tiles gave exactly the eight list titles above, and the donuts read Outcome and IP Family.
+
+### Not verified
+- Every page was not opened in a browser: the other pages' headings follow from the code (every card-heading constructor goes through `tc()`), not from looking at them.
+
 ## [v37] - 2026-10-15 — The IPv6 controller is drawn in blue
 
 ### Changed

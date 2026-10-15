@@ -649,9 +649,9 @@ The range is Last Hour, Last Day, Last Week, Last Month, or a custom start and e
 
 **Drilling down.** Click a tile (Answered, Failed, Kiss-o'-death, Refused) to limit the chart, the donuts and the top lists to that outcome, for example to see which servers fail and for whom. Total Requests clears it. Click a client to list the servers that answered it, or a server to list the clients it served; this combines with the tiles.
 
-**Naming a client.** Right-click a client in Top clients ▸ **Name** gives it a name by hand (up to 64 characters), shown under its address instead of the reverse-DNS name, found by the Filter box, and shared by the cluster (`client_names` in the `ntp` block: address to name). A named client's menu has **Rename** and **Remove name** instead.
+**Naming a client.** Right-click a client in Top Clients ▸ **Name** gives it a name by hand (up to 64 characters), shown under its address instead of the reverse-DNS name, found by the Filter box, and shared by the cluster (`client_names` in the `ntp` block: address to name). A named client's menu has **Rename** and **Remove name** instead.
 
-**Filtering the lists.** The Filter box of Top clients and Top servers lists every client or server whose address or name contains what you type (any case, from everything counted in the range, not just the ten shown); Esc empties it. The box on one list does not change the other.
+**Filtering the lists.** The Filter box of Top Clients and Top Servers lists every client or server whose address or name contains what you type (any case, from everything counted in the range, not just the ten shown); Esc empties it. The box on one list does not change the other.
 
 **Ping and traceroute.** Right-click a client or a server ▸ **Ping** or **Traceroute** opens a popup with the output of `ping -n -c 4 -W 2` or of `mtr -n --raw -c 10` (shown as the usual table, growing hop by hop), run on the node you are looking at (four pings, at most 15 seconds; mtr at most two minutes; four at a time). **Run again** repeats it. Both programs are prerequisites the installer adds; without them the popup says so.
 
