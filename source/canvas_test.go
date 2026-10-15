@@ -691,3 +691,40 @@ func TestDefaultServersMatchTheGUI(t *testing.T) {
 		t.Fatalf("app.js has %v, config.go has %v", js, defaultGatewayServers)
 	}
 }
+
+// A dual-stack gateway has two engines per node, and each speaks from its own address, so membersOf sees a node twice.
+// The circle's tooltip counts nodes: 4 nodes with IPv4 and IPv6 running said "Serving nodes: 8".
+func TestMergeFamilyMembersCountsNodes(t *testing.T) {
+	var rows []SnapshotRow
+	names := map[string]string{}
+	for i := 1; i <= 4; i++ {
+		v4, v6 := "192.168.5."+string(rune('0'+i)), "fe80::"+string(rune('0'+i))
+		names[v4], names[v6] = "ntp"+string(rune('0'+i)), "ntp"+string(rune('0'+i))
+		rows = append(rows,
+			SnapshotRow{GroupID: 100, AF: "v6", PeerIP: v6, AfnID: i, Weight: 100, State: "active", Local: i == 1, AGCIP: "fe80::1"},
+			SnapshotRow{GroupID: 100, AF: "v4", PeerIP: v4, AfnID: i, Weight: 100, State: "active", Local: i == 1, AGCIP: "192.168.5.1"})
+	}
+	rows = append(rows, SnapshotRow{GroupID: 100, AF: "v4", PeerIP: "192.168.5.99", AfnID: 9, State: "active"}) // an address no node owns
+	gs := []CanvasGateway{{GroupID: 100, Members: membersOf(rows, 100)}}
+	if len(gs[0].Members) != 9 {
+		t.Fatalf("membersOf sees %d, want 9 (8 per-family entries and the stranger)", len(gs[0].Members))
+	}
+	mergeFamilyMembers(gs, names)
+	ms := gs[0].Members
+	if len(ms) != 5 {
+		t.Fatalf("members after merging: %d, want 4 nodes and the unknown address: %+v", len(ms), ms)
+	}
+	for _, m := range ms {
+		if m.IP == "192.168.5.99" {
+			continue
+		}
+		if m.AFs != "v4+v6" || !strings.HasPrefix(m.IP, "192.168.5.") {
+			t.Fatalf("a node is listed by its IPv4 address with both families: %+v", m)
+		}
+	}
+	for _, m := range ms {
+		if m.IP == "192.168.5.1" && (!m.Local || !m.AGC) {
+			t.Fatalf("local and controller survive the merge: %+v", m)
+		}
+	}
+}

@@ -1,5 +1,22 @@
 # Changelog
 
+## [v35] - 2026-10-15 — Help: a Find box; the circle's tooltip counts nodes, not nodes × families
+
+### Added
+- The help panel (the **?** at the top right) has a **Find** box above the text, ported from dnsdir v396. Typing marks every match in the page's help (not case sensitive) and shows `1 / 12`; Enter goes to the next match, Shift+Enter to the one before, and the current one has its own colour and is scrolled into view. Esc empties the box (a second Esc closes the panel). The word stays marked when the help changes to another page's. A match is found inside one piece of text, so a phrase that runs from plain text into bold or code is not found as one. The help code in `app.js` is the same as dnsdir's apart from the names.
+
+### Fixed
+- Topology: the gateway circle's tooltip said "Serving nodes: 8" for 4 nodes. A gateway with IPv4 and IPv6 runs one engine per address family on each node, each speaking from its own address, and the members were told apart by that address, so every node was counted once per family. `canvasGroups` now merges the members that belong to one node (by the node names the cluster already works out from the nodes' addresses, `nodeNamesByIP`): one member per node, listed by its IPv4 address with both families (`v4+v6`), local and controller kept. An address that belongs to no known node stays its own member.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- New test `TestMergeFamilyMembersCountsNodes` (4 nodes × 2 families and an unknown address: 9 entries before, 5 after, IPv4 address and `v4+v6` kept, local and controller kept).
+- Live, with a real daemon (real PAM, a throwaway user; user, group and `/etc/pam.d/ntpdir` removed afterwards), in headless Chromium against the real `app.js`, `style.css` and `help.js` (light and dark): typing marked the matches (89 for "gateway" on the Topology help) with the counter, Enter and Shift+Enter moved through them, upper case found the same matches, an unknown word marked nothing and said `0`, the word stayed marked on another page's help (102 for "the" on Statistics), Esc emptied the box and left the panel open, a second Esc closed it, and the help's text was the same after marking and unmarking. No page errors.
+
+### Not verified
+- A flaky test: in one of the full `go test -race` runs `TestBGPOperateAPIAndStatus` failed once (BGP code is untouched here). It then passed five times on its own with `-race` and in a second full run; the cause was not found.
+- The member count on a real dual-stack cluster: the sandbox has no IPv6 and one node, so the fix is covered by the unit test only. It relies on the nodes' IPv6 gateway addresses being known to the cluster (`gw_ips`); a node that does not send them yet (an older version) keeps its IPv6 entry apart until it is updated.
+
 ## [v34] - 2026-10-15 — A new gateway starts with four public NTP servers
 
 ### Added

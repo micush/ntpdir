@@ -124,6 +124,49 @@ func membersOf(rows []SnapshotRow, gid int) []CanvasMember {
 	return out
 }
 
+// mergeFamilyMembers makes the members of each gateway one per node.  membersOf can only tell members apart by the
+// address they speak the gateway protocol from, and a node with both address families running has a different one for
+// each (its IPv4 address and an IPv6 one), so a dual-stack gateway on 4 nodes listed 8 members and the tooltip said
+// "Serving nodes: 8".  names maps the cluster's node addresses to node names (nodeNamesByIP: one per node, the address
+// when two nodes share a host name); members with the same name are one node.  An address that is not in the map stays
+// its own member.  The IPv4 address is kept as the member's address (the node's addresses on the Nodes page are
+// matched against it), and the families are joined.
+func mergeFamilyMembers(gs []CanvasGateway, names map[string]string) {
+	for i := range gs {
+		ms := gs[i].Members
+		if len(ms) < 2 {
+			continue
+		}
+		out := make([]CanvasMember, 0, len(ms))
+		at := map[string]int{}
+		for _, m := range ms {
+			name := names[normIP(m.IP)]
+			if name == "" {
+				out = append(out, m)
+				continue
+			}
+			j, ok := at[name]
+			if !ok {
+				at[name] = len(out)
+				out = append(out, m)
+				continue
+			}
+			o := &out[j]
+			if a, err := netip.ParseAddr(m.IP); err == nil && a.Is4() { // the IPv4 side stands for the node
+				m.AFs, o.AFs = o.AFs, m.AFs
+				o.IP, o.AfnID, o.Weight = m.IP, m.AfnID, m.Weight
+			}
+			if o.AFs != "" && m.AFs != "" && !strings.Contains(o.AFs, m.AFs) {
+				o.AFs += "+" + m.AFs
+			}
+			o.Local = o.Local || m.Local
+			o.AGC = o.AGC || m.AGC
+		}
+		sort.Slice(out, func(a, b int) bool { return out[a].IP < out[b].IP })
+		gs[i].Members = out
+	}
+}
+
 // buildCanvas combines the running configuration with what the engines and
 // the probe pools currently report.
 func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []CanvasGateway {
@@ -334,6 +377,7 @@ func (s *Supervisor) config() *DaemonConfig {
 // canvasGroups is the picture as the GUI and CLI show it, with the uptimes noted.
 func (s *StatusServer) canvasGroups() []CanvasGateway {
 	groups := buildCanvas(s.sup.config(), s.snapshot(), s.sup.poolList())
+	mergeFamilyMembers(groups, s.ipNames())
 	markWarming(groups, s.sup.warmingGroups())
 	markOffnet(groups, s.sup.offnetGroups())
 	cfg := s.sup.config()
