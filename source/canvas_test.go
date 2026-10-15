@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -180,12 +183,12 @@ func TestApplyCanvasEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	g1 := dc.Groups[0].NTP
-	if len(g1.Servers) != 2 {
+	if len(g1.Servers) != 4+2 { // the four a gateway starts with, and the two added
 		t.Fatalf("group 1 pool: %+v", g1)
 	}
 	// a gateway can be drawn complete in one step
 	do(canvasEdit{Action: "add", Kind: "gateway", Group: 7, VIP: "10.7.0.1/24", Server: "4.4.4.4"})
-	if g := dc.Groups[2]; g.GroupID != 7 || g.NTP == nil || g.NTP.Servers[0] != "4.4.4.4:123" {
+	if g := dc.Groups[2]; g.GroupID != 7 || g.NTP == nil || g.NTP.Servers[len(g.NTP.Servers)-1] != "4.4.4.4:123" {
 		t.Fatalf("one-step gateway: %+v", g)
 	}
 	if err := dc.Validate(); err != nil {
@@ -195,12 +198,12 @@ func TestApplyCanvasEdit(t *testing.T) {
 	// delete a square: siblings stay
 	do(canvasEdit{Action: "del", Kind: "server", Group: 100, Server: "8.8.8.8"})
 	g1 = dc.Groups[0].NTP
-	if len(g1.Servers) != 1 || g1.Servers[0] != "8.8.4.4:123" {
+	if len(g1.Servers) != 4+1 || g1.Servers[len(g1.Servers)-1] != "8.8.4.4:123" || containsStr(g1.Servers, "8.8.8.8:123") {
 		t.Fatalf("after server delete: %+v", g1)
 	}
 	// delete a circle: the whole gateway goes, the other one is untouched
 	do(canvasEdit{Action: "del", Kind: "gateway", Group: 100})
-	if len(dc.Groups) != 1 || dc.Groups[0].GroupID != 101 || len(dc.Groups[0].NTP.Servers) != 1 {
+	if len(dc.Groups) != 1 || dc.Groups[0].GroupID != 101 || len(dc.Groups[0].NTP.Servers) != 4+1 {
 		t.Fatalf("after gateway delete: %+v", dc.Groups)
 	}
 	do(canvasEdit{Action: "del", Kind: "gateway", Group: 101})
@@ -349,8 +352,8 @@ func TestCanvasDualStackAndStratumEdits(t *testing.T) {
 	if err := dc.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if g.NTP.Servers[0] != "[2001:db8::123]:123" {
-		t.Fatalf("an IPv6 server is stored bracketed with its port: %q", g.NTP.Servers[0])
+	if last := g.NTP.Servers[len(g.NTP.Servers)-1]; last != "[2001:db8::123]:123" {
+		t.Fatalf("an IPv6 server is stored bracketed with its port: %q", last)
 	}
 	// an IPv6 address in --vip goes to the IPv6 slot
 	do(canvasEdit{Action: "add", Kind: "gateway", VIP: "2001:db8:2::1/64"})
@@ -629,5 +632,62 @@ func TestOnlyOneServerLeftIsAmber(t *testing.T) {
 	pause(b.addr)
 	if cv := status(); cv.Status != "warn" || !strings.Contains(cv.Detail, "only one") {
 		t.Fatalf("two of three paused: %s (%s)", cv.Status, cv.Detail)
+	}
+}
+
+// A gateway created now starts with the four public servers, which are ordinary servers: any of them can be removed,
+// and a server named at creation that is one of them is not added twice.  A config read from a file is not touched.
+func TestNewGatewayStartsWithDefaultServers(t *testing.T) {
+	want := []string{"pool.ntp.org:123", "time.nist.gov:123", "time.google.com:123", "time.cloudflare.com:123"}
+	dc := newDaemonConfig()
+	dc.Groups = []GroupConfig{}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "add", Kind: "gateway", VIP: "10.0.0.1/24", Interface: "eth0"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dc.Groups[0].NTP.Servers; !reflect.DeepEqual(got, want) {
+		t.Fatalf("a new gateway's servers: %v, want %v", got, want)
+	}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "del", Kind: "server", Group: 100, Server: "time.nist.gov"}); err != nil {
+		t.Fatalf("a starting server can be removed: %v", err)
+	}
+	if got := dc.Groups[0].NTP.Servers; len(got) != 3 || containsStr(got, "time.nist.gov:123") {
+		t.Fatalf("after removing one: %v", got)
+	}
+	// naming one of the starting servers at creation is not an error and not a duplicate
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "add", Kind: "gateway", VIP: "10.1.0.1/24", Server: "Time.Google.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dc.Groups[1].NTP.Servers; !reflect.DeepEqual(got, want) {
+		t.Fatalf("with a named server that is already one: %v", got)
+	}
+	// a shared default does not change: a config with no servers still has none
+	if d := defaultNTP(); len(d.Servers) != 0 {
+		t.Fatalf("defaultNTP has servers: %v", d.Servers)
+	}
+	var back DaemonConfig
+	if err := json.Unmarshal([]byte(`{"groups":[{"group_id":1,"vip4":"10.0.0.1/24"}]}`), &back); err != nil || back.Groups[0].NTP != nil {
+		t.Fatalf("a gateway read from a file gets no servers: %v %+v", err, back.Groups)
+	}
+}
+
+// The GUI's New gateway form starts from the same list as the command line (DEFAULT_SERVERS in app.js).
+func TestDefaultServersMatchTheGUI(t *testing.T) {
+	b, err := os.ReadFile("webui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`const DEFAULT_SERVERS = \[([^\]]*)\];`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("DEFAULT_SERVERS not found in app.js")
+	}
+	var js []string
+	for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(m[1], -1) {
+		js = append(js, string(q[1]))
+	}
+	if !reflect.DeepEqual(js, defaultGatewayServers) {
+		t.Fatalf("app.js has %v, config.go has %v", js, defaultGatewayServers)
 	}
 }

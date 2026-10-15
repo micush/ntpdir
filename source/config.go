@@ -577,6 +577,25 @@ func (d *NTPConfig) ownLB() (LBConfig, bool) {
 	return LBConfig{}, false
 }
 
+// defaultGatewayServers are the NTP servers a gateway starts with when it is created now (the GUI's New gateway and
+// --canvas-add gateway).  They are ordinary servers of the gateway: remove the ones you do not want.  webui/app.js has
+// the same list (DEFAULT_SERVERS), and a test keeps the two equal.  defaultNTP itself stays empty: a config read from a
+// file that lists no servers has none, as it always did.
+var defaultGatewayServers = []string{"pool.ntp.org", "time.nist.gov", "time.google.com", "time.cloudflare.com"}
+
+// newGatewayServers is defaultGatewayServers in the form the config stores (host:port).
+func newGatewayServers() []string {
+	out := make([]string, 0, len(defaultGatewayServers))
+	for _, s := range defaultGatewayServers {
+		n, err := normalizeServer(s)
+		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
 func defaultNTP() NTPConfig {
 	return NTPConfig{
 		Servers:           []string{},

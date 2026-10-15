@@ -583,6 +583,8 @@
       if (/:\d+$/.test(a)) return a;
       return a + ":123";
     };
+    // the servers a new gateway starts with (the same list as defaultGatewayServers in config.go; remove what you do not want)
+    const DEFAULT_SERVERS = ["pool.ntp.org", "time.nist.gov", "time.google.com", "time.cloudflare.com"];
     const shortAddr = (a) => a.replace(/:123$/, "").replace(/^\[(.*)\]$/, "$1");
     // the optional name of a server (ntp.server_names), shown under its address
     const srvName = (g, addr) => ((g.ntp || cv.cfg.ntp || {}).server_names || {})[addr] || "";
@@ -1487,7 +1489,7 @@
         const fb = (v.fb || "").split(/[\s,;]+/).filter(Boolean);
         if (fb.some((a) => !/^[A-Za-z0-9_.\-:\[\]\/]+$/.test(a))) return "A fallback server needs to be an IP address or host name.";
         if (new Set(fb).size !== fb.length) return "A fallback server is listed twice.";
-        const own = new Set(((g && g.ntp && g.ntp.servers) || []).map(shortAddr));
+        const own = new Set(((g && g.ntp && g.ntp.servers) || (g ? [] : DEFAULT_SERVERS.map(normAddr))).map(shortAddr));
         const dup = fb.find((a) => own.has(shortAddr(normAddr(a))) || own.has(a));
         if (dup) return dup + " is already one of this gateway's servers.";
         if ((v.name || "").length > 40) return "The name can be at most 40 characters.";
@@ -1515,7 +1517,7 @@
         }
         const id = Number(v.id);
         if (!(id >= 1 && id <= 255) || groups().some((x) => x.group_id === id)) return "Pick an unused group number between 1 and 255.";
-        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, ntp: { servers: [], ...(fb.length ? { fallback_servers: fb } : {}), ...(lbOwn ? { lb: lbOwn } : {}) } });
+        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, ntp: { servers: DEFAULT_SERVERS.map(normAddr), ...(fb.length ? { fallback_servers: fb } : {}), ...(lbOwn ? { lb: lbOwn } : {}) } });
         setGid(id); cv.sel = { kind: "gw" };
         return null;
       }, g ? "Save" : "Add gateway");

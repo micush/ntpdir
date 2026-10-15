@@ -164,7 +164,7 @@ The whole `ntp` block hot-reloads when you edit the file or use the GUI; a gatew
 
 ## Topology
 
-The first page of the GUI is a drawing of your configuration. Each **gateway is an item under Topology** in the sidebar (right-click it ▸ **Rename** or **Delete**), with *＋ New gateway…* at the end.
+The first page of the GUI is a drawing of your configuration. Each **gateway is an item under Topology** in the sidebar (right-click it ▸ **Rename** or **Delete**), with *＋ New gateway…* at the end. A gateway you create (the GUI form or `--canvas-add gateway`) starts with four NTP servers, `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`; they are ordinary servers, so delete the ones you do not want. A gateway already in a config file, and the shared server list, are not changed.
 
 The drawing has two kinds of shape, plus the anycast pills:
 
@@ -279,7 +279,7 @@ A server's graphs are the picked node's own view. A gateway's graphs add up ever
 ```
 ntpdir --canvas                                  # tree with status
 ntpdir --canvas-add gateway --vip 10.0.0.123/24 --interface eth0 \
-     --server 10.0.0.124                        # circle + first square
+     --server 10.0.0.124                        # circle + its starting servers (pool.ntp.org, time.nist.gov, time.google.com, time.cloudflare.com) + this one
 ntpdir --canvas-add server --group 100 --server 10.0.0.125
 ntpdir --canvas-del server --group 100 --server 10.0.0.125
 ntpdir --canvas-add fallback --group 100 --server 0.pool.ntp.org   # used only while every server is down

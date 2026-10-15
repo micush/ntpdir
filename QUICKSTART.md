@@ -46,12 +46,12 @@ A new install has no gateways. Topology is the first page.
    - **Name (optional)**: a label such as "Office NTP".
    - **Shared IPv4 address / prefix**: the free address with its prefix, for example `192.168.1.123/24`.
    - **Network interface**: the interface that is on that network (for example `eth0`).
-3. Save. A **circle** appears: that is the gateway. It is amber at first because it has no NTP server yet. Everything you change is saved at once; there is no Apply button.
-4. **Right-click the circle** and choose **Add NTP server…**
+3. Save. A **circle** appears: that is the gateway, with four **squares** under it, the servers it starts with: `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`. Everything you change is saved at once; there is no Apply button.
+4. Right-click a square and choose **Delete** for any server you do not want. To add your own, **right-click the circle** and choose **Add NTP server…**
    - **IP address or host name**: for example `10.0.0.124` (add `:port` for a port other than 123). AnyTime checks a server by sending it real NTP requests.
-5. A **square** (the server) appears under the circle. When the gateway is working both turn **green**.
+5. When the gateway is working the circle and the servers turn **green**.
 
-Add a second server the same way for redundancy. Hover any shape for its status and uptime ("Online for 1m 1s - 0 failures").
+These servers need the node to reach the internet. Add your own servers the same way for redundancy. Hover any shape for its status and uptime ("Online for 1m 1s - 0 failures").
 
 Colours: **green** working, **yellow** degraded (the gateway runs but something is down), **red** down, **grey** not known yet. A server is taken out of service when it stops answering, reports a stratum or root distance above the limits, or its clock disagrees with the others or answers too slowly (change the limits on Configure ▸ NTP ▸ Health). It is then removed from chrony's sources on every node, and added again when it recovers.
 

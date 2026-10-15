@@ -707,15 +707,21 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 				g.Interface = dc.Groups[0].Interface
 			}
 			d := defaultNTP()
+			d.Servers = newGatewayServers()
 			g.NTP = &d
 			dc.Groups = append(dc.Groups, g)
-			if e.Server != "" { // draw the first server in the same step
+			msg := fmt.Sprintf("added gateway %d (%s) with the NTP servers %s (remove one with --canvas-del server --group %d --server ADDR)",
+				id, orDefault(e.VIP, e.VIP6), strings.Join(defaultGatewayServers, ", "), id)
+			if e.Server != "" { // one more server in the same step (not again if it is one of the starting ones)
+				if n, err := normalizeServer(e.Server); err == nil && containsStr(d.Servers, n) {
+					return msg, nil
+				}
 				if _, err := applyCanvasEdit(dc, canvasEdit{Action: "add", Kind: "server", Group: id, Server: e.Server}); err != nil {
 					return "", err
 				}
-				return fmt.Sprintf("added gateway %d (%s) with NTP server %s", id, orDefault(e.VIP, e.VIP6), e.Server), nil
+				return msg + " and " + e.Server, nil
 			}
-			return fmt.Sprintf("added gateway %d (%s) — now add an NTP server with --canvas-add server --group %d --server ADDR", id, orDefault(e.VIP, e.VIP6), id), nil
+			return msg, nil
 		case "pause", "resume":
 			g, err := findGroup(dc, e.Group)
 			if err != nil {

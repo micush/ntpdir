@@ -1,5 +1,24 @@
 # Changelog
 
+## [v34] - 2026-10-15 — A new gateway starts with four public NTP servers
+
+### Added
+- A gateway you create now starts with the NTP servers `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`. This is the GUI's **New gateway** form and `--canvas-add gateway`. They are ordinary servers of the gateway (probed, named and paused like any other), so a server you do not want is removed the usual way: right-click it ▸ **Delete**, or `--canvas-del server --group N --server ADDR`. A server named with `--server` at creation is added to them, and not twice when it is one of them. The CLI's reply lists the servers and how to remove one. The New gateway form checks a fallback server against the four, since a fallback may not also be a normal server.
+- The same list is in `config.go` (`defaultGatewayServers`) and `webui/app.js` (`DEFAULT_SERVERS`); a test keeps the two equal.
+
+### Changed
+- QUICKSTART, README and the Topology help topic say that a new gateway comes with these servers (the quick start no longer says the circle is amber for lack of a server).
+- Not changed on purpose: a gateway already in a config file, a gateway read from a file that lists no servers, the shared server list (Configure ▸ NTP ▸ Servers) and `defaultNTP`, so an upgrade and an existing config see no new servers. The first-start default gateway and `--configure` also stay as they were: they have no servers of their own.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- Tests: `TestNewGatewayStartsWithDefaultServers` (the four servers, removing one, naming one of them at creation, a file read gets none), `TestDefaultServersMatchTheGUI`; `TestApplyCanvasEdit` and `TestCanvasDualStackAndStratumEdits` now expect the four first.
+- Live, with a real daemon (`"groups": []`, real PAM, a throwaway user in the `ntpdir` group; user, group and `/etc/pam.d/ntpdir` removed afterwards): `--canvas-add gateway` wrote the four servers to the config file; the PAM login over HTTPS gave 200; in headless Chromium (light and dark) the New gateway form created gateways whose circle has the four squares and whose config file has the four servers; `--canvas-del gateway --yes` removed one.
+
+### Not verified
+- The four servers answering: the sandbox has no DNS, so they showed as down there. A deleted server and a second node in a cluster were not tried in the GUI (server delete is unchanged code, covered by `TestApplyCanvasEdit`).
+- The other PAM cases (wrong password, a valid user outside the group, root): only the login of a member was checked, as nothing in the login code changed.
+
 ## [v33] - 2026-10-14 — Statistics: Top servers names the node that answered
 
 ### Changed
