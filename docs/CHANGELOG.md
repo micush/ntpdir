@@ -1,5 +1,18 @@
 # Changelog
 
+## [v46] - 2026-10-15 — Block a client from Statistics
+
+### Added
+- Blocked clients: `blocked_clients` in the `ntp` block (Configure ▸ Settings ▸ Blocked clients, one address or network per line). Written to chrony's client file as `deny all <net>` after the `allow` lines and put into the running chrony at once, without a restart. A block wins over Allowed clients, also for a network inside an allowed one. Loopback (this node) cannot be blocked. Shared by the cluster like Allowed clients.
+- Statistics ▸ Top Clients ▸ right-click a client: **Block** (adds its address), **Unblock** (removes it), or, when a network in the list holds it, a line saying which one. A 🚫 marks blocked clients (dim when a network holds the address).
+- There is no per-client limit: chrony has only one rate limit for all clients (Configure ▸ Settings ▸ client rate), so the menu has Block but no Limit.
+
+### Verified
+- Go tests (with `-race`): the deny lines in the file and in the live rules, after the allows; the muted file has none; validation rejects loopback, whole-internet and malformed entries and normalises the rest. Headless Chromium: marks, the three menu variants, Block saving `blocked_clients` through `/api/config`.
+
+### Not verified
+- Not run against a real chrony: the `deny all` syntax is from chrony's documentation.
+
 ## [v45] - 2026-10-15 — Server statistics: the clock offset graph has data
 
 ### Fixed

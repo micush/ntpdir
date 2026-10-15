@@ -368,3 +368,55 @@ func TestSampleClientsNamesTheNode(t *testing.T) {
 		t.Fatalf("servers %+v, want the one node ntp-b", r.Servers)
 	}
 }
+
+func TestBlockedClientsAreDeniedAfterTheAllowRules(t *testing.T) {
+	d := defaultNTP()
+	d.BlockedClients = []string{"192.168.5.14", "10.9.0.0/16", "2001:db8::5"}
+	if err := d.validateClients(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := chronyConfBody(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"deny all 192.168.5.14/32\n", "deny all 10.9.0.0/16\n", "deny all 2001:db8::5/128\n"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("missing %q in %q", w, body)
+		}
+		if strings.Index(body, w) < strings.Index(body, "allow all\n") {
+			t.Errorf("%q comes before the allow rules: %q", w, body)
+		}
+	}
+	// a muted node answers nobody, so it needs no deny lines
+	if muted, _ := chronyConfBodyMuted(d, true); strings.Contains(muted, "deny") {
+		t.Errorf("muted file has deny lines: %q", muted)
+	}
+	// the running chrony gets the same rules, after the allows
+	f := hookChrony(t)
+	if err := allowLive(d); err != nil {
+		t.Fatal(err)
+	}
+	var seq []string
+	for _, c := range f.calls {
+		seq = append(seq, strings.Join(c, " "))
+	}
+	got := strings.Join(seq, "|")
+	if !strings.Contains(got, "allow all|deny all 192.168.5.14/32|deny all 10.9.0.0/16|deny all 2001:db8::5/128") {
+		t.Errorf("live rules: %s", got)
+	}
+}
+
+func TestBlockedClientsValidation(t *testing.T) {
+	for _, bad := range []string{"127.0.0.0/8", "::1", "0.0.0.0/0", "::/0", "not-an-address"} {
+		d := defaultNTP()
+		d.BlockedClients = []string{bad}
+		if err := d.validateClients(); err == nil {
+			t.Errorf("%q should not be accepted", bad)
+		}
+	}
+	d := defaultNTP()
+	d.BlockedClients = []string{"10.0.0.7", "10.0.0.7/32", "10.1.2.3/8"}
+	if err := d.validateClients(); err != nil || len(d.BlockedClients) != 2 || d.BlockedClients[0] != "10.0.0.7/32" || d.BlockedClients[1] != "10.0.0.0/8" {
+		t.Fatalf("normalised: %v %v", d.BlockedClients, err)
+	}
+}

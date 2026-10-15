@@ -274,6 +274,7 @@ func (s *StatusServer) ntpStatus() map[string]any {
 		"chrony_roll":     s.rollText(),
 		"server_stats":    readServerStats(),
 		"allowed_clients": len(cfg.AllowedClients),
+		"blocked_clients": len(cfg.BlockedClients),
 		"client_rate":     cfg.ClientRate,
 		"client_burst":    int(effectiveBurst(cfg.ClientRate, cfg.ClientBurst)),
 		"client_action":   orDefault(cfg.ClientAction, actDrop),

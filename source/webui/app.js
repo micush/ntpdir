@@ -1999,6 +1999,7 @@
     { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", min: 1, max: 65535 },
     { section: "Client Rate Limiting", note: "Written to chrony (allow, ratelimit). This node itself is always allowed. The rate limit restarts chrony." },
     { shared: true, k: "allowed_clients", l: "Allowed clients", t: "list", wide: true, hint: "Networks that may ask, one per line: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
+    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "list", wide: true, hint: "Clients and networks that get no answers, one per line, whatever Allowed clients says (the block wins). Statistics ▸ Top Clients ▸ right-click ▸ Block adds one. This node itself cannot be blocked." },
     { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit. A client is one IPv4 address or one IPv6 /64." },
     { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
     { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
@@ -3025,12 +3026,61 @@
       d.showModal();
       input.focus(); input.select();
     }
+    // ── blocked clients (Settings ▸ blocked_clients, written to chrony as `deny`) ──
+    // an address as [number, bits]; a prefix is the same plus its length
+    const blocked = { list: [], nets: [] };
+    function ipBig(t) {
+      t = String(t).replace(/%.*$/, "");
+      const m4 = t.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (m4) return { v: m4.slice(1).reduce((a, x) => a * 256n + BigInt(x), 0n), bits: 32 };
+      if (!t.includes(":")) return null;
+      let [head, tail] = t.split("::");
+      const grp = (x) => (x ? x.split(":") : []);
+      let hs = grp(head), ts = tail === undefined ? [] : grp(tail);
+      const v4 = (a) => { const l = a[a.length - 1]; if (l && l.includes(".")) { const b = ipBig(l).v; a.splice(a.length - 1, 1, ((b >> 16n) & 0xffffn).toString(16), (b & 0xffffn).toString(16)); } };
+      v4(hs); v4(ts);
+      if (tail === undefined ? hs.length !== 8 : hs.length + ts.length > 7) return null;
+      const all = tail === undefined ? hs : [...hs, ...Array(8 - hs.length - ts.length).fill("0"), ...ts];
+      return { v: all.reduce((a, x) => a * 65536n + BigInt(parseInt(x || "0", 16)), 0n), bits: 128 };
+    }
+    function setBlocked(list) {
+      blocked.list = list;
+      blocked.nets = list.map((t) => {
+        const [a, l] = t.split("/"), ip = ipBig(a);
+        return ip ? { text: t, v: ip.v, bits: ip.bits, len: l === undefined ? ip.bits : Number(l) } : null;
+      }).filter(Boolean);
+    }
+    // the entry that blocks this client, or null: its own address (exact) or a network that holds it
+    function blockedBy(addr) {
+      const ip = ipBig(addr);
+      if (!ip) return null;
+      let hit = null;
+      for (const n of blocked.nets) {
+        if (n.bits !== ip.bits) continue;
+        const sh = BigInt(n.bits - n.len);
+        if ((ip.v >> sh) === (n.v >> sh) && (!hit || n.len > hit.len)) hit = n;
+      }
+      return hit ? { text: hit.text, exact: hit.len === hit.bits } : null;
+    }
+    async function setBlock(addr, on) {
+      try {
+        const cfg = (await api("GET", "/api/config")).config;
+        cfg.ntp = cfg.ntp || {};
+        const list = (cfg.ntp.blocked_clients || []).filter((x) => x !== addr && x !== addr + "/32" && x !== addr + "/128");
+        if (on) list.push(addr);
+        if (list.length) cfg.ntp.blocked_clients = list; else delete cfg.ntp.blocked_clients;
+        await api("PUT", "/api/config", { config: cfg, note: "Client " + (on ? "blocked" : "unblocked") + " from Statistics: " + addr });
+        await load();
+      } catch (e) { if (e.message !== "unauthenticated") say(status, "bad", (on ? "Not blocked: " : "Not unblocked: ") + e.message); }
+    }
     function clientMenu(e, addr, entry) {
       e.preventDefault(); e.stopPropagation();
+      const blk = blockedBy(addr);
       const manual = !!(entry && entry.manual), host = (entry && entry.host) || "";
       rowMenu([["Whois", () => whoisPopup(addr)], "-",
         ["Ping", () => netTool("ping", addr)], ["Traceroute", () => netTool("trace", addr)], ["Scan", () => scanPopup(addr)], "-",
         ["Copy", () => copyAddr(addr)], "-",
+        blk ? (blk.exact ? ["Unblock", () => setBlock(addr, false)] : ["Blocked by " + blk.text + " (edit it in Settings)", () => say(status, "info", addr + " is blocked by " + blk.text + ". Edit Blocked clients in Configure ▸ Settings.")]) : ["Block", () => setBlock(addr, true)], "-",
         ...(host ? [["Rename…", () => askName(addr, host)], ...(manual ? [["Remove name", () => setClientName(addr, "")]] : [])] : [["Name…", () => askName(addr, "")]])])(e);
     }
     function serverMenu(e, addr) {
@@ -3078,7 +3128,9 @@
                   const b = h("button", { type: "button", class: "qlink mono", "data-name": e.name, "aria-pressed": e.name === o.picked ? "true" : "false",
                     title: withHost ? head + tail : tail.trim(),
                     onclick: () => o.onPick(e.name === o.picked ? "" : e.name) }, e.name);
-                  return b;
+                  const blk = withHost ? blockedBy(e.name) : null;
+                  return blk ? h("div", { class: "qname" }, b, h("span", { class: "qblocked" + (blk.exact ? "" : " qdim"), role: "img", "aria-label": "blocked",
+                    title: blk.exact ? "Blocked: this client gets no answers. Right-click ▸ Unblock to remove it." : "Blocked by " + blk.text + ": this client gets no answers. Edit it in Configure ▸ Settings ▸ Blocked clients." }, "🚫")) : b;
                 })(),
                 e.host ? h("div", { class: "muted small" }, e.host) : null),
               h("td", { class: "num", title: n0(e.count) }, shortCount(e.count)), h("td", { class: "num" }, pct(e.count, total)))))))
@@ -3122,8 +3174,9 @@
     async function load() {
       const my = ++seq;
       try {
-        const d = await fetchData();
+        const [d, blk] = await Promise.all([fetchData(), api("GET", "/api/config").then((r) => (r.config && r.config.ntp && r.config.ntp.blocked_clients) || []).catch(() => blocked.list)]);
         if (my !== seq) return;
+        setBlocked(blk);
         lastAt = Date.now();
         draw(d);
       } catch (e) { fail(status)(e); }

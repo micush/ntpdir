@@ -312,6 +312,14 @@ func chronyConfBodyMuted(d NTPConfig, muted bool) (string, error) {
 				fmt.Fprintf(&b, "allow %s\n", n.String())
 			}
 		}
+		// blocked clients come after every allow, and `deny all` also drops any more specific allow inside the block
+		blocked, err := parseClientNets(d.BlockedClients)
+		if err != nil {
+			return "", err
+		}
+		for _, n := range blocked {
+			fmt.Fprintf(&b, "deny all %s\n", n.String())
+		}
 	}
 	if d.ClientRate > 0 {
 		interval := int(math.Round(-math.Log2(float64(d.ClientRate))))
@@ -376,6 +384,15 @@ func allowLiveMuted(d NTPConfig, muted bool) error {
 			args = append(args, r)
 		}
 		if _, err := chronyc(args...); err != nil {
+			return err
+		}
+	}
+	blocked, err := parseClientNets(d.BlockedClients)
+	if err != nil {
+		return err
+	}
+	for _, n := range blocked {
+		if _, err := chronyc("deny", "all", n.String()); err != nil {
 			return err
 		}
 	}

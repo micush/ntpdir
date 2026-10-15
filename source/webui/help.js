@@ -128,7 +128,7 @@ const NTPDIR_HELP = {
       ]],
       "**Fallback servers** (marked *fallback* in the list, Configure ▸ NTP ▸ Servers ▸ Fallback servers, or *Edit* on the Topology page) are used by chrony only while every normal server is down; the header says so.",
       ["h", "Client rate limiting"],
-      "**Allowed clients** (Configure ▸ NTP ▸ Clients) lists the networks that may ask, one per line (10.0.0.0/8, 192.168.1.5, 2001:db8::/32); empty means everyone. These and the rate go into a small file for chrony (`allow`, `ratelimit`) and chrony is restarted when the rate limit changes, node by node (a new allowed list is applied to the running chrony at once). **Requests per second** limits each client to a rate, with a **burst** (0 = twice the rate, at least 10). *kod* lets chrony answer a limited client with a RATE kiss-o'-death more often than *drop* does. This node itself is always allowed. Rates are per node. chrony rounds the rate to a power of two and limits per client address mask, as `ratelimit` in its manual says.",
+      "**Allowed clients** (Configure ▸ NTP ▸ Clients) lists the networks that may ask, one per line (10.0.0.0/8, 192.168.1.5, 2001:db8::/32); empty means everyone. **Blocked clients** are never answered, whatever that list says (chrony `deny`; Statistics ▸ Top Clients ▸ right-click ▸ **Block** adds one, a 🚫 marks it). These and the rate go into a small file for chrony (`allow`, `deny`, `ratelimit`) and chrony is restarted when the rate limit changes, node by node (a new allowed list is applied to the running chrony at once). **Requests per second** limits each client to a rate, with a **burst** (0 = twice the rate, at least 10). *kod* lets chrony answer a limited client with a RATE kiss-o'-death more often than *drop* does. This node itself is always allowed. Rates are per node. chrony rounds the rate to a power of two and limits per client address mask, as `ratelimit` in its manual says.",
       "Servers are edited on the Topology page.",
       ["cli", "ntpdir --show-ntp"],
     ],
@@ -251,6 +251,7 @@ const NTPDIR_HELP = {
       ["fields", [
         ["NTP port (UDP, chrony)", "1–65535, default 123. The port chrony answers NTP on (chrony's `port`). Shared."],
         ["Allowed clients", "Networks that may ask, one per line (`10.0.0.0/8`, `192.168.1.5`, `2001:db8::/32`). Empty (the default) allows everyone; this node itself is always allowed. Shared."],
+        ["Blocked clients", "Clients and networks that get no answers, one per line (`192.168.5.14`, `10.9.0.0/16`, `2001:db8::5`). A block wins over Allowed clients, also when it names a network inside an allowed one. Written to chrony as `deny` and applied at once, without a restart. This node itself cannot be blocked. Statistics ▸ Top Clients ▸ right-click ▸ **Block** adds an address here and **Unblock** removes it. Shared."],
         ["Requests per second", "0 (the default) means no limit. chrony rounds the rate to a power of two. Shared."],
         ["Burst (requests at once)", "How many requests a client may send at once. 0 means twice the rate, at least 10. Shared."],
         ["Over the limit", "`drop` (default; mostly send nothing) or `kod` (chrony answers a limited client with a RATE kiss-o'-death more often, which asks it to slow down). Shared."],

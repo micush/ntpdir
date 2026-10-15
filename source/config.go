@@ -468,6 +468,10 @@ type NTPConfig struct {
 	// AllowedClients are the networks (10.0.0.0/8, 192.168.1.5, 2001:db8::/32) that may use this node (chrony `allow`);
 	// empty means everyone. The node itself always may.
 	AllowedClients []string `json:"allowed_clients,omitempty"`
+	// BlockedClients are clients or networks that get no answers (chrony `deny`), whatever AllowedClients says: a block is
+	// the more specific rule even when it names a network inside an allowed one.  Statistics ▸ Top Clients ▸ right-click ▸
+	// Block adds an address here.  This node itself (loopback) cannot be blocked.
+	BlockedClients []string `json:"blocked_clients,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
 	// is no limit. ClientBurst is how many it may send at once (0 = twice the rate, at least 10). ClientAction is what
 	// a client over its rate gets: "drop" (the default, kept as empty in the file) or "kod" (a kiss-o'-death RATE,
@@ -892,6 +896,10 @@ func (c *NTPConfig) followSettings(shared NTPConfig) {
 	c.AllowedClients = append([]string(nil), shared.AllowedClients...)
 	if len(c.AllowedClients) == 0 {
 		c.AllowedClients = nil
+	}
+	c.BlockedClients = append([]string(nil), shared.BlockedClients...)
+	if len(c.BlockedClients) == 0 {
+		c.BlockedClients = nil
 	}
 	c.ClientExempt = append([]string(nil), shared.ClientExempt...)
 	if len(c.ClientExempt) == 0 {
@@ -1349,7 +1357,7 @@ func (d *NTPConfig) validateClients() error {
 	for _, f := range []struct {
 		name string
 		list *[]string
-	}{{"allowed_clients", &d.AllowedClients}, {"client_exempt", &d.ClientExempt}} {
+	}{{"allowed_clients", &d.AllowedClients}, {"blocked_clients", &d.BlockedClients}, {"client_exempt", &d.ClientExempt}} {
 		if len(*f.list) == 0 {
 			*f.list = nil
 			continue
@@ -1367,6 +1375,12 @@ func (d *NTPConfig) validateClients() error {
 			}
 		}
 		*f.list = norm
+	}
+	for _, s := range d.BlockedClients {
+		n, _ := netip.ParsePrefix(s)
+		if n.Contains(netip.MustParseAddr("127.0.0.1")) || n.Contains(netip.MustParseAddr("::1")) {
+			return fmt.Errorf("ntp: blocked_clients: %s covers this node itself, which always may ask", s)
+		}
 	}
 	if len(d.ClientLimits) == 0 {
 		d.ClientLimits = nil

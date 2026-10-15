@@ -190,6 +190,10 @@ func cloneNTP(d NTPConfig) NTPConfig {
 	if len(d.AllowedClients) == 0 {
 		d.AllowedClients = nil
 	}
+	d.BlockedClients = append([]string(nil), d.BlockedClients...)
+	if len(d.BlockedClients) == 0 {
+		d.BlockedClients = nil
+	}
 	d.ClientExempt = append([]string(nil), d.ClientExempt...)
 	if len(d.ClientExempt) == 0 {
 		d.ClientExempt = nil

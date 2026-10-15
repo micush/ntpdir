@@ -151,6 +151,8 @@ chrony answers on `listen_port` (default 123; chrony's `port`). Server addresses
 
 **Allowed clients.** `allowed_clients` lists the networks that may use the node (`10.0.0.0/8`, `192.168.1.5`, `2001:db8::/32`; chrony's `allow`); empty means everyone. The node itself (loopback) is always allowed.
 
+**Blocked clients.** `blocked_clients` lists clients and networks that get no answers (chrony's `deny all`, written after the `allow` lines, so a block wins over the allowed list, also for a network inside an allowed one). It is applied to the running chrony without a restart. Loopback cannot be blocked. In the web GUI, Statistics ▸ Top Clients ▸ right-click ▸ **Block** / **Unblock** edits it for one address, and a 🚫 marks blocked clients (dim when a network holds the address). chrony has no per-client rate, so there is no per-client limit.
+
 **Client rate limiting** (Configure ▸ NTP ▸ Clients) maps to chrony's `ratelimit` and applies to every gateway.
 
 - **`client_rate`** is the limit per client in requests per second; 0 is no limit. It is rounded to a power of two (chrony's `interval`). **`client_burst`** is how many a client may send at once (0 means twice the rate, at least 10; at most 255).
