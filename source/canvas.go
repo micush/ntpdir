@@ -636,6 +636,7 @@ func setLB(dc *DaemonConfig, g *GroupConfig, e canvasEdit) (string, error) {
 // their defaults, so the gateway keeps following Settings for them until it is given its own.
 func ownPoolFrom(shared NTPConfig) NTPConfig {
 	c := cloneNTP(shared)
+	c.clearNodeWide()
 	c.LB = nil
 	c.setLBValues(defaultNTP().lbValues())
 	return c

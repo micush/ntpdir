@@ -1,5 +1,24 @@
 # Changelog
 
+## [v57] - 2026-10-15 — NTS, symmetric keys and leap-second handling
+
+### Added
+- Configure ▸ NTP ▸ **Security**: **Keys** (chrony key-file lines, `ID HASH KEY`, validated: IDs, hash names, ASCII or HEX keys, no duplicates, at most 64); **Authenticated servers** (`host nts` or `host key N`, the key must exist); **Serve NTS to clients** (chrony's NTS-KE on TCP 4460 with the web GUI certificate, copied to `/etc/chrony/ntpdir.auth.d/` for chrony's group and followed when the certificate is renewed).
+- Configure ▸ NTP ▸ **Leap seconds**: **Leap second table** (`leapsectz`, e.g. `right/UTC`), **Leap second mode** (`leapsecmode`: system, step, slew, ignore) and **Smear leap seconds** (`smoothtime 400 0.001 leaponly`).
+- All shared by the cluster. They go into the chrony client file and, because chrony reads them only at start, a change rolls a chrony restart through the nodes one at a time (the same mechanism as a new port). An authenticated server stays out of chrony's sources until chrony has been restarted with its key or NTS setting, so it is never used without authentication.
+- Safeguards: a leap table that is not on a node, or NTS on a chrony built without it, is left out with a Log warning instead of stopping chrony from starting. The keys are redacted in support bundles and the history says only how many there are.
+- Help pages for the two tabs; the NTP page now has five tabs.
+- Uninstall `--purge` removes `/etc/chrony/ntpdir.auth.d`.
+
+### Changed
+- A gateway's own NTP pool and the probe pool no longer carry copies of the node-wide settings (SNMP, keys, NTS, leap seconds).
+
+### Verified
+- Go tests: validation (good and bad keys, server_auth, leap values), the chrony file (keyfile, ntsservercert/key, leapsectz, leapsecmode, smoothtime, the sum that makes a renewed certificate restart chrony), the files' permissions and removal when switched off, a missing leap table, chrony without NTS, source lines with `nts` / `key N`, the authenticated server waiting for the restart, replication, redaction and history. Headless Chromium: both tabs, saving through `/api/config`.
+
+### Not verified
+- Not run against a real chrony: NTS key establishment, key-signed answers and leap-second behaviour were not exercised (the sandbox has no chrony, systemd or NTS servers).
+
 ## [v56] - 2026-10-15 — Server table: tags no longer run into the State column
 
 ### Fixed

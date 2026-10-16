@@ -2003,6 +2003,14 @@
     { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit. A client is one IPv4 address or one IPv6 /64." },
     { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
     { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
+    { section: "Authentication", note: "Symmetric keys and Network Time Security (NTS). Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
+    { shared: true, k: "keys", l: "Keys", t: "list", wide: true },
+    { shared: true, k: "server_auth", l: "Authenticated servers", t: "list", wide: true },
+    { shared: true, k: "nts_server", l: "Serve NTS to clients", t: "bool" },
+    { section: "Leap seconds", note: "Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
+    { shared: true, k: "leap_tz", l: "Leap second table", t: "text" },
+    { shared: true, k: "leap_mode", l: "Leap second mode", t: "select", options: ["system", "step", "slew", "ignore"] },
+    { shared: true, k: "leap_smear", l: "Smear leap seconds", t: "bool" },
     { section: "Timing" },
     { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", min: 1 },
     { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", min: 1 },
@@ -2113,12 +2121,14 @@
         } catch (_) { clear(snmpPill); }  // no tag when the node cannot be asked
       };
       refreshSNMP();
-      // the NTP page is three tabs; every card stays in the page (a hidden one is still read when saving)
+      // the NTP page is five tabs; every card stays in the page (a hidden one is still read when saving)
       const ntpTabs = () => {
         const TABS = [
           ["Servers", ["Upstream servers"]],
           ["Health", ["Health", "Timing"]],
           ["Clients", ["Serving", "Client Rate Limiting"]],
+          ["Security", ["Authentication"]],
+          ["Leap seconds", ["Leap seconds"]],
         ];
         const titleOf = (c) => ((c.querySelector("header h2") || {}).textContent || "");
         const panes = TABS.map(() => h("div", { role: "tabpanel" }));

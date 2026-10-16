@@ -194,6 +194,14 @@ func cloneNTP(d NTPConfig) NTPConfig {
 	if len(d.BlockedClients) == 0 {
 		d.BlockedClients = nil
 	}
+	d.Keys = append([]string(nil), d.Keys...)
+	if len(d.Keys) == 0 {
+		d.Keys = nil
+	}
+	d.ServerAuth = append([]string(nil), d.ServerAuth...)
+	if len(d.ServerAuth) == 0 {
+		d.ServerAuth = nil
+	}
 	d.SNMPCommunities = append([]string(nil), d.SNMPCommunities...)
 	if len(d.SNMPCommunities) == 0 {
 		d.SNMPCommunities = nil

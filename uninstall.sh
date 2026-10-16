@@ -154,7 +154,7 @@ if [ -n "$CHRONY_CONF" ] && [ -f "$CHRONY_CONF" ] && grep -qxF "$CHRONY_BEGIN" "
     for cf in "$(dirname "$CHRONY_CONF")"/sources.d/*.sources.ntpdir-off; do
       [ -f "$cf" ] && mv -f "$cf" "${cf%.ntpdir-off}"
     done
-    if [ "$PURGE" = 1 ]; then rm -rf "${NTPDIR_CHRONY_SOURCEDIR:-/etc/chrony/ntpdir.sources.d}" "${NTPDIR_CHRONY_CONFDIR:-/etc/chrony/ntpdir.conf.d}"; fi
+    if [ "$PURGE" = 1 ]; then rm -rf "${NTPDIR_CHRONY_SOURCEDIR:-/etc/chrony/ntpdir.sources.d}" "${NTPDIR_CHRONY_CONFDIR:-/etc/chrony/ntpdir.conf.d}" "${NTPDIR_CHRONY_AUTHDIR:-/etc/chrony/ntpdir.auth.d}"; fi
     info "removed the ntpdir block from $CHRONY_CONF and put chrony's own servers back (chrony itself is left installed)"
     if [ "$HAVE_SYSTEMD" = 1 ]; then
       for cu in chrony.service chronyd.service; do

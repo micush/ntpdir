@@ -561,7 +561,10 @@ func configSections(a, b *DaemonConfig) []Section {
 		}
 		out = append(out, Section{"NTP servers", strings.Join(parts, ", ")})
 	}
-	if f := changedFields(toMap(a.NTP), toMap(b.NTP), "servers", "paused_servers", "snmp_communities", "snmp_contact"); len(f) > 0 {
+	if !reflect.DeepEqual(a.NTP.Keys, b.NTP.Keys) && !(len(a.NTP.Keys) == 0 && len(b.NTP.Keys) == 0) { // secrets: only their number
+		out = append(out, Section{"NTP keys", fmt.Sprintf("changed (%d now)", len(b.NTP.Keys))})
+	}
+	if f := changedFields(toMap(a.NTP), toMap(b.NTP), "servers", "paused_servers", "snmp_communities", "snmp_contact", "keys"); len(f) > 0 {
 		out = append(out, Section{"NTP settings", named(f)})
 	}
 	if f := changedFields(toMap(a.Web), toMap(b.Web)); len(f) > 0 {

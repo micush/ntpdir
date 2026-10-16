@@ -132,13 +132,19 @@ func chronyServerLine(addr string) (string, error) {
 }
 
 // chronySourcesFile is the content of the source file for a set of servers (sorted, once each).
-func chronySourcesFile(servers []string) (string, error) {
+func chronySourcesFile(servers []string) (string, error) { return chronySourcesFileAuth(servers, nil) }
+
+// chronySourcesFileAuth is the same with each server's options (auth, by server address) on its line.
+func chronySourcesFileAuth(servers []string, auth map[string]string) (string, error) {
 	seen := map[string]bool{}
 	var lines []string
 	for _, s := range servers {
 		l, err := chronyServerLine(s)
 		if err != nil {
 			return "", err
+		}
+		if n, err := normalizeServer(s); err == nil {
+			l += auth[n]
 		}
 		if !seen[l] {
 			seen[l] = true
@@ -220,6 +226,7 @@ type chronyMgr struct {
 	offLimit int                     // how far the clock may be off and still serve, ms (0: no limit)
 	offOver  bool                    // the clock is beyond that now
 	muted    bool                    // no server is in service: chrony is told to answer nobody
+	auth     map[string]string       // per-server options (" nts", " key 7") by server address
 	allowed  bool                    // the allow rules were put into the running chrony at least once
 	keyFile  string                  // where the port and rate limit chrony runs with are remembered ("": not kept)
 	seen     map[string]chronyClient // chrony's totals per client at the last look (nil before the first)
@@ -247,7 +254,27 @@ func (m *chronyMgr) applySources(servers []string, empty bool) error {
 	if len(servers) == 0 && !empty {
 		return nil
 	}
-	body, err := chronySourcesFile(servers)
+	m.mu.Lock()
+	auth := m.auth
+	m.mu.Unlock()
+	if len(auth) > 0 && !m.authApplied() {
+		// the keys or NTS settings are not in the running chrony yet (a restart is due): a server that is to be
+		// authenticated stays out rather than being used without it
+		var plain []string
+		for _, s := range servers {
+			if n, err := normalizeServer(s); err == nil {
+				if _, need := auth[n]; need {
+					continue
+				}
+			}
+			plain = append(plain, s)
+		}
+		if len(plain) == 0 && len(servers) > 0 {
+			return nil
+		}
+		servers = plain
+	}
+	body, err := chronySourcesFileAuth(servers, auth)
 	if err != nil {
 		return err
 	}
@@ -290,8 +317,14 @@ func serverNames(body string) []string {
 // chronyConfBody is the file for chrony's confdir: the port, who may ask and how often.
 func chronyConfBody(d NTPConfig) (string, error) { return chronyConfBodyMuted(d, false) }
 
-// chronyConfBodyMuted is the same file; muted leaves out every allow line, so chrony answers nobody, also after a restart.
+// chronyConfBodyMuted is the file with no keys, NTS or leap-second settings written out (tests, and chrony before the
+// files for them exist); chronyConfBodyAuth adds them.
 func chronyConfBodyMuted(d NTPConfig, muted bool) (string, error) {
+	return chronyConfBodyAuth(d, muted, authFiles{})
+}
+
+// chronyConfBodyAuth is the file; muted leaves out every allow line, so chrony answers nobody, also after a restart.
+func chronyConfBodyAuth(d NTPConfig, muted bool, af authFiles) (string, error) {
 	var b strings.Builder
 	b.WriteString(chronyHeader)
 	port := d.ListenPort
@@ -342,14 +375,18 @@ func chronyConfBodyMuted(d NTPConfig, muted bool) (string, error) {
 		}
 		fmt.Fprintf(&b, "ratelimit interval %d burst %d leak %d\n", interval, burst, leak)
 	}
+	b.WriteString(authConf(d, af))
 	return b.String(), nil
 }
 
-// restartKey is the part of the client file that chrony can only read at start: the port and the rate limit.
+// restartKey is the part of the client file that chrony can only read at start: the port, the rate limit, the keys, NTS and
+// the leap-second settings.
 func restartKey(body string) string {
 	var k []string
 	for _, l := range strings.Split(body, "\n") {
-		if strings.HasPrefix(l, "port ") || strings.HasPrefix(l, "ratelimit ") {
+		if strings.HasPrefix(l, "port ") || strings.HasPrefix(l, "ratelimit ") || strings.HasPrefix(l, "keyfile ") ||
+			strings.HasPrefix(l, "ntsserver") || strings.HasPrefix(l, "leapsec") || strings.HasPrefix(l, "smoothtime ") ||
+			strings.HasPrefix(l, "# authsum ") {
 			k = append(k, l)
 		}
 	}
@@ -415,6 +452,22 @@ func (m *chronyMgr) appliedKey() string {
 	return defaultRestartKey
 }
 
+// setAuth gives the per-server options chrony's source lines carry (" nts", " key 7"), by server address.
+func (m *chronyMgr) setAuth(auth map[string]string) {
+	m.mu.Lock()
+	m.auth = auth
+	m.mu.Unlock()
+}
+
+// authApplied says the running chrony has the keys and NTS settings the client file now holds (the "# authsum" line of the
+// file equals the one it was started with).
+func (m *chronyMgr) authApplied() bool {
+	m.mu.Lock()
+	body := m.confBody
+	m.mu.Unlock()
+	return authSumOf(body) == authSumOf(m.appliedKey())
+}
+
 func (m *chronyMgr) allowedOK() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -446,7 +499,14 @@ func (m *chronyMgr) applyClients(d NTPConfig) error {
 	m.mu.Lock()
 	muted := m.muted
 	m.mu.Unlock()
-	body, err := chronyConfBodyMuted(d, muted)
+	af, warns := prepareAuth(d)
+	for i, w := range warns {
+		m.warnEvery(fmt.Sprintf("auth%d", i), "chrony: "+w)
+	}
+	if d.LeapTZ != "" && !leapTZExists(d.LeapTZ) {
+		m.warnEvery("leaptz", "chrony: the leap-second table "+d.LeapTZ+" is not in "+zoneinfoDir+" on this node (install tzdata), so it is left out")
+	}
+	body, err := chronyConfBodyAuth(d, muted, af)
 	if err != nil {
 		return err
 	}

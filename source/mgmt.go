@@ -88,6 +88,7 @@ func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
 		return nil, err
 	}
 	m.certs = NewCertManager(stateDir, confPath, func() WebConfig { return *m.webPolicy.Load() })
+	ntsCertSource = func() (string, string) { i := m.certs.Status(); return i.CertFile, i.KeyFile } // chrony serves NTS with the GUI certificate
 	if m.upd, err = NewUpdater(stateDir); err != nil {
 		return nil, err
 	}

@@ -141,15 +141,15 @@ const NTPDIR_HELP = {
       ["ul", [
         "**General** — log level.",
         "**Gateway groups** — one card per gateway (gateways are added and deleted on the Topology page, not here): group id, interface, VIPs, priority, weight, preemption, load-balance method, timers, key, and unicast neighbours. Fields tagged **shared** follow the cluster; the rest belong to this node only.",
-        "**NTP** — three tabs, each with its own help page (open Help while on the tab): **Servers**, **Health** and **Clients**. A gateway drawn on the Topology page can add servers of its own to these.",
+        "**NTP** — five tabs, each with its own help page (open Help while on the tab): **Servers**, **Health**, **Clients**, **Security** and **Leap seconds**. A gateway drawn on the Topology page can add servers of its own to these.",
         "**Web GUI** — listen address, login group, PAM service, session timeout and lockout. Changing the listen address restarts the GUI and ends every session, so you are asked to confirm first.",
-        "**SNMP** — read-only SNMP for monitoring systems: the community strings, a location and a contact. snmpd runs while at least one community string is set and is switched off when the list is empty. Local to this node.",
+        "**SNMP** — read-only SNMP for monitoring systems: the community strings, a location and a contact. snmpd runs while at least one community string is set and is switched off when the list is empty. The community strings and the contact are shared; the location is this node's own.",
         "**Cluster** — the address the other nodes use to reach this one, the peer listen address and sync interval. Joining, promotion and membership are on the Cluster page.",
       ]],
       ["h", "In a cluster"],
       "A change to a shared setting made on a replica is sent to the primary, checked there and replicated to everyone within the sync interval. Use the **Node** menu (top right) to edit another member's own settings.",
       ["h", "Fields"],
-      "Every field of the General, Gateway groups, Web GUI and Cluster pages. The fields of the NTP page are in the help of its three tabs, one page per tab. A field tagged **shared** follows the cluster (a change goes to the primary and is replicated); the others are this node's own. Defaults are those of a new installation.",
+      "Every field of the General, Gateway groups, Web GUI and Cluster pages. The fields of the NTP page are in the help of its five tabs, one page per tab. A field tagged **shared** follows the cluster (a change goes to the primary and is replicated); the others are this node's own. Defaults are those of a new installation.",
       ["h", "General"],
       ["fields", [
         ["Log level", "`debug`, `info` (default), `warning` or `error`. The least important lines the daemon writes to the journal and the Log page."],
@@ -263,6 +263,30 @@ const NTPDIR_HELP = {
         ["Requests per second", "0 (the default) means no limit. chrony rounds the rate to a power of two. Shared."],
         ["Burst (requests at once)", "How many requests a client may send at once. 0 means twice the rate, at least 10. Shared."],
         ["Over the limit", "`drop` (default; mostly send nothing) or `kod` (chrony answers a limited client with a RATE kiss-o'-death more often, which asks it to slow down). Shared."],
+      ]],
+    ],
+  },
+  config_ntp3: {
+    title: "NTP: Security",
+    body: [
+      "Authenticating time: **symmetric keys** (a shared secret between two machines) and **NTS** (Network Time Security, RFC 8915: TLS certificates instead of shared secrets, usable across the internet). Everything here is shared by the cluster and written to chrony's files; chrony reads them only when it starts, so a change restarts chrony on every node, one at a time (Operate ▸ Node shows the progress), like a new port does.",
+      ["h", "Fields"],
+      ["fields", [
+        ["Keys", "Symmetric keys, one per line, written as chrony's key file has them: `ID HASH KEY` (`7 SHA256 HEX:5e0c…`, `8 MD5 mysecret`). The ID is a whole number from 1; the hash is MD5, SHA1, SHA256, SHA384, SHA512, SHA3-224…SHA3-512 or RMD160; the key is up to 64 printable characters (no `#`), or `HEX:` and an even number of hex digits. At most 64 keys. A client that signs its request with one of these keys gets a signed answer; nothing else has to be set here to serve it. The keys are kept in the config file and its history, readable by root only, and left out of support bundles; the history says only how many there are. Shared."],
+        ["Authenticated servers", "How chrony reaches an upstream server, one per line: `time.cloudflare.com nts` (NTS) or `10.0.0.5 key 7` (key 7 from the list above). The server must also be in the Servers list (or a gateway's own list), written the same way (a port, if any, as there). ntpdir's own health probe is a plain NTP request, so the server must answer plain NTP as well as NTS or the key (most public NTS servers do). While chrony has not yet been restarted with a new key or NTS setting, an authenticated server stays out of chrony's sources rather than being used without authentication. NTS needs a chrony 4.0 or newer built with NTS and a clock close enough to check certificates (about a day). A server cannot use both. Shared."],
+        ["Serve NTS to clients", "Also serve NTS: chrony answers NTS key establishment on TCP 4460 (open that port in the firewall) with this node's web GUI certificate (Configure ▸ Web GUI), which is copied to a file chrony can read and followed when it is renewed. Clients must connect by a name the certificate has, so install a certificate for your gateway's name there; a client that does not trust its issuer refuses it. Each node keeps its own NTS cookie keys, so a client that moves to another node (anycast failover) has to set up NTS again, which chrony and most clients do by themselves. Shared."],
+      ]],
+    ],
+  },
+  config_ntp4: {
+    title: "NTP: Leap seconds",
+    body: [
+      "How chrony treats a leap second (a minute of 61 seconds, announced by the time sources a few months ahead). All shared by the cluster, written to chrony and applied by restarting chrony on every node, one at a time.",
+      ["h", "Fields"],
+      ["fields", [
+        ["Leap second table", "The name of a time zone in the system's tz database that carries leap seconds, normally `right/UTC` (chrony's `leapsectz`). chrony then knows about a leap second from the table as well as from its sources. It must exist on every node (`/usr/share/zoneinfo/right/UTC`, from the tzdata package); a node that lacks it leaves the line out and says so in the Log. Empty (the default) uses what the sources announce. Shared."],
+        ["Leap second mode", "What the node's own clock does at a leap second (chrony's `leapsecmode`): `system` (the default: the kernel inserts or deletes the second), `step` (chrony steps the clock just after it), `slew` (chrony slews the clock to the new time, so it is briefly off by up to a second) or `ignore` (the second is not applied, and the clock is corrected later). Shared."],
+        ["Smear leap seconds", "Serve clients a time that is smeared across the leap second (over about 17 hours, chrony's `smoothtime 400 0.001 leaponly`) instead of repeating a second at midnight. Clients see no 61st second. Only the answers to clients are smeared, not the node's own clock. Do not mix smeared and unsmeared servers in one client's list, and do not use a smeared server as an upstream of another node. Shared."],
       ]],
     ],
   },

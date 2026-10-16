@@ -476,7 +476,14 @@ type NTPConfig struct {
 	// AllowedClients: every node answers the same communities and reports the same contact.  The location is per node and
 	// lives in DaemonConfig.SNMP.  See snmp.go.
 	SNMPCommunities []string `json:"snmp_communities,omitempty"`
-	SNMPContact     string   `json:"snmp_contact,omitempty"`
+	// Keys, ServerAuth, NTSServer, LeapTZ, LeapMode and LeapSmear: authentication and leap seconds for chrony (see auth.go).
+	Keys        []string `json:"keys,omitempty"`
+	ServerAuth  []string `json:"server_auth,omitempty"`
+	NTSServer   bool     `json:"nts_server,omitempty"`
+	LeapTZ      string   `json:"leap_tz,omitempty"`
+	LeapMode    string   `json:"leap_mode,omitempty"`
+	LeapSmear   bool     `json:"leap_smear,omitempty"`
+	SNMPContact string   `json:"snmp_contact,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
 	// is no limit. ClientBurst is how many it may send at once (0 = twice the rate, at least 10). ClientAction is what
 	// a client over its rate gets: "drop" (the default, kept as empty in the file) or "kod" (a kiss-o'-death RATE,
@@ -780,6 +787,9 @@ func (d *NTPConfig) Validate() error {
 		if f.v < 1 {
 			return fmt.Errorf("ntp: %s must be >= 1", f.name)
 		}
+	}
+	if err := d.validateAuth(); err != nil {
+		return err
 	}
 	if err := d.validateClientNames(); err != nil {
 		return err
@@ -1315,6 +1325,7 @@ func keepStrings(l []string, valid map[string]bool) []string {
 // live is the configuration the probe pool runs with: paused servers left out.
 func (d NTPConfig) live() NTPConfig {
 	d.ServerNames = nil // labels only: a rename must not restart the pool
+	d.clearNodeWide()   // chrony's and SNMP's, not the pool's
 	if len(d.PausedServers) != 0 || len(d.PausedServersHere) != 0 {
 		var up []string
 		for _, s := range d.Servers {
@@ -1481,4 +1492,11 @@ func (dc *DaemonConfig) snmpSettings() SNMPConfig {
 		c.Location = dc.SNMP.Location
 	}
 	return c
+}
+
+// clearNodeWide drops the settings that belong to the node as a whole (SNMP, keys, NTS, leap seconds): a gateway's own pool and
+// the probe pool have no use for them, and a copy of them would only go stale.
+func (d *NTPConfig) clearNodeWide() {
+	d.SNMPCommunities, d.SNMPContact = nil, ""
+	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
 }

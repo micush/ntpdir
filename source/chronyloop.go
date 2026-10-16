@@ -59,6 +59,12 @@ func (s *Supervisor) syncChrony() {
 	nd := s.sharedNTP()
 	chrony.setOffsetLimit(nd.ServeOffsetMS)
 	chrony.setServing(len(servers) > 0 && !chrony.tooFar(st), nd)
+	if auth, err := parseServerAuth(nd.ServerAuth, nil); err == nil {
+		chrony.setAuth(auth)
+	}
+	if nd.NTSServer { // the certificate may have been renewed: the copy chrony reads follows it
+		s.applyChronyClients()
+	}
 	if err := chrony.applySources(servers, empty); err != nil {
 		chrony.warnEvery("sources", err.Error())
 	}
