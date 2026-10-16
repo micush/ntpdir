@@ -150,8 +150,9 @@ table.ntp th:nth-child(4) { width: 9rem; }
 table.ntp th:nth-child(5) { width: 4.5rem; }
 table.ntp th:nth-child(6), table.ntp th:nth-child(7) { width: 5.5rem; }
 table.ntp th:nth-child(8) { width: 9rem; }
-table.ntp td.num, table.ntp td.mono { white-space: nowrap; }
-table.ntp td.mono { overflow: hidden; text-overflow: ellipsis; }   /* a long address or its tags never run into the next column */
+table.ntp td.num { white-space: nowrap; }
+table.ntp td.mono { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }   /* a long address, or its tags, wrap onto a second line instead of being cut off */
+table.ntp td.mono .fam-tag, table.ntp td.mono .fb-tag { white-space: nowrap; display: inline-block; }
 table.ntp .bar-wrap { width: 60px; }
 table.ntp th:nth-child(9) { width: 5rem; }
 table.ntp th:nth-child(10), table.ntp th:nth-child(11) { width: 3rem; }

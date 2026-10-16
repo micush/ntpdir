@@ -1,5 +1,13 @@
 # Changelog
 
+## [v61] - 2026-10-16 — Server tags no longer cut off
+
+### Fixed
+- Server table: the tags after a server address (v4, v6, NTS/key, fallback) were clipped when the address was long, leaving a half-drawn tag. The Server IP cell now wraps the tags onto a second line instead.
+
+### Verified
+- Rendered the table at its real column widths in headless Chromium: address plus three tags wraps with every tag whole. Go suite unchanged from v60.
+
 ### Verified
 - `go test -race .` passes, with a new test that closes the gate for no BGP, disabled BGP, and no established neighbor and reopens it on Established. Browser check of the per-topology time zone (e2e/t23.py).
 
