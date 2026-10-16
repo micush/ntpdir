@@ -1,5 +1,27 @@
 # Changelog
 
+## [v63] - 2026-10-16 — Traceroute: resolve names
+
+### Added
+- The traceroute popup has a **Resolve names** tickbox. Ticked, each hop is shown by its reverse-DNS name where it has one; unticked, by its address. It can be switched while the trace runs or after it ends, with no new trace; the choice is remembered in the browser. The node looks the hop names up in the background as hops appear (the job now also carries the table as data: `hops` in `/api/nettool`).
+
+### Verified
+- `go test -race .` passes, with a test that a hop's table row and background name arrive; headless Chromium check of the tickbox switching names and addresses.
+
+### Not verified
+- Not run with a real `mtr`; the sandbox has none.
+
+## [v62] - 2026-10-16 — Lookup on clients and servers
+
+### Added
+- Statistics ▸ Top Clients and Top Servers: right-click ▸ **Lookup** (as in dnsdir). A client address shows its reverse (PTR) names as this node's resolver answers; a server name shows its addresses, canonical name, mail servers, name servers and text records. Asked once when requested; nothing is stored. `GET /api/dnslookup/full?lookup=…`.
+
+### Verified
+- `go test -race .` passes, with a test of both lookup kinds; `node --check` on the UI scripts.
+
+### Not verified
+- Not clicked through in a browser against a live node.
+
 ## [v61] - 2026-10-16 — Server tags no longer cut off
 
 ### Fixed

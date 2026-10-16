@@ -312,6 +312,8 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	case "whois.get":
 		return whoisWithAddrs(a.Lookup)
 	// a name for an address (reverse lookup) or an address for a name, for the Add NTP server form
+	case "dns.lookup.full":
+		return lookupFull(a.Lookup)
 	case "host.lookup":
 		return hostLookup(a.Lookup)
 	// this node's clock, for the clock in the gateway circle (and --show-ntp)
