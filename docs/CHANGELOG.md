@@ -1,5 +1,10 @@
 # Changelog
 
+## [v68] - 2026-10-16 — Scheduler shell environment
+
+### Changed
+- A scheduled shell command gets the usual command directories on its PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, added to whatever the daemon has) and `HOME=/root` when unset, so `ls`, `systemctl` and the like are found as in a root shell. It does not read a login profile (`~/.bashrc`, `/etc/profile`); use full paths or source one in the command. `NTPDIR_TASK` holds the task name.
+
 ## [v67] - 2026-10-16 — Scheduler: update, reboot, UTC
 
 ### Added
