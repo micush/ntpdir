@@ -228,3 +228,64 @@ func TestAuthAndLeapSettingsAreSharedAndNotKeptInPools(t *testing.T) {
 		t.Fatal("the probe pool must not restart for them")
 	}
 }
+
+func TestParseAuthdata(t *testing.T) {
+	out := []byte("time.cloudflare.com,NTS,1,AEAD_AES_SIV_CMAC_256,32,1500,0,0,8,100\n10.0.0.5,SK,7,SHA256,32,0,0,0,0,0\n10.0.0.6,None,0,,0,0,0,0,0,0\n")
+	a := parseAuthdata(out)
+	if len(a) != 3 || a[0].Mode != "nts" || a[0].Cookies != 8 || a[1].Mode != "key" || a[1].KeyID != 7 || a[2].Mode != "none" {
+		t.Fatalf("%+v", a)
+	}
+}
+
+func TestAuthStatusTellsWorkingFromFailingFromPending(t *testing.T) {
+	authTestDirs(t)
+	dir := t.TempDir()
+	m := &chronyMgr{warned: map[string]time.Time{}, keyFile: dir + "/applied"}
+	d := defaultNTP()
+	d.Keys = []string{"7 SHA256 HEX:00ff10"}
+	d.ServerAuth = []string{"10.0.0.5 key 7", "time.cloudflare.com nts"}
+	_ = os.MkdirAll(chronyConfDir, 0o755)
+	oc := chronyConfDir
+	chronyConfDir = dir + "/c"
+	defer func() { chronyConfDir = oc }()
+	oldc := chronyc
+	chronyc = func(args ...string) ([]byte, error) { return []byte("200 OK"), nil }
+	defer func() { chronyc = oldc }()
+	if err := m.applyClients(d); err != nil {
+		t.Fatal(err)
+	}
+	auth, _ := parseServerAuth(d.ServerAuth, nil)
+	m.setAuth(auth)
+	if s := m.authStatus("time.cloudflare.com:123", ChronyState{}); s == nil || s.Status != "pending" {
+		t.Fatalf("before chrony restarts: %+v", s)
+	}
+	if m.authStatus("pool.ntp.org:123", ChronyState{}) != nil {
+		t.Fatal("a server that is not set to be authenticated has no status")
+	}
+	m.markApplied() // chrony restarted with the file
+	st := ChronyState{
+		Sources: []ChronySrc{{Name: "time.cloudflare.com", Reach: 8}, {Name: "10.0.0.5", Reach: 8}},
+		Auth:    []ChronyAuth{{Name: "time.cloudflare.com", Mode: "nts", Cookies: 8}, {Name: "10.0.0.5", Mode: "key", KeyID: 7}},
+	}
+	if s := m.authStatus("time.cloudflare.com:123", st); s.Status != "ok" || !strings.Contains(s.Detail, "8 cookies") {
+		t.Fatalf("%+v", s)
+	}
+	if s := m.authStatus("10.0.0.5:123", st); s.Status != "ok" {
+		t.Fatalf("%+v", s)
+	}
+	st.Auth[0].Cookies, st.Auth[0].Attempts = 0, 3
+	if s := m.authStatus("time.cloudflare.com:123", st); s.Status != "failing" || !strings.Contains(s.Detail, "3 attempt") {
+		t.Fatalf("%+v", s)
+	}
+	st.Sources[1].Reach = 0
+	if s := m.authStatus("10.0.0.5:123", st); s.Status != "failing" {
+		t.Fatalf("a keyed server that does not answer: %+v", s)
+	}
+	st.Auth[1].Mode = "none"
+	if s := m.authStatus("10.0.0.5:123", st); s.Status != "failing" || !strings.Contains(s.Detail, "without") {
+		t.Fatalf("%+v", s)
+	}
+	if s := m.authStatus("10.0.0.5:123", ChronyState{}); s.Status != "pending" {
+		t.Fatalf("not a chrony source yet: %+v", s)
+	}
+}

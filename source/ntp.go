@@ -314,6 +314,8 @@ type ServerStat struct {
 	// Falseticker: its time differs from that of the other servers by more than max_offset_ms.
 	Chrony      string `json:"chrony,omitempty"` // chrony's mark for this server when it is one of its sources (see ChronySrc)
 	Falseticker bool   `json:"falseticker,omitempty"`
+	// Auth says how the authentication of the server goes when it is set to use NTS or a key (Configure ▸ NTP ▸ Security).
+	Auth *AuthStat `json:"auth,omitempty"`
 	// Which address families the server was probed over; Via is the one its numbers come from (IPv4 when it answers well).
 	Via      string    `json:"via,omitempty"`
 	Families []FamStat `json:"families,omitempty"`

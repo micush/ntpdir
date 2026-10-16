@@ -179,17 +179,18 @@ func writeIfChanged(dir, name, content string) (bool, error) {
 
 // ChronyState is what chrony says about itself (chronyc tracking).
 type ChronyState struct {
-	Running   bool        `json:"running"`
-	Synced    bool        `json:"synced"`
-	Stratum   int         `json:"stratum"`
-	Ref       string      `json:"ref,omitempty"`      // the server it is synchronised to, or its reference ID
-	OffsetMS  float64     `json:"offset_ms"`          // the system clock's offset from the time chrony believes
-	RootDelay float64     `json:"root_delay_ms"`      // ms
-	RootDisp  float64     `json:"root_dispersion_ms"` // ms
-	Leap      string      `json:"leap,omitempty"`     // Normal, Insert second, Delete second, Not synchronised
-	Err       string      `json:"error,omitempty"`    // why it could not be read
-	At        int64       `json:"at,omitempty"`       // unix seconds of the reading
-	Sources   []ChronySrc `json:"sources"`            // the sources chrony has
+	Running   bool         `json:"running"`
+	Synced    bool         `json:"synced"`
+	Stratum   int          `json:"stratum"`
+	Ref       string       `json:"ref,omitempty"`      // the server it is synchronised to, or its reference ID
+	OffsetMS  float64      `json:"offset_ms"`          // the system clock's offset from the time chrony believes
+	RootDelay float64      `json:"root_delay_ms"`      // ms
+	RootDisp  float64      `json:"root_dispersion_ms"` // ms
+	Leap      string       `json:"leap,omitempty"`     // Normal, Insert second, Delete second, Not synchronised
+	Err       string       `json:"error,omitempty"`    // why it could not be read
+	At        int64        `json:"at,omitempty"`       // unix seconds of the reading
+	Sources   []ChronySrc  `json:"sources"`            // the sources chrony has
+	Auth      []ChronyAuth `json:"auth,omitempty"`     // what chrony says about the authentication of its sources (chronyc authdata)
 }
 
 // ChronySrc is one source chrony has: State is chronyc's mark (* selected, + combined, - not combined, ? unreachable,
@@ -613,9 +614,19 @@ func (m *chronyMgr) readState() ChronyState {
 	}
 	if err != nil {
 		st = ChronyState{Err: err.Error(), At: time.Now().Unix()}
-	} else if so, err := chronyc("-n", "-c", "sources"); err == nil {
-		for _, s := range parseSources(so) {
-			st.Sources = append(st.Sources, ChronySrc{Name: s.Name, State: s.State, Reach: s.Reach})
+	} else {
+		if so, err := chronyc("-n", "-c", "sources"); err == nil {
+			for _, s := range parseSources(so) {
+				st.Sources = append(st.Sources, ChronySrc{Name: s.Name, State: s.State, Reach: s.Reach})
+			}
+		}
+		m.mu.Lock()
+		wantAuth := len(m.auth) > 0
+		m.mu.Unlock()
+		if wantAuth { // only when a server is set to be authenticated
+			if ao, err := chronyc("-n", "-c", "authdata"); err == nil {
+				st.Auth = parseAuthdata(ao)
+			}
 		}
 	}
 	m.mu.Lock()

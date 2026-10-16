@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -346,4 +347,108 @@ func authSumOf(s string) string {
 		}
 	}
 	return ""
+}
+
+// ChronyAuth is one line of `chronyc authdata`: how a source is authenticated.
+type ChronyAuth struct {
+	Name     string `json:"name"`
+	Mode     string `json:"mode"` // "nts", "key" or "none"
+	KeyID    int    `json:"key_id,omitempty"`
+	Attempts int    `json:"attempts"` // NTS key establishments tried since the last success
+	NAK      int    `json:"nak"`
+	Cookies  int    `json:"cookies"` // NTS cookies in hand; -1 when chrony did not say
+}
+
+// parseAuthdata reads `chronyc -n -c authdata`: name, mode, key id, key type, key length, seconds since the last key
+// establishment, attempts, NAKs, cookies, cookie length.
+func parseAuthdata(out []byte) []ChronyAuth {
+	var res []ChronyAuth
+	for _, l := range strings.Split(string(out), "\n") {
+		f := csvFields(l)
+		if len(f) < 3 || f[0] == "" {
+			continue
+		}
+		a := ChronyAuth{Name: f[0], Cookies: -1}
+		switch m := strings.ToUpper(f[1]); {
+		case strings.Contains(m, "NTS"):
+			a.Mode = "nts"
+		case m == "SK" || strings.Contains(m, "KEY") || strings.Contains(m, "SYM"):
+			a.Mode = "key"
+		default:
+			a.Mode = "none"
+		}
+		a.KeyID, _ = strconv.Atoi(f[2])
+		if len(f) >= 9 {
+			a.Attempts, _ = strconv.Atoi(f[6])
+			a.NAK, _ = strconv.Atoi(f[7])
+			a.Cookies, _ = strconv.Atoi(f[8])
+		}
+		res = append(res, a)
+	}
+	return res
+}
+
+// AuthStat is what the server table says about a server that is set to be authenticated.
+type AuthStat struct {
+	Mode   string `json:"mode"`   // "nts" or "key"
+	Status string `json:"status"` // ok, pending (chrony has not started with the setting yet) or failing
+	Detail string `json:"detail"`
+}
+
+// authStatus says how the authentication of a server is going, or nil when it is not set to be authenticated.  chrony says
+// it does not use authentication for a source with mode none, so a setting chrony did not take is told apart from one that
+// does not work.
+func (m *chronyMgr) authStatus(addr string, st ChronyState) *AuthStat {
+	m.mu.Lock()
+	opt, ok := "", false
+	if n, err := normalizeServer(addr); err == nil {
+		opt, ok = m.auth[n]
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	mode := "nts"
+	if strings.HasPrefix(strings.TrimSpace(opt), "key") {
+		mode = "key"
+	}
+	label := map[string]string{"nts": "NTS", "key": "the key" + strings.TrimPrefix(strings.TrimSpace(opt), "key")}[mode]
+	if !m.authApplied() {
+		return &AuthStat{Mode: mode, Status: "pending", Detail: "waiting for chrony to restart with this setting; the server is not used until then"}
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	var a *ChronyAuth
+	for i := range st.Auth {
+		if strings.EqualFold(st.Auth[i].Name, host) {
+			a = &st.Auth[i]
+		}
+	}
+	var src *ChronySrc
+	for i := range st.Sources {
+		if strings.EqualFold(st.Sources[i].Name, host) {
+			src = &st.Sources[i]
+		}
+	}
+	switch {
+	case a == nil && src == nil:
+		return &AuthStat{Mode: mode, Status: "pending", Detail: "not one of chrony's sources yet"}
+	case a == nil || a.Mode != mode:
+		return &AuthStat{Mode: mode, Status: "failing", Detail: "chrony uses this server without " + label}
+	case mode == "nts" && a.Cookies == 0:
+		d := "no NTS cookies yet: key establishment with the server has not succeeded"
+		if a.Attempts > 0 {
+			d += fmt.Sprintf(" (%d attempt(s))", a.Attempts)
+		}
+		return &AuthStat{Mode: mode, Status: "failing", Detail: d}
+	case mode == "key" && (src == nil || src.Reach == 0):
+		return &AuthStat{Mode: mode, Status: "failing", Detail: "the server does not answer with " + label + " (wrong key, or it does not have it)"}
+	}
+	d := "authenticated with " + label
+	if mode == "nts" && a.Cookies > 0 {
+		d += fmt.Sprintf(" (%d cookies)", a.Cookies)
+	}
+	return &AuthStat{Mode: mode, Status: "ok", Detail: d}
 }

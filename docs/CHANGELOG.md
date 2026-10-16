@@ -1,5 +1,16 @@
 # Changelog
 
+## [v58] - 2026-10-15 — Authentication status in the server table
+
+### Added
+- The server table (Monitor) shows, after the Server IP of a server set to use NTS or a key, whether the authentication works: a green **NTS** or **key** tag when chrony authenticates with it (hover: the number of NTS cookies), a red tag with a cross when it does not (NTS key establishment failed, the key is refused or unanswered, or chrony uses the server without it), a grey tag with dots while chrony has not yet restarted with the setting. It reads `chronyc authdata`, only while a server is set to be authenticated.
+
+### Verified
+- Go tests: the authdata parser and every state (pending, working, no cookies, key not answered, used without authentication, not yet a source, server not set to be authenticated).
+
+### Not verified
+- The exact column layout of `chronyc -c authdata` on every chrony version (written from chrony's documented columns; an older chrony without `authdata` shows no tag).
+
 ## [v57] - 2026-10-15 — NTS, symmetric keys and leap-second handling
 
 ### Added

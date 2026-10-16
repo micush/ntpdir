@@ -299,6 +299,7 @@ func (s *StatusServer) namedServers(pi poolInfo) []ServerStat {
 	for i := range sv {
 		sv[i].Name = names[sv[i].Addr]
 		sv[i].Chrony = cs.stateOf(sv[i].Addr)
+		sv[i].Auth = chrony.authStatus(sv[i].Addr, cs)
 	}
 	return sv
 }
