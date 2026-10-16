@@ -512,6 +512,7 @@ type SchedRun struct {
 type schedState struct {
 	Last    map[string]int64 `json:"last"` // task id -> the scheduled time (unix) last dealt with
 	History []SchedRun       `json:"history"`
+	Queue   []schedQueued    `json:"queue,omitempty"` // jobs waiting for the one that is running
 }
 
 // Scheduler runs this node's part of the tasks.
@@ -522,6 +523,7 @@ type Scheduler struct {
 	tasks   []SchedTask
 	st      schedState
 	running map[string]bool
+	node    string                   // this node, as of the last Tick
 	slots   map[string]time.Duration // staggered places already worked out (schedstagger.go)
 	now     func() time.Time         // replaceable in tests
 	// act runs a built-in action (replaceable in tests)
@@ -593,6 +595,7 @@ func (s *Scheduler) Tick(nodeID string) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.node = nodeID
 	known := map[string]bool{}
 	dirty := false
 	for _, t := range s.tasks {
@@ -639,8 +642,12 @@ func (s *Scheduler) Tick(nodeID string) {
 		}
 		s.st.Last[t.ID] = due.Unix()
 		dirty = true
-		if s.running[t.ID] {
-			s.addLocked(SchedRun{Task: t.ID, Name: t.Name, Action: t.Action, Base: due.Unix(), Start: now.Unix(), End: now.Unix(), Status: "skipped", Output: "the previous run was still going"})
+		if s.running[t.ID] || s.queuedLocked(t.ID) {
+			s.addLocked(SchedRun{Task: t.ID, Name: t.Name, Action: t.Action, Base: due.Unix(), Start: now.Unix(), End: now.Unix(), Status: "skipped", Output: "the previous run was still going or waiting"})
+			continue
+		}
+		if len(s.running) > 0 { // one job at a time: wait for the one that is running
+			s.st.Queue = append(s.st.Queue, schedQueued{ID: t.ID, Base: due.Unix()})
 			continue
 		}
 		s.startLocked(t, due.Unix(), "schedule")
@@ -651,7 +658,8 @@ func (s *Scheduler) Tick(nodeID string) {
 			dirty = true
 		}
 	}
-	if dirty {
+	s.drainLocked()
+	if dirty || len(s.st.Queue) > 0 {
 		s.saveLocked()
 	}
 }
@@ -681,6 +689,7 @@ func (s *Scheduler) startLocked(t SchedTask, base int64, actor string) {
 			}
 		}
 		s.saveLocked()
+		s.drainLocked()
 		if err != nil {
 			warnf("scheduler: task %q failed: %v", t.Name, err)
 		} else {
@@ -707,6 +716,9 @@ func (s *Scheduler) RunNow(id, actor string) error {
 		}
 		if s.running[id] {
 			return errors.New("that task is running now")
+		}
+		if len(s.running) > 0 {
+			return errors.New("another task is running; tasks run one at a time")
 		}
 		warnf("scheduler: %q ran task %q now", actor, t.Name)
 		s.startLocked(t, 0, actor)
@@ -798,6 +810,7 @@ type SchedTaskView struct {
 	Describe string    `json:"describe"`
 	Applies  bool      `json:"applies"`
 	Running  bool      `json:"running"`
+	Queued   bool      `json:"queued,omitempty"`
 	Next     int64     `json:"next,omitempty"`     // the next scheduled time (unix)
 	NextRun  int64     `json:"next_run,omitempty"` // when this node will run it (the scheduled time plus this node's offset)
 	Last     *SchedRun `json:"last,omitempty"`
@@ -821,7 +834,7 @@ func (s *Scheduler) Status() SchedStatus {
 	out := SchedStatus{NodeID: node, Now: now.Unix(), Tasks: []SchedTaskView{}, History: []SchedRun{}, Actions: schedActions}
 	for _, t := range s.tasks {
 		t := t
-		v := SchedTaskView{ID: t.ID, Name: t.Name, Action: t.Action, Disabled: t.Disabled, Task: t, Describe: t.describe(), Applies: t.appliesTo(node), Running: s.running[t.ID]}
+		v := SchedTaskView{ID: t.ID, Name: t.Name, Action: t.Action, Disabled: t.Disabled, Task: t, Describe: t.describe(), Applies: t.appliesTo(node), Running: s.running[t.ID], Queued: s.queuedLocked(t.ID)}
 		if !t.Disabled {
 			// the next run of this node: an occurrence whose own time in the window has not yet passed counts too
 			from := now.Add(-time.Duration(t.WindowSec) * time.Second)
