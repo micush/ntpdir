@@ -1,5 +1,13 @@
 # Changelog
 
+## [v59] - 2026-10-15 — Clock difference between nodes
+
+### Added
+- The members table (Operate ▸ Cluster and the Monitor page) has a **Clock vs this node (ms)** column: how far each member's clock is from the node you are logged in to, and under the table **Largest difference between nodes** with the two members furthest apart. Each node reports how far its clock is from the time chrony believes (`chronyc tracking`) in its cluster status; every node measures against the same servers, so the difference of two readings is the difference of the clocks, to within chrony's own estimate error (hover a figure for both readings). Members that are not synchronised, not reachable or on an older version are marked and left out of the comparison.
+
+### Verified
+- Go tests: the comparison (reachable, synchronised nodes only; nothing with fewer than two; older nodes left out) and the status message carrying the reading. Headless Chromium: the column, the "this node" / "not synchronised" / "–" states and the summary line.
+
 ## [v58] - 2026-10-15 — Authentication status in the server table
 
 ### Added

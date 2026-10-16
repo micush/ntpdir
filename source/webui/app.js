@@ -2339,6 +2339,16 @@
   // The Monitor page (named) has the node's name and its addresses in two columns; the cluster address is the name's tooltip.
   const membersTable = (v, onRemove, named) => {
     const roleOf = (p) => (p.is_primary ? "primary" : (p.role || "replica"));
+    // How far each node's clock is from this node's: both measure against the same servers, so the difference of the two offsets
+    // chrony reports is the difference of the clocks (a magnitude: which one leads is not claimed).
+    const me = v.peers.find((p) => p.self);
+    const clockCell = (p) => {
+      if (!p.reachable || !p.clock) return h("td", { class: "num muted", title: p.reachable ? "this node does not report its clock (an older version, or chrony is not running)" : "" }, "–");
+      if (!p.clock.synced) return h("td", { class: "num" }, pill("not synchronised", "warn"));
+      if (p.self || !me || !me.clock || !me.clock.synced) return h("td", { class: "num muted", title: "offset " + p.clock.offset_ms.toFixed(3) + " ms from chrony's time" }, p.self ? "this node" : "–");
+      const d = Math.abs(p.clock.offset_ms - me.clock.offset_ms);
+      return h("td", { class: "num", title: "offsets from chrony's time: this node " + me.clock.offset_ms.toFixed(3) + " ms, that node " + p.clock.offset_ms.toFixed(3) + " ms" }, d.toFixed(2));
+    };
     const rows = v.peers.map((p) => h("tr", Object.assign({ class: p.self ? "local" : "" }, onRemove && !p.self ? { tabindex: "0", oncontextmenu: rowMenu([["Remove", () => onRemove(p), "danger"]]) } : {}),
       named ? h("td", { class: "nname", title: p.addr }, p.hostname || p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)) : h("td", { class: "mono" }, p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)),
       named ? h("td", { class: "mono" }, (p.ips && p.ips.length) ? p.ips.map((ip) => h("div", {}, ip)) : "–") : null,
@@ -2346,11 +2356,13 @@
       h("td", {}, p.reachable ? pill("yes", "ok") : p.restarting ? pill("restarting", "info") : pill("NO", "bad"), p.updating || p.restarting ? [" ", pill("updating", "warn")] : null),
       h("td", { class: "num" }, p.reachable ? p.epoch : "–"),
       h("td", { class: "num" }, p.version || "–"), h("td", { class: "num" }, p.source_version || "–"),
+      clockCell(p),
       h("td", {}, p.self ? "now" : when(p.last_seen)),
       h("td", { class: "wrap muted" }, p.error || "")));
     return h("div", { class: "scroll" }, h("table", { class: named ? "tight" : null },
-      h("thead", {}, h("tr", {}, (named ? ["Node name", "Node IP"] : ["Node"]).concat(["Role", "Reachable", "Epoch", "Running", "Source", "Last seen", ""]).map((t, i) => h("th", { class: i >= (named ? 4 : 3) && i <= (named ? 6 : 5) ? "num" : "" }, t)))),
-      h("tbody", {}, rows)));
+      h("thead", {}, h("tr", {}, (named ? ["Node name", "Node IP"] : ["Node"]).concat(["Role", "Reachable", "Epoch", "Running", "Source", "Clock vs this node (ms)", "Last seen", ""]).map((t, i) => h("th", { class: i >= (named ? 4 : 3) && i <= (named ? 7 : 6) ? "num" : "" }, t)))),
+      h("tbody", {}, rows)),
+      v.clock_spread ? h("p", { class: "hint" }, "Largest difference between nodes: " + v.clock_spread.ms.toFixed(2) + " ms (" + v.clock_spread.apart + "), across " + v.clock_spread.nodes + " synchronised nodes.") : null);
   };
   const say = (el, kind, ...msg) => kind !== "bad" ? clear(el) : clear(el).append(h("div", { class: "notice " + kind, role: kind === "bad" ? "alert" : "status" }, ...msg));
   const fail = (el) => (e) => { if (e.message !== "unauthenticated") say(el, "bad", e.message); };

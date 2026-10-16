@@ -108,7 +108,7 @@ const NTPDIR_HELP = {
   nodes: {
     title: "Cluster",
     body: [
-      "Every node that shares settings with this one: its **name** and **IP** addresses (IPv4, IPv6 global and unique local; hover the name for the node's cluster address), its **role** (primary or replica), whether it is **reachable**, its **epoch**, the version it is **running** and the version of the **source** it holds (they differ while an update is under way), and when it was last seen. The node you are logged in to is marked ★. Adding, removing and promoting nodes is on the Cluster page; this card only watches.",
+      "Every node that shares settings with this one: its **name** and **IP** addresses (IPv4, IPv6 global and unique local; hover the name for the node's cluster address), its **role** (primary or replica), whether it is **reachable**, its **epoch**, the version it is **running** and the version of the **source** it holds (they differ while an update is under way), how far its clock is from this node's (**Clock vs this node**), and when it was last seen. The node you are logged in to is marked ★. Adding, removing and promoting nodes is on the Cluster page; this card only watches.",
       ["cli", "ntpdir --cluster-status"],
     ],
   },
@@ -329,6 +329,7 @@ const NTPDIR_HELP = {
         "**Reachable**: whether this node could ask that member for its status just now; when it says no, the reason is shown.",
         "**Epoch**: that member's view of the epoch (see above). They should all agree.",
         "**Running** and **Source**: the version the member is running, and the newest uploaded source version it holds.",
+        "**Clock vs this node (ms)**: how far that member's clock is from this node's clock. Every node measures its clock against the same servers (`chronyc tracking`) and tells the others, and the difference of the two readings is the difference of the clocks, accurate to about the error of chrony's own estimate (usually well under a millisecond on a LAN; hover a figure for both readings). *this node* marks your row, *not synchronised* a member whose chrony has no time yet, and – a member that does not say (an older version, chrony not running, or not reachable). Under the table, **Largest difference between nodes** is the gap between the two members furthest apart. A node whose gap grows toward **Serve only within** (Configure ▸ NTP ▸ Health) is about to leave service.",
         "**Last seen**: when the member last answered.",
       ]],
       ["h", "Working on another member"],

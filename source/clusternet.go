@@ -76,6 +76,9 @@ type PeerStatusMsg struct {
 	ChronyRoll string `json:"chrony_roll,omitempty"`
 	// Host is this node's CPU, memory and disk use, for the Topology drawing (absent on older nodes).
 	Host *HostLoad `json:"host,omitempty"`
+	// Clock is how far this node's clock is from the time chrony believes (absent when chrony is not running, and on older
+	// nodes); the Cluster page compares the nodes with it.
+	Clock *ClockReading `json:"clock,omitempty"`
 	// Addrs are this node's Ethernet interfaces with their IPv4 and IPv6 GUA addresses, for the node's tooltip on the
 	// Topology drawing (absent on older nodes).
 	Addrs []NodeIface `json:"addrs,omitempty"`
@@ -626,7 +629,7 @@ func (c *Cluster) statusMsg() PeerStatusMsg {
 		Peers: append(c.knownPeers(snap), c.node.Self()), Removed: snap.Removed,
 		Version: version(), SourceVersion: c.mg.upd.SourceVersion(), Updating: c.mg.upd.Busy(),
 		UpdateFailed: c.mg.upd.FailedFor(), UptimeSec: int64(time.Since(processStart) / time.Second), AnycastUp: c.mg.anycastReport(), SharedRev: snap.SharedRev, Intent: c.mg.upd.Intent(), PrimaryDownSec: c.primaryDownSec(),
-		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Host: hostLoadPtr(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
+		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Host: hostLoadPtr(), Clock: clockReading(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
 	}
 }
 
@@ -1440,6 +1443,8 @@ type PeerView struct {
 	// IPs are the node's addresses (IPv4, IPv6 global and unique local) and GwIPs the ones it uses in the gateway protocol
 	IPs   []string `json:"ips,omitempty"`
 	GwIPs []string `json:"gw_ips,omitempty"`
+	// Clock is the node's clock against the time chrony believes (see ClockReading); nil when the node cannot say.
+	Clock *ClockReading `json:"clock,omitempty"`
 }
 
 type ClusterView struct {
@@ -1461,6 +1466,8 @@ type ClusterView struct {
 	Warnings      []string   `json:"warnings"`
 	// FailoverOn says whether automatic failover is in force with this many members (from three)
 	FailoverOn bool `json:"failover_on"`
+	// ClockSpread is the largest difference between the clocks of the reachable, synchronised nodes (nil with fewer than two).
+	ClockSpread *ClockSpread `json:"clock_spread,omitempty"`
 }
 
 func (c *Cluster) View() ClusterView {
@@ -1480,7 +1487,7 @@ func (c *Cluster) View() ClusterView {
 		Addr: snap.SelfAddr, NodeID: snap.NodeID, Fingerprint: c.node.Fingerprint(), Self: true, Reachable: true,
 		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Version: version(),
 		SourceVersion: c.mg.upd.SourceVersion(), Updating: c.mg.upd.Busy(), UpdateFailed: c.mg.upd.FailedFor(),
-		SharedRev: snap.SharedRev, LastSeen: time.Now(), Hostname: selfHost(), IPs: selfIPs, GwIPs: selfGw,
+		SharedRev: snap.SharedRev, LastSeen: time.Now(), Hostname: selfHost(), IPs: selfIPs, GwIPs: selfGw, Clock: clockReading(),
 	})
 	for _, p := range snap.Peers {
 		pv := PeerView{Addr: p.Addr, NodeID: p.NodeID, Fingerprint: p.Fp, IsPrimary: p.Addr == snap.PrimaryAddr}
@@ -1494,6 +1501,9 @@ func (c *Cluster) View() ClusterView {
 			pv.NodePaused = m.NodePaused
 			pv.ChronyRoll = m.ChronyRoll
 			pv.IPs, pv.GwIPs = addrList(m.Addrs), m.GwIPs
+			if pi.Reachable {
+				pv.Clock = m.Clock
+			}
 		}
 		v.Peers = append(v.Peers, pv)
 	}
@@ -1502,6 +1512,7 @@ func (c *Cluster) View() ClusterView {
 	for i := range v.Peers {
 		v.Peers[i].SoakSec = soak[v.Peers[i].Addr]
 	}
+	v.ClockSpread = clockSpread(v.Peers)
 	if !c.cfg.Enabled {
 		v.Warnings = append(v.Warnings, "clustering is disabled on this node (cluster.enabled is false)")
 	}
