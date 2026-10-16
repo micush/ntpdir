@@ -320,7 +320,7 @@ A gateway can carry extra addresses of **any subnet** next to its shared address
 
 Anycast addresses are not checked against the interface and do not take part in the election. **Every** node running the gateway puts them on `lo` and answers NTP on them, with the same servers and failover as the shared address, on `listen_port`. They are shared across the cluster and need NTP servers on the gateway.
 
-An address is held only while this node can answer on it: the gateway is running and not paused, the listener is up, and at least one NTP server is healthy. Otherwise it is taken off `lo`, so the route disappears from your routing daemon. It is added with a 10-second lifetime that AnyTime renews every 3 seconds, so if AnyTime crashes or hangs, the kernel removes the address by itself within about 10 seconds instead of leaving a route that nothing answers.
+An address is held only while this node can answer on it: the gateway is running and not paused, the listener is up, and at least one NTP server is healthy. It is also held only while **BGP can carry it**: BGP is configured and enabled on the node and at least one neighbor of the address's family has an established session. With no BGP, or every neighbor of that family down, the address is taken off `lo` and does not answer; it returns within seconds of a session coming up. Otherwise it is taken off `lo`, so the route disappears from your routing daemon. It is added with a 10-second lifetime that AnyTime renews every 3 seconds, so if AnyTime crashes or hangs, the kernel removes the address by itself within about 10 seconds instead of leaving a route that nothing answers.
 
 The drawing and `--canvas` show whether each address is announced from the node you are looking at. When the node manages BGP, the pill is **green** when every neighbor of its family has an established session (IPv4 address → IPv4 neighbors, IPv6 → IPv6), **amber** when some do and some do not, and **red** when none does, when it has no neighbor of that family, or when BGP is disabled on the node (Operate ▸ Anycast). A neighbor that is disabled or still connecting counts as not established.
 
@@ -472,6 +472,7 @@ The PAM binding uses cgo, so build natively with `libpam0g-dev` (Debian and Ubun
 | `--gateway-stats GROUP` `[--stats-range 1h\|1d\|7d]` | Topology page: right-click the gateway circle ▸ **Statistics** (answer time, errors, availability, requests) |
 | `--show-gateways`, `--show-neighbors` | Gateways page (roles, slots, vMACs, NTP listener state) |
 | `--node-rename NAME` | Topology: right-click a node ▸ **Rename** (the host name and its `/etc/hosts` entry) |
+| `--schedule`, `--schedule-history`, `--schedule-set JSON`, `--schedule-del ID`, `--schedule-run ID` | Operate ▸ **Scheduler** (the tasks, their history on this node; New / right-click ▸ Edit, Copy, Paste, Run now, Disable, Delete) |
 | `--assert-agc` | Operate ▸ Node ▸ **Gateway controller**: "Make this node the gateway controller" (asks to confirm) |
 | `--cluster-status` | Monitor ▸ Cluster (the members) |
 | `--show-ntp` | NTP tab (chrony's state, each server's health and role in chrony) |
@@ -810,6 +811,16 @@ ntpdir --power shutdown --at 02:30
 ntpdir --power status
 ntpdir --power cancel
 ```
+
+## Scheduled tasks
+
+Operate ▸ **Scheduler** runs tasks on every node of the cluster, or on the nodes you pick: restart chrony, pause or resume the node, clear the statistics, or a **shell command** (`/bin/sh -c`, as root; anyone who can sign in to the GUI can therefore run commands on every node). The task list is part of the shared settings, so every node has it; what ran is kept per node (the last 300 runs, with the output of a command) and shown for the node picked at the top right.
+
+A task repeats **hourly, daily, weekly, monthly or yearly**, every N of them if you like. A monthly or yearly task can be on a day of the month (the 31st means the last day in a shorter month, `-1` the last day) or on the **1st to 4th or last** occurrence of one or more weekdays — "the 3rd Saturday of every month", or "the 2nd or 3rd Saturday or Sunday". The **offset window** is either "up to N after the scheduled time" or "between the time and HH:MM" (run on the 2nd or 3rd weekend between 01:00 and 10:00: At 01:00, until 10:00). The time is read in the zone you give (empty: each node's own).
+
+The **offset window** spreads the nodes: a task is due at its scheduled time and each node runs it at a time of its own between then and that long after, the same place every time for the same node and task (a hash of the node, the task and the occurrence). A window of 0 runs every node at the scheduled time. A node that was off or busy runs a missed task once when it comes back, if that is still inside the window; older runs are skipped and the history says so. A run still going when the next is due is skipped. A new or re-enabled task owes nothing for times before that.
+
+Right-click a task for **Edit, Copy, Paste, Run now on this node, Disable/Enable and Delete**; *Paste* adds a copy with a new name. On the command line: `--schedule`, `--schedule-history`, `--schedule-set '{"name":"3rd Saturday","action":"chrony_restart","freq":"monthly","nths":[2,3],"weekdays":[6,0],"at":"01:00","until":"10:00"}'` (give `"id"` to replace a task; actions `chrony_restart`, `node_pause`, `node_resume`, `stats_clear`, or `shell` with `"command"`), `--schedule-del ID` and `--schedule-run ID`.
 
 ## Upgrading a running cluster
 

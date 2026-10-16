@@ -16,47 +16,48 @@ import (
 // methods directly, so both front ends behave identically.
 func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	var a struct {
-		ID       string   `json:"id"`
-		A        string   `json:"a"`
-		B        string   `json:"b"`
-		Note     string   `json:"note"`
-		Config   string   `json:"config"`
-		CertPEM  string   `json:"cert_pem"`
-		KeyPEM   string   `json:"key_pem"`
-		CN       string   `json:"cn"`
-		DNS      []string `json:"dns"`
-		IPs      []string `json:"ips"`
-		Code     string   `json:"code"`
-		Addr     string   `json:"addr"`
-		Nodes    []string `json:"nodes"`
-		Force    bool     `json:"force"`
-		Enabled  bool     `json:"enabled"`
-		Repo     string   `json:"repo"`
-		DataB64  string   `json:"data"`
-		Limit    int      `json:"limit"`
-		Hostname string   `json:"hostname"`
-		LogLevel string   `json:"level"`
-		LogText  string   `json:"q"`
-		LogSince string   `json:"since"`
-		LogN     string   `json:"n"`
-		QFrom    string   `json:"from"`
-		QTo      string   `json:"to"`
-		QOutcome string   `json:"outcome"`
-		QClient  string   `json:"client"`
-		NetKind  string   `json:"kind"`
-		QServer  string   `json:"server"`
-		QCMatch  string   `json:"cmatch"`
-		QSMatch  string   `json:"smatch"`
-		Lookup   string   `json:"lookup"`
-		Paused   bool     `json:"paused"`
-		Name     string   `json:"name"`
-		User     string   `json:"username"`
-		Password string   `json:"password"`
-		Expires  int64    `json:"expires"`
-		Iface    string   `json:"iface"`
-		Filter   string   `json:"filter"`
-		Seconds  int      `json:"seconds"`
-		Group    int      `json:"group"`
+		ID       string     `json:"id"`
+		A        string     `json:"a"`
+		B        string     `json:"b"`
+		Note     string     `json:"note"`
+		Config   string     `json:"config"`
+		CertPEM  string     `json:"cert_pem"`
+		KeyPEM   string     `json:"key_pem"`
+		CN       string     `json:"cn"`
+		DNS      []string   `json:"dns"`
+		IPs      []string   `json:"ips"`
+		Code     string     `json:"code"`
+		Addr     string     `json:"addr"`
+		Nodes    []string   `json:"nodes"`
+		Force    bool       `json:"force"`
+		Enabled  bool       `json:"enabled"`
+		Repo     string     `json:"repo"`
+		DataB64  string     `json:"data"`
+		Limit    int        `json:"limit"`
+		Hostname string     `json:"hostname"`
+		LogLevel string     `json:"level"`
+		LogText  string     `json:"q"`
+		LogSince string     `json:"since"`
+		LogN     string     `json:"n"`
+		QFrom    string     `json:"from"`
+		QTo      string     `json:"to"`
+		QOutcome string     `json:"outcome"`
+		QClient  string     `json:"client"`
+		NetKind  string     `json:"kind"`
+		QServer  string     `json:"server"`
+		QCMatch  string     `json:"cmatch"`
+		QSMatch  string     `json:"smatch"`
+		Lookup   string     `json:"lookup"`
+		Paused   bool       `json:"paused"`
+		Name     string     `json:"name"`
+		User     string     `json:"username"`
+		Password string     `json:"password"`
+		Expires  int64      `json:"expires"`
+		Iface    string     `json:"iface"`
+		Filter   string     `json:"filter"`
+		Seconds  int        `json:"seconds"`
+		Group    int        `json:"group"`
+		Task     *SchedTask `json:"task"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -314,6 +315,20 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	// a name for an address (reverse lookup) or an address for a name, for the Add NTP server form
 	case "dns.lookup.full":
 		return lookupFull(a.Lookup)
+	case "schedule.status":
+		return m.sched.Status(), nil
+	case "schedule.set":
+		if a.Task == nil {
+			return nil, errors.New("no task given")
+		}
+		return m.SchedSet(*a.Task, actor)
+	case "schedule.del":
+		return map[string]any{"deleted": true}, m.SchedDel(a.ID, actor)
+	case "schedule.run":
+		if err := m.sched.RunNow(a.ID, actor); err != nil {
+			return nil, err
+		}
+		return map[string]any{"started": true}, nil
 	case "host.lookup":
 		return hostLookup(a.Lookup)
 	// this node's clock, for the clock in the gateway circle (and --show-ntp)

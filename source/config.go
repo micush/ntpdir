@@ -484,6 +484,8 @@ type NTPConfig struct {
 	LeapMode    string   `json:"leap_mode,omitempty"`
 	LeapSmear   bool     `json:"leap_smear,omitempty"`
 	SNMPContact string   `json:"snmp_contact,omitempty"`
+	// Schedule is the scheduler's task list (Operate ▸ Scheduler), replicated with the rest; see scheduler.go.
+	Schedule []SchedTask `json:"schedule,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
 	// is no limit. ClientBurst is how many it may send at once (0 = twice the rate, at least 10). ClientAction is what
 	// a client over its rate gets: "drop" (the default, kept as empty in the file) or "kod" (a kiss-o'-death RATE,
@@ -1042,6 +1044,12 @@ func (dc *DaemonConfig) Validate() error {
 	if err := dc.Web.Validate(); err != nil {
 		return err
 	}
+	if err := validateSchedule(dc.NTP.Schedule); err != nil {
+		return err
+	}
+	if len(dc.NTP.Schedule) == 0 {
+		dc.NTP.Schedule = nil
+	}
 	{
 		sc := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact}
 		if err := sc.Validate(); err != nil {
@@ -1499,4 +1507,5 @@ func (dc *DaemonConfig) snmpSettings() SNMPConfig {
 func (d *NTPConfig) clearNodeWide() {
 	d.SNMPCommunities, d.SNMPContact = nil, ""
 	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
+	d.Schedule = nil
 }

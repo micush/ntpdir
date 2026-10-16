@@ -50,6 +50,10 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/serverstats", w.authed(w.op("ntp.serverstats", []string{"addr", "from", "to"})))
 	mux.HandleFunc("GET /api/time", w.authed(w.op("time.now", nil)))
 	mux.HandleFunc("GET /api/dnslookup/full", w.authed(w.op("dns.lookup.full", []string{"lookup"})))
+	mux.HandleFunc("GET /api/schedule", w.authed(w.op("schedule.status", nil)))
+	mux.HandleFunc("POST /api/schedule/task", w.authed(w.op("schedule.set", nil)))
+	mux.HandleFunc("POST /api/schedule/delete", w.authed(w.op("schedule.del", nil)))
+	mux.HandleFunc("POST /api/schedule/run", w.authed(w.op("schedule.run", nil)))
 	mux.HandleFunc("GET /api/hostlookup", w.authed(w.op("host.lookup", []string{"lookup"})))
 	mux.HandleFunc("GET /api/whois", w.authed(w.op("whois.get", []string{"lookup"})))
 	mux.HandleFunc("GET /api/qstats", w.authed(w.op("qstats.get", []string{"from", "to", "outcome", "client", "server", "cmatch", "smatch"})))
@@ -105,7 +109,7 @@ func (w *WebServer) op(cmd string, query []string) func(http.ResponseWriter, *ht
 			}
 			args = body
 		}
-		if cmd == "versions.restore" || cmd == "cluster.promote" || cmd == "cluster.leave" || cmd == "cluster.join" || cmd == "update.apply" || cmd == "power.do" || cmd == "node.pause" || cmd == "node.rename" || cmd == "qstats.clear" || cmd == "qstats.clear.cluster" || strings.HasPrefix(cmd, "users.") && cmd != "users.list" {
+		if cmd == "versions.restore" || cmd == "cluster.promote" || cmd == "cluster.leave" || cmd == "cluster.join" || cmd == "update.apply" || cmd == "power.do" || cmd == "node.pause" || cmd == "node.rename" || cmd == "schedule.run" || cmd == "schedule.set" || cmd == "schedule.del" || cmd == "qstats.clear" || cmd == "qstats.clear.cluster" || strings.HasPrefix(cmd, "users.") && cmd != "users.list" {
 			warnf("web: %q ran %s (from %s)", s.user, cmd, clientIP(r))
 		}
 		data, err := w.mg.Op(cmd, args, s.user)

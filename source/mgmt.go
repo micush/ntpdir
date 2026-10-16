@@ -32,6 +32,7 @@ type Mgmt struct {
 	upd      *Updater
 	cl       *Cluster
 	croll    chronyRoll // this node's part in the rolling chrony restart
+	sched    *Scheduler // the scheduled tasks of this node (Operate ▸ Scheduler)
 
 	cfgMu     sync.Mutex // serialises writes of the config file
 	webPolicy atomic.Pointer[WebConfig]
@@ -77,6 +78,8 @@ func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
 		return nil, fmt.Errorf("state directory %s: %w", stateDir, err)
 	}
 	m := &Mgmt{confPath: confPath, stateDir: stateDir}
+	m.sched = newScheduler(m, stateDir)
+	m.sched.SetTasks(dc.NTP.Schedule)
 	chrony.mu.Lock()
 	chrony.keyFile = filepath.Join(stateDir, "chrony-applied.key")
 	chrony.mu.Unlock()
@@ -117,6 +120,7 @@ func (m *Mgmt) OnConfigLoaded(dc *DaemonConfig) {
 	w := dc.Web
 	m.webPolicy.Store(&w)
 	m.bgp.Apply(dc)
+	m.sched.SetTasks(dc.NTP.Schedule)
 	m.certs.Refresh()
 	if _, raw, err := m.LiveConfig(); err == nil {
 		if _, err := os.Stat(m.confPath); err == nil { // don't version a config that doesn't exist yet

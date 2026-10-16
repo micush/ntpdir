@@ -89,6 +89,8 @@ the web GUI):
                    --host-lookup IP|NAME   (the reverse name of an address, or the address of a name, as the Add NTP server form fills them in)
                    --server-stats ADDR [--stats-range 1h|1d|7d]   (how one NTP server has answered: latency, offset and loss)
                    --gateway-stats GROUP [--stats-range 1h|1d|7d]  (one gateway: client latency, errors, traffic, availability)
+                   --schedule | --schedule-history   (the scheduled tasks and when this node runs them next; what ran, with its output)
+                   --schedule-set JSON | --schedule-del ID | --schedule-run ID   (add or replace a task, remove one, run one on this node now)
                    --node-pause | --node-resume | --node-status   (this whole node stops/starts serving)
                    --node-rename NAME   (this node's host name and its /etc/hosts entry; on another node: pick it in the Node menu)
                    --canvas-move server  --group N --server ADDR --to N   (its place in the row, 1 = leftmost; the drag in the drawing)
@@ -419,6 +421,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	qstats.SetNames(dc.NTP.ClientNames)
 	go applySNMP(dc.snmpSettings())
 	go memguard.Run(ctx.Done())
+	go mg.sched.Run(ctx)
 
 	st := NewStatusServer(sockPath, sup)
 	st.mg = mg

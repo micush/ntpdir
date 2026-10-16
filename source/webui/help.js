@@ -417,6 +417,29 @@ const NTPDIR_HELP = {
       ["cli", "ntpdir --bgp\nntpdir --asn 64512 --router-id 192.0.2.10   (--router-id needs an AS, set now or earlier)\nntpdir --keepalive 3 --hold 9\nntpdir --as-prepend on   (the local AS three more times on every announcement; off undoes it)\nntpdir --bgp-neighbor-add 192.0.2.1 --remote-as 64500 --description core\nntpdir --bgp-neighbor-add 10.0.1.5 --remote-as 64512 --multihop 2\nntpdir --bgp-neighbor-del 192.0.2.1\nntpdir --asn off   (also clears the router ID)\n(--password on the command line is visible to other users of the host; the page is safer)"],
     ],
   },
+  scheduler: {
+    title: "Scheduler",
+    body: [
+      "Tasks that run by themselves, on every node of the cluster or on the nodes you choose: restart chrony, pause or resume a node, clear the statistics, or run a shell command. The list of tasks is shared by the cluster, so the page looks the same through any node; **what ran** is kept per node, and shown for the node picked at the top right.",
+      ["h", "The page"],
+      ["ul", [
+        "**New task** opens the form; **right-click** a task for *Edit…*, *Copy*, *Paste*, *Run now on this node*, *Disable* / *Enable* and *Delete*. *Copy* remembers the task in this browser; *Paste* (in the menu, or on the button, or after right-clicking the empty list) adds a copy of it with a new name, which you can then edit. Double-click a task to edit it.",
+        "**Next run (this node)** is when this node will run the task: the scheduled time plus this node's own place in the offset window (hover it for the scheduled time). The times are shown in this browser's time zone.",
+        "**History of this node** lists what ran here, whether it worked, and the output of a command (click it to read it all). The last 300 runs are kept.",
+      ]],
+      ["h", "When a task runs"],
+      ["ul", [
+        "**Hourly**: at a minute past the hour; **Daily**: at a time; **Weekly**: on the days you tick; **Monthly**: on a day of the month (the 31st means the last day in a shorter month, *last day* always the last), or on the *1st to 4th or last* occurrence of the weekdays you tick, such as the 3rd Saturday or the 2nd and 3rd Saturday and Sunday; **Yearly**: the same in one month. *Every N* makes it every second, third… hour, day, week, month or year (counted from 1970 in the task's own zone, so it stays the same however often the node restarts).",
+        "**Time zone**: the time is read in the zone you type (for example *America/Phoenix*); empty is each node's own zone. A time that does not exist on the day the clocks change runs an hour later.",
+        "**Offset window**: the task is due at the scheduled time, and each node runs it at a time of its own between then and that long after (or, with *between the time above and…*, until a time of day, such as 01:00 to 10:00), chosen from the node's identity and the task, so the same node always gets the same place and the nodes do not all run it at once. A window of 0 runs every node at the scheduled time.",
+        "**A node that was off or busy** runs a task it missed when it comes back, once, if that is still inside the window; older runs are skipped and the history says how many. A task that is still running when it is due again is skipped, and says so.",
+        "**Runs on**: every node, or the nodes you tick. A task added or switched on starts from then; it does not run for times before.",
+      ]],
+      ["h", "Shell commands"],
+      "A shell command runs with `/bin/sh -c` as root on each node, with the output and the exit status kept in the history; it is stopped when it runs past its time limit (the whole process group). Anyone who can sign in to this page can make a node run any command, so give the sign-in group (Operate ▸ Users) only to people you would give root.",
+      ["cli", "ntpdir --schedule   (the tasks, and when this node runs them next)\nntpdir --schedule-history   (what ran here, with the output)\nntpdir --schedule-set '{\"name\":\"3rd Saturday\",\"action\":\"chrony_restart\",\"freq\":\"monthly\",\"nths\":[2,3],\"weekdays\":[6,0],\"at\":\"01:00\",\"until\":\"10:00\"}'   (add a task; give its \"id\" to replace one; actions: chrony_restart, node_pause, node_resume, stats_clear, shell with \"command\")\nntpdir --schedule-del ID\nntpdir --schedule-run ID   (run it on this node now)"],
+    ],
+  },
   anycastop: {
     title: "Anycast (operate)",
     body: [
