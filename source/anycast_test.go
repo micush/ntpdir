@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNormalizeAnycast(t *testing.T) {
@@ -123,6 +124,9 @@ func hookLo(t *testing.T) *fakeLo {
 	}
 	anycastDelFn = func(a string) { f.mu.Lock(); delete(f.on, a); f.dels++; f.mu.Unlock() }
 	t.Cleanup(func() { anycastAddFn, anycastDelFn = oa, od })
+	og := anycastGateFn // these tests are not about BGP: the gate is open unless a test closes it
+	anycastGateFn = func(*BGPConfig, string) string { return "" }
+	t.Cleanup(func() { anycastGateFn = og })
 	oc := chronyServingFn
 	chronyServingFn = func() bool { return true }
 	t.Cleanup(func() { chronyServingFn = oc })
@@ -490,5 +494,47 @@ func TestAnycastSharedByTwoGateways(t *testing.T) {
 	b.stop()
 	if lo.has(addr) {
 		t.Fatal("the last gateway stopped but the address is still announced")
+	}
+}
+
+// An address is held only while BGP is configured, enabled and at least one neighbor of its family is established;
+// otherwise it is off lo and nothing answers on it.
+func TestAnycastDownWithoutEstablishedBGP(t *testing.T) {
+	lo := hookLo(t)
+	anycastGateFn = anycastBGPGate
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
+	oldDir, oldBGP := frrDir, vtyshBGP
+	frrDir = t.TempDir()
+	t.Cleanup(func() { frrDir, vtyshBGP = oldDir, oldBGP; bgpLive.at = time.Time{} })
+	state := "Established"
+	vtyshBGP = func() ([]byte, error) {
+		return []byte(`{"ipv4Unicast":{"peers":{"10.0.0.1":{"remoteAs":65001,"state":"` + state + `"}}}}`), nil
+	}
+	const addr = "127.0.0.9"
+	var cfg *BGPConfig
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
+	a.bgp = func() (*BGPConfig, bool) { return cfg, true }
+	step := func() { bgpLive.at = time.Time{}; a.step() }
+	step()
+	if lo.has(addr) || a.state()[0].Up || a.state()[0].Reason == "" {
+		t.Fatalf("held with BGP not configured: %+v", a.state())
+	}
+	cfg = &BGPConfig{ASN: 65000, Neighbors: []BGPNeighbor{{Peer: "10.0.0.1", RemoteAS: 65001}}}
+	step()
+	if !lo.has(addr) {
+		t.Fatalf("not held with an established neighbor: %+v", a.state())
+	}
+	state = "Active"
+	step()
+	if lo.has(addr) || a.state()[0].Up {
+		t.Fatalf("held with no neighbor established: %+v", a.state())
+	}
+	state = "Established"
+	cfg.Disabled = true
+	step()
+	if lo.has(addr) {
+		t.Fatal("held while BGP is disabled")
 	}
 }

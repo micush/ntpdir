@@ -1,5 +1,17 @@
 # Changelog
 
+### Verified
+- `go test -race .` passes, with a new test that closes the gate for no BGP, disabled BGP, and no established neighbor and reopens it on Established. Browser check of the per-topology time zone (e2e/t23.py).
+
+### Not verified
+- Not run against a real FRR with live sessions or on a real `lo`; the sandbox has neither.
+
+## [v60] - 2026-10-16 — Anycast addresses follow BGP
+
+### Changed
+- An anycast address is now held on `lo` (and answered) only while BGP can carry it: BGP anycast is configured and enabled on the node, and at least one BGP neighbor of the address's family is in the Established state. With BGP not configured, disabled, or every neighbor of that family down, the address is removed and stops answering; it returns within a few seconds of a session coming up. Partly established sets stay up and show amber.
+- The time zone chosen for the graphs is remembered separately for each topology (gateway); a gateway with none picked uses the last global choice, then UTC.
+
 ## [v59] - 2026-10-15 — Clock difference between nodes
 
 ### Added

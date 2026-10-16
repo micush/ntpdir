@@ -152,6 +152,9 @@ type anycastSet struct {
 	pool  func() *Pool
 	// paused says per address where its announcing is paused ("node" or "all"); nil means none
 	paused func() map[string]string
+	// bgp returns the node's BGP settings; ok false (or a nil hook) turns the gate off.  An address is only held while
+	// BGP is configured and at least one neighbor of its family is established (see anycastBGPGate).
+	bgp func() (*BGPConfig, bool)
 	// ext are the addresses that belong to dnsdir: ntpdir listens on them while dnsdir is installed and announces
 	// them, and never touches lo for them (see stepExternal)
 	ext map[string]bool
@@ -304,6 +307,11 @@ func (a *anycastSet) step() {
 		if !healthy {
 			why = a.unhealthyWhy()
 		}
+		if why == "" && a.bgp != nil {
+			if cfg, ok := a.bgp(); ok {
+				why = anycastGateFn(cfg, addr)
+			}
+		}
 		switch paused[addr] {
 		case "node":
 			why = pausedHereWhy
@@ -375,3 +383,27 @@ func (a *anycastSet) unhealthyWhy() string {
 	}
 	return "no NTP server is answering"
 }
+
+// anycastBGPGate says why an anycast address must not be held on lo: nothing would announce it, or no neighbor that
+// could carry it is established.  "" means BGP can carry it.  One established neighbor of the address's family is
+// enough (a partly established set stays up; the drawing shows it amber).
+func anycastBGPGate(cfg *BGPConfig, addr string) string {
+	switch {
+	case !cfg.Configured():
+		return "BGP anycast is not configured: nothing announces the address"
+	case cfg.Disabled:
+		return "BGP is disabled on this node: the address is not announced"
+	case bgpBlocked() != "":
+		return bgpBlocked()
+	}
+	peers, known := liveBGPPeers()
+	st, detail, kind := anycastBGPStatus(addr, cfg.Neighbors, peers, known)
+	if st == "bad" {
+		_ = kind
+		return "BGP: " + detail
+	}
+	return ""
+}
+
+// anycastGateFn is the announce gate (replaceable in tests that are not about BGP).
+var anycastGateFn = anycastBGPGate

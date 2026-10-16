@@ -66,6 +66,9 @@ func TestAnycastBGPStatus(t *testing.T) {
 // The canvas colours a held address by its BGP sessions, and leaves it alone
 // when this node does not manage BGP.
 func TestMarkAnycastBGPColour(t *testing.T) {
+	og := anycastGateFn
+	anycastGateFn = func(*BGPConfig, string) string { return "" } // the colour is for the moment before the gate's next tick
+	t.Cleanup(func() { anycastGateFn = og })
 	hookLo(t)
 	up := newFakeNTP(t)
 	g := defaultGroup()

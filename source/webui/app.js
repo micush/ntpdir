@@ -462,7 +462,7 @@
     if (!bar) return;
     // The nodes are asked for every few seconds; the bar is only redrawn when what it shows changed, and not at all while one of its
     // pickers has the focus (redrawing it shut an open list).
-    const view = [state.tab, state.target];
+    const view = [state.tab, state.target, state.tab === "topology" ? state.topo.gid : null];   // each gateway has its own time zone
     const sig = JSON.stringify([view, state.nodes.map((n) => [n.addr, nodeLabel(n), n.is_primary, n.reachable, !!n.self])]);
     if (bar.dataset.sig === sig) return;
     if (bar.contains(document.activeElement) && bar.dataset.view === JSON.stringify(view)) return;
@@ -514,15 +514,19 @@
     try { return new Intl.DateTimeFormat("en-GB", { timeZone: z, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName").value.replace("GMT", "UTC"); } catch (_) { return ""; }
   };
   const tzLabel = (z) => (z === "UTC" ? "UTC" : z.replace(/_/g, " ") + " (" + tzOffset(z) + ")");
-  function getTz() {
+  // Each gateway (each drawing under Topology) remembers the zone picked for it; one that has none yet uses the zone chosen before
+  // gateways had their own (the plain cookie), then UTC.
+  const tzCookieName = () => (state.topo && state.topo.gid != null ? TZ_COOKIE + "_" + state.topo.gid : TZ_COOKIE);
+  function readTzCookie(name) {
     try {
-      const m = document.cookie.match(/(?:^|;\s*)ntpdir_tz=([^;]+)/);
+      const m = document.cookie.match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
       if (m) { const z = decodeURIComponent(m[1]); if (tzList().includes(z)) return z; }
-    } catch (_) { /* no cookies: UTC */ }
-    return "UTC";
+    } catch (_) { /* no cookies */ }
+    return null;
   }
+  function getTz() { return readTzCookie(tzCookieName()) || readTzCookie(TZ_COOKIE) || "UTC"; }
   function setTz(z) {
-    try { document.cookie = TZ_COOKIE + "=" + encodeURIComponent(z) + "; max-age=31536000; path=/; SameSite=Strict" + (location.protocol === "https:" ? "; Secure" : ""); } catch (_) { /* kept for this page only */ }
+    try { document.cookie = tzCookieName() + "=" + encodeURIComponent(z) + "; max-age=31536000; path=/; SameSite=Strict" + (location.protocol === "https:" ? "; Secure" : ""); } catch (_) { /* kept for this page only */ }
   }
   const tzFmt = {};
   const tzTime = (ms, z) => {
