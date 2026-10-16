@@ -1,5 +1,13 @@
 # Changelog
 
+## [v56] - 2026-10-15 — Server table: tags no longer run into the State column
+
+### Fixed
+- Topology/NTP server table: the "fallback" tag (and the v4/v6 tags) spilled over the State pill because the Server IP column was too narrow. The column is wider and anything that still does not fit is cut with an ellipsis instead of overlapping.
+
+### Verified
+- Headless Chromium at a narrow width: no overlap.
+
 ## [v55] - 2026-10-15 — SNMP: nothing under the form
 
 ### Changed
