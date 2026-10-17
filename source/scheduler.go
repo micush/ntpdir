@@ -84,8 +84,8 @@ var schedActions = map[string]string{
 	"node_pause":     "Pause this node",
 	"node_resume":    "Resume this node",
 	"stats_clear":    "Clear the statistics",
-	"update_online":  "Update from online (newest release, when newer)",
-	"node_reboot":    "Reboot this node (waits until it is safe)",
+	"update_online":  "Update from online",
+	"node_reboot":    "Reboot this node",
 }
 
 var schedEveryMax = map[string]int{"hourly": 720, "daily": 366, "weekly": 52, "monthly": 24, "yearly": 10}
