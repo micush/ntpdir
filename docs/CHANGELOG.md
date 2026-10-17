@@ -1,5 +1,16 @@
 # Changelog
 
+## [v86] - 2026-10-17 — Version bump to test the page reload
+
+### Changed
+- Nothing but the version number, so an open page loaded from v85 can be seen reloading itself after the upgrade.
+
+### Verified
+- `go build`, `go vet`, gofmt, and the web tests (`go test -race -run 'Web|Security|Session' ./...`). The full suite was not run again: only `VERSION` and this file changed since v85, which passed it.
+
+### Not verified
+- The reload in a browser.
+
 ## [v85] - 2026-10-17 — The web page reloads itself after an upgrade
 
 ### Added
