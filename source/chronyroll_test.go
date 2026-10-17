@@ -86,7 +86,7 @@ func TestChronyRollPausesRestartsWaitsResumes(t *testing.T) {
 		t.Fatal("no restart is waiting")
 	}
 	// chrony is up and synchronised only after the restart
-	f.answers["-c tracking"] = ""
+	f.answers["-c -m tracking sources -n"] = ""
 	synced := false
 	pausedAtRestart := false
 	chronyRestart = func() error {

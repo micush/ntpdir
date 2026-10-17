@@ -1,9 +1,28 @@
 # Changelog
 
-## [v77] - 2026-10-16 — Scheduler: Once
+## [v77] - 2026-10-16 — Memory, CPU and disk tuning
+
+### Changed
+- **One `chronyc` run per look instead of two.** The daemon reads chrony's state every two seconds, which was two forks and execs (`tracking`, then `sources`). It is now one run, `chronyc -c -m tracking "sources -n"`: the sources stay numeric as before and tracking still names the reference. If the combined run fails, the two are asked for one at a time as before, so a chrony that answers one and not the other reads as it did.
+- **Garbage collector soft memory limit.** At start-up the daemon sets a soft limit of 75% of the cgroup memory limit or, without one, of the machine's memory (`memlimit.go`; a `GOMEMLIMIT` in the environment wins). Garbage on a big heap (30 days of statistics) counted as memory in use and could make the memory guard drop statistics that were not a problem. It is soft: the collector never takes more than half the CPU to keep to it. Logged at start-up.
+- **Cheaper statistics saves.** `stats.json.gz` is compressed at gzip's fastest level, and the save made by the five-minute timer no longer fsyncs before the rename (the saves before a stop, a restart and an update still do). The file format is unchanged and old files still load.
+- **`/proc/cpuinfo` is read once** for the core count instead of at every host sample (every 10 seconds).
 
 ### Added
-- **Once** in *How often*: the task runs one time, on a date you pick (UTC) at the *At* time, optionally within an *At* to *To* window like any other task. It stays in the list afterwards and never runs again; delete it or change the date to reuse it. Saved as `"freq":"once","date":"YYYY-MM-DD"`.
+- `TestSoftMemLimit`, and a fallback case in the chrony state test.
+
+### Not changed
+- ntpdir has no answer cache (chrony answers clients), so the cache changes made to its sibling dnsdir do not apply.
+
+### Verified
+- `gofmt -l .` empty, `go build`, `go vet ./...`, `go test -race -count=1 ./...` and `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` all pass (native amd64 with PAM headers).
+- Cross-compiled for linux/amd64, arm64, arm, 386 and riscv64.
+- Live run against a real private `chronyd -x` (chrony 4.5) with two stub NTP servers on `lo`: the sources were written and chrony took both; the combined call returned tracking and the sources together; killing one stub removed it from `chronyc sources` and the log said "sources now 127.0.0.2"; `--show-ntp` showed chrony synchronised and the IN CHRONY column; `stats.json.gz` was written.
+
+### Not verified
+- No load measurement, so the gain from fewer forks, the memory limit and the faster saves is not measured.
+- Serving clients through chrony was not tested (the private chronyd had its NTP port off). Chrony versions before 4.0 were not tried; `-m` has been in chronyc for a long time but was only run against 4.5.
+- The cluster, web GUI, PAM, installer and BGP paths were not touched and not re-run live. Cross-compiled targets other than amd64 build the PAM stub.
 
 ## [v76] - 2026-10-16 — Scheduler: first day or each day
 

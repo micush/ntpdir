@@ -605,9 +605,20 @@ func parseSources(out []byte) []chronySource {
 	return res
 }
 
-// readState asks chrony how it is doing and remembers the answer.
+// readState asks chrony how it is doing and remembers the answer.  Tracking and the sources come from one chronyc
+// run (`-m` takes several commands; `sources -n` keeps the sources numeric as before, while tracking still shows
+// the reference by name): the daemon looks every two seconds, and each run is a fork and an exec.  Should the
+// combined run fail, the two are asked for one at a time as they used to be, so a chrony that answers one and not
+// the other is read as before.
 func (m *chronyMgr) readState() ChronyState {
-	out, err := chronyc("-c", "tracking")
+	out, err := chronyc("-c", "-m", "tracking", "sources -n")
+	var so []byte
+	haveSources := err == nil
+	if haveSources {
+		so = out
+	} else {
+		out, err = chronyc("-c", "tracking")
+	}
 	st := ChronyState{}
 	if err == nil {
 		st, err = parseTracking(out)
@@ -615,7 +626,11 @@ func (m *chronyMgr) readState() ChronyState {
 	if err != nil {
 		st = ChronyState{Err: err.Error(), At: time.Now().Unix()}
 	} else {
-		if so, err := chronyc("-n", "-c", "sources"); err == nil {
+		if !haveSources {
+			so, err = chronyc("-n", "-c", "sources")
+			haveSources = err == nil
+		}
+		if haveSources {
 			for _, s := range parseSources(so) {
 				st.Sources = append(st.Sources, ChronySrc{Name: s.Name, State: s.State, Reach: s.Reach})
 			}

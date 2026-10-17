@@ -250,11 +250,19 @@ func TestReadStateReportsChronyDown(t *testing.T) {
 	if chronyServingFn() {
 		t.Fatal("serving with chrony down")
 	}
-	f.answers["-c tracking"] = "A9FE0101,ntp1,2,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.01,64.0,Normal\n"
-	f.answers["-n -c sources"] = "^,*,10.0.0.1,2,6,377,12,0.0,0.0,0.0\n"
+	f.answers["-c -m tracking sources -n"] = "A9FE0101,ntp1,2,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.01,64.0,Normal\n" +
+		"^,*,10.0.0.1,2,6,377,12,0.0,0.0,0.0\n"
 	st = chrony.readState()
-	if !st.Running || !st.Synced || len(st.Sources) != 1 || !chronyServingFn() {
+	if !st.Running || !st.Synced || len(st.Sources) != 1 || st.Ref != "ntp1" || !chronyServingFn() {
 		t.Fatalf("%+v", st)
+	}
+	// a combined run that fails is read as two separate ones
+	delete(f.answers, "-c -m tracking sources -n")
+	f.answers["-c tracking"] = "A9FE0101,ntp1,2,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.01,64.0,Normal\n"
+	f.answers["-n -c sources"] = "^,*,10.0.0.1,2,6,377,12,0.0,0.0,0.0\n^,-,10.0.0.2,2,6,377,12,0.0,0.0,0.0\n"
+	st = chrony.readState()
+	if !st.Running || !st.Synced || len(st.Sources) != 2 {
+		t.Fatalf("fallback: %+v", st)
 	}
 	_ = context.Background
 }
