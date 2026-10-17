@@ -154,6 +154,7 @@ const firstGroupID = 100
 func newGatewayGroup() GroupConfig {
 	g := defaultGroup()
 	g.GroupID = firstGroupID
+	g.Key = newGroupKey() // a gateway someone adds does not start with a key everybody knows
 	g.RealMACs = true
 	return g
 }
