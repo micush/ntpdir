@@ -4045,7 +4045,8 @@
       const where = state.nodes.length > 1
         ? h("div", { class: "f wide" }, h("span", {}, "Runs on"), h("label", { class: "f check" }, allNodes, "Every node of the cluster"), h("label", { class: "f check" }, someNodes, "Only these nodes:"), nodesList)
         : h("div", { class: "hint" }, "Runs on this node.");
-      const freq = h("select", { "aria-label": "How often" }, [["hourly", "Hourly"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["yearly", "Yearly"]].map(([k, l]) => h("option", { value: k, selected: k === t.freq }, l)));
+      const dateIn = h("input", { type: "date", value: t.date || new Date(Date.now() + 86400000).toISOString().slice(0, 10), "aria-label": "Date (UTC)" });
+      const freq = h("select", { "aria-label": "How often" }, [["once", "Once"], ["hourly", "Hourly"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["yearly", "Yearly"]].map(([k, l]) => h("option", { value: k, selected: k === t.freq }, l)));
       const every = h("input", { type: "number", min: "1", max: "720", value: String(t.every || 1), "aria-label": "Every how many" });
       const everyUnit = h("span", {});
       const at = h("input", { type: "time", step: "60", value: (t.at || "12:00:00").slice(0, 5), "aria-label": "Time of day" });
@@ -4075,7 +4076,7 @@
       const untilMin = h("input", { type: "number", min: "0", max: "59", value: t.freq === "hourly" && toTime ? String(+toTime.split(":")[1]) : "", "aria-label": "To minute past the hour" });
       const enabled = h("input", { type: "checkbox", checked: !t.disabled });
       const rows = {
-        shell: shellBox, every: h("label", { class: "f" }, "Every", h("span", { class: "sched-every" }, every, everyUnit)),
+        shell: shellBox, date: h("label", { class: "f" }, "On (UTC)", dateIn), every: h("label", { class: "f" }, "Every", h("span", { class: "sched-every" }, every, everyUnit)),
         at: h("div", { class: "f sched-range" }, h("label", { class: "f" }, "At (UTC)", at), h("label", { class: "f" }, "To (optional)", until)), minute: h("div", { class: "f sched-range" }, h("label", { class: "f" }, "At minute", minute), h("label", { class: "f" }, "To minute (optional)", untilMin)), days: h("div", { class: "f wide" }, h("span", {}, "On"), dayRow), month: monthRow, day: dayBox,
       };
       const sync = () => {
@@ -4084,6 +4085,7 @@
         const unitName = { hourly: "hour", daily: "day", weekly: "week", monthly: "month", yearly: "year" }[f];
         everyUnit.textContent = " " + unitName + (+every.value === 1 ? "" : "s");
         every.max = { hourly: 720, daily: 366, weekly: 52, monthly: 24, yearly: 10 }[f];
+        rows.date.hidden = f !== "once"; rows.every.hidden = f === "once";
         rows.at.hidden = f === "hourly"; rows.minute.hidden = f !== "hourly";
         rows.days.hidden = f !== "weekly"; rows.month.hidden = f !== "yearly"; rows.day.hidden = f !== "monthly" && f !== "yearly";
         dom.disabled = !byDay.checked; nths.concat(wds).forEach((x) => { x.el.disabled = !byNth.checked; }); eachSel.disabled = !byNth.checked;
@@ -4094,10 +4096,11 @@
       const submit = (ev) => {
         ev.preventDefault();
         const f = freq.value;
-        const task = { id: isNew ? "" : t.id, name: name.value.trim(), action: action.value, freq: f, every: Math.max(1, +every.value || 1),
+        const task = { id: isNew ? "" : t.id, name: name.value.trim(), action: action.value, freq: f, every: f === "once" ? 1 : Math.max(1, +every.value || 1),
           window_sec: (f === "hourly" ? untilMin.value !== "" : until.value !== "") ? 0 : (f === "hourly" && legacyWin >= 3600 ? 0 : legacyWin), disabled: !enabled.checked };
         if (action.value === "shell") { task.command = cmd.value; task.timeout_sec = +tmo.value || 300; }
         if (f === "hourly") { const m = Math.min(59, Math.max(0, +minute.value || 0)); task.at = "00:" + String(m).padStart(2, "0") + ":00"; } else task.at = at.value.length === 5 ? at.value + ":00" : at.value;
+        if (f === "once") { if (!dateIn.value) { errorBox(err, "Pick the date."); return; } task.date = dateIn.value; }
         if (f === "weekly") task.days = days.filter((x) => x.el.checked).map((x) => x.i);
         if (f === "monthly" || f === "yearly") { if (byNth.checked) { task.nths = nths.filter((x) => x.el.checked).map((x) => x.v); task.weekdays = wds.filter((x) => x.el.checked).map((x) => x.i); if (!task.nths.length || !task.weekdays.length) { errorBox(err, "Pick at least one occurrence and one weekday."); return; } task.each_day = eachSel.value === "each"; } else task.day = +dom.value; }
         if (f === "yearly") task.month = +month.value;
@@ -4116,7 +4119,7 @@
           h("div", { class: "grid" },
             h("label", { class: "f wide" }, "Name", name),
             h("label", { class: "f wide" }, "Does", action), rows.shell, where,
-            h("label", { class: "f" }, "How often", freq), rows.every, rows.at, rows.minute, rows.days, rows.month, rows.day,
+            h("label", { class: "f" }, "How often", freq), rows.date, rows.every, rows.at, rows.minute, rows.days, rows.month, rows.day,
             h("label", { class: "f check wide" }, enabled, "Enabled")),
           err,
           h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "submit" }, isNew ? "Add task" : "Save"), h("button", { class: "btn", type: "button", onclick: close }, "Cancel"))));

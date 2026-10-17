@@ -1,5 +1,18 @@
 # Changelog
 
+## [v83] - 2026-10-17 — One-time tasks
+
+### Added
+- **Once** in the scheduler's How often list: a task that runs one time, on a date you pick (UTC) at the time of day you set, with the same optional To window as the other frequencies. It is shown in the task list as `once on 2026-11-14 at 03:30` (or `between 03:30 and 05:00 UTC`) and does not come round again. dnsdir has had it for a long time; the code is the same.
+- `TestOnceRunsOnlyOnItsDate`; help and README name it.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The task form was not looked at in a browser, and a one-time task was not run live on a cluster.
+- A cluster of mixed versions: a node older than v83 does not know `once` (its check refuses the frequency), so update every node before adding a one-time task. What an old node does with the task was not tried.
+
 ## [v82] - 2026-10-17 — The offset window is gone: At and To are the window
 
 ### Changed
