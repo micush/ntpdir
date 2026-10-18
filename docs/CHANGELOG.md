@@ -1,5 +1,10 @@
 # Changelog
 
+## [v117] - 2026-10-18 — README: signing in with Active Directory
+
+### Changed
+- **README**: a new section, *Signing in with Active Directory*, covers joining the node with sssd, the sssd settings, the directory group (`ntpdir-users`) next to the local one in **Login groups**, the group policy mapping the daemon adds, the checks to run from the shell and what the log messages mean. No code change.
+
 ## [v116] - 2026-10-18 — Several login groups: a local one and a directory one
 
 ### Changed
