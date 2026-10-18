@@ -780,10 +780,10 @@ func TestPoolsSkipExcludedGateways(t *testing.T) {
 	if s.poolFor(1) == nil || s.poolFor(2) != nil || len(s.poolList()) != 1 {
 		t.Fatalf("a gateway this node was removed from must have no pool here: %d pools", len(s.poolList()))
 	}
-	// removed from every gateway: all pools stay, so the node still has time sources
+	// removed from every gateway: no pool at all
 	dc.Groups[0].ExcludedNodes = []string{"aaaaaaaaaaaaaaaa"}
 	s.refreshPool(dc, true)
-	if len(s.poolList()) != 2 {
-		t.Fatalf("a node removed from every gateway keeps all pools, got %d", len(s.poolList()))
+	if len(s.poolList()) != 0 {
+		t.Fatalf("a node removed from every gateway has no pools, got %d", len(s.poolList()))
 	}
 }
