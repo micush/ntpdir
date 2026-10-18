@@ -1,5 +1,10 @@
 # Changelog
 
+## [v99] - 2026-10-18 — The log filters stay when the node changes
+
+### Changed
+- **Monitor ▸ Log keeps its filter words, level, time range, number of lines and the Live box when another node is picked** (or another page and back), and applies them to the new node's log. They were reset to the defaults each time. They are kept until the page is reloaded.
+
 ## [v98] - 2026-10-18 — The Age column is gone
 
 ### Changed
