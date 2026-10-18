@@ -420,15 +420,16 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 		}
 	}
 	s.mu.Unlock()
-	if f.Client != "" || f.Server != "" { // the pairs are on disk: read the units the slots above cover
+	cset, dset := pickSet(f.Client), pickSet(f.Server)
+	if cset != nil || dset != nil { // the pairs are on disk: read the units the slots above cover
 		s.pairs.scan(from.Unix()/60/span*span/pairUnitMin, (to.Unix()/60/span+1)*span/pairUnitMin-1, func(kind int, c, name string, v uint32) {
 			if outcome != "" && qcNames[kind] != outcome {
 				return
 			}
-			if f.Client != "" && c == f.Client {
+			if cset[c] {
 				pairServers[name] += uint64(v)
 			}
-			if f.Server != "" && name == f.Server {
+			if dset[name] {
 				pairClients[c] += uint64(v)
 			}
 		})
@@ -454,10 +455,10 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 		r.Families = append(r.Families, NameCount{Name: "IPv6", Count: v6})
 	}
 	if f.Client != "" {
-		servers = withRest(pairServers, clients[f.Client])
+		servers = withRest(pairServers, sumSet(clients, cset))
 	}
 	if f.Server != "" {
-		clients = withRest(pairClients, servers[f.Server])
+		clients = withRest(pairClients, sumSet(servers, dset))
 	}
 	nc, nd := qsKeepResult, qsKeepResult
 	if f.Server != "" {
@@ -726,26 +727,84 @@ func keepMatching(m map[string]uint64, text string) map[string]uint64 {
 }
 
 // qstatsFilter checks and normalises the outcome, client and server arguments of the API and CLI.
+// qsMaxPicked is the most clients (or servers) a filter may name: the page sends several when rows are Ctrl-clicked.
+const qsMaxPicked = 100
+
+// pickSet is the set of names in a filter's comma-separated list (nil for none).
+func pickSet(s string) map[string]bool {
+	if s == "" {
+		return nil
+	}
+	m := map[string]bool{}
+	for _, p := range strings.Split(s, ",") {
+		if p != "" {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+// sumSet adds up what the counts hold for the names in the set.
+func sumSet(m map[string]uint64, set map[string]bool) uint64 {
+	var t uint64
+	for k := range set {
+		t += m[k]
+	}
+	return t
+}
+
+// cleanPicks checks each name of a comma-separated list with one, and returns the list without repeats.
+func cleanPicks(s string, one func(string) (string, error)) (string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		p, err := one(p)
+		if err != nil {
+			return "", err
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) > qsMaxPicked {
+		return "", fmt.Errorf("at most %d names can be picked", qsMaxPicked)
+	}
+	return strings.Join(out, ","), nil
+}
+
 func qstatsFilter(outcome, client, server string) (QFilter, error) {
 	var f QFilter
 	var err error
 	if f.Outcome, err = qstatsOutcome(outcome); err != nil {
 		return f, err
 	}
-	client = strings.TrimSpace(client)
-	server = strings.TrimSpace(server)
+	client, err = cleanPicks(client, func(c string) (string, error) {
+		if a, err := netip.ParseAddr(c); err == nil {
+			return a.Unmap().String(), nil
+		} else if c != "unknown" {
+			return "", fmt.Errorf("%q is not a client address", c)
+		}
+		return c, nil
+	})
+	if err != nil {
+		return f, err
+	}
+	server, err = cleanPicks(server, func(n string) (string, error) {
+		if len(n) > 255 || strings.ContainsAny(n, " \t\r\n") {
+			return "", fmt.Errorf("%q is not a server address", n)
+		}
+		return n, nil
+	})
+	if err != nil {
+		return f, err
+	}
 	if client != "" && server != "" {
 		return f, fmt.Errorf("pick a client or a server, not both")
-	}
-	if client != "" {
-		if a, err := netip.ParseAddr(client); err == nil {
-			client = a.Unmap().String()
-		} else if client != "unknown" {
-			return f, fmt.Errorf("%q is not a client address", client)
-		}
-	}
-	if len(server) > 255 || strings.ContainsAny(server, " \t\r\n") {
-		return f, fmt.Errorf("%q is not a server address", server)
 	}
 	f.Client, f.Server = client, server
 	return f, nil

@@ -3274,15 +3274,15 @@
         h("div", { class: "hint qnote" }, o.note ? [o.note, " ", h("button", { class: "qlink", type: "button", onclick: o.onClear }, "Show all")] : "\u00a0"),
         h("div", { class: "body flush" }, rows.length
           ? h("div", { class: "scroll" }, h("table", { class: "qtop" + (withHost ? "" : " plain") }, h("thead", {}, h("tr", {}, h("th", {}, mine), h("th", { class: "num" }, "Requests"), h("th", { class: "num" }, "Share"))),
-            h("tbody", {}, rows.map((e) => h("tr", { class: e.name === o.picked ? "picked" : null,
+            h("tbody", {}, rows.map((e) => h("tr", { class: inPick(o.picked, e.name) ? "picked" : null,
               oncontextmenu: e.name === "(others)" ? null : (ev) => (withHost ? clientMenu(ev, e.name, e) : serverMenu(ev, e.name)) },
               h("td", {}, e.name === "(others)" ? h("div", { class: "muted" }, e.name)
                 : (() => {
-                  const tail = withHost ? "\n\nClick: show the servers that answered this client" : "\n\nClick: show the clients this server answered";
+                  const tail = withHost ? "\n\nClick: show the servers that answered this client (Ctrl-click: add more clients)" : "\n\nClick (Ctrl-click: add more servers): show the clients this server answered";
                   const head = withHost ? (e.hosts && e.hosts.length ? e.hosts.join("\n") : "No reverse DNS name known (yet)") : "";
-                  const b = h("button", { type: "button", class: "qlink mono", "data-name": e.name, "aria-pressed": e.name === o.picked ? "true" : "false",
+                  const b = h("button", { type: "button", class: "qlink mono", "data-name": e.name, "aria-pressed": inPick(o.picked, e.name) ? "true" : "false",
                     title: withHost ? head + tail : tail.trim(),
-                    onclick: () => o.onPick(e.name === o.picked ? "" : e.name) }, e.name);
+                    onclick: (ev) => o.onPick(e.name, ev.ctrlKey || ev.metaKey) }, e.name);
                   const blk = withHost ? blockedBy(e.name) : null;
                   return blk ? h("div", { class: "qname" }, b, h("span", { class: "qblocked" + (blk.exact ? "" : " qdim"), role: "img", "aria-label": "blocked",
                     title: blk.exact ? "Blocked: this client gets no answers. Right-click ▸ Unblock to remove it." : "Blocked by " + blk.text + ": this client gets no answers. Edit it in Configure ▸ Settings ▸ Blocked clients." }, "🚫")) : b;
@@ -3296,8 +3296,19 @@
     const shareBase = (d) => { const k = Object.keys(KINDS).find((x) => KINDS[x] === sel); return k ? d.sums[k] : d.sums.total; };
     const kindLabel = (sep = " — ") => { const s = SERIES.find((x) => KINDS[x.key] === sel); return s ? sep + s.label : ""; };   // the donuts say "Outcome — Refused", the top lists "Top Clients: Refused"
     // picking a client clears the server and the other way round: one drill-down at a time
-    function pickC(c) { if (c === pickClient) return; pickClient = c; pickServer = ""; load(); }
-    function pickD(n) { if (n === pickServer) return; pickServer = n; pickClient = ""; load(); }
+    // Ctrl-click (Cmd on a Mac) adds a row to what is picked, or takes it off again; the picks travel as a comma-separated list
+    function inPick(picked, name) { return !!picked && picked.split(",").includes(name); }
+    function pickText(picked) { const l = picked.split(","); return l.length > 3 ? l.length + " picked (" + l.slice(0, 2).join(", ") + ", …)" : l.join(", "); }
+    function togglePick(cur, name, add) {
+      if (name === "") return "";
+      const l = cur ? cur.split(",") : [];
+      if (!add) return l.length === 1 && l[0] === name ? "" : name;
+      const i = l.indexOf(name);
+      if (i >= 0) l.splice(i, 1); else l.push(name);
+      return l.join(",");
+    }
+    function pickC(c, add) { const v = togglePick(pickClient, c, add); if (v === pickClient) return; pickClient = v; pickServer = ""; load(); }
+    function pickD(n, add) { const v = togglePick(pickServer, n, add); if (v === pickServer) return; pickServer = v; pickClient = ""; load(); }
     function pick(kind) {
       const was = qpsView;
       qpsView = false;   // any other tile goes back to counting queries
@@ -3319,9 +3330,9 @@
       if (tk !== topKey) { topKey = tk; topPage = { c: 0, d: 0 }; }
       fill(tops,
         topTable("Top Clients" + kindLabel(": "), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), true,
-          { picked: pickClient, onPick: pickC, note: pickServer ? "Clients that " + pickServer + " answered" : "", onClear: () => pickD("") }),
+          { picked: pickClient, onPick: pickC, note: pickServer ? "Clients that " + pickText(pickServer) + " answered" : "", onClear: () => pickD("") }),
         topTable("Top Servers" + kindLabel(": "), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), false,
-          { picked: pickServer, onPick: pickD, note: pickClient ? "Servers that answered " + pickClient : "", onClear: () => pickC("") }));
+          { picked: pickServer, onPick: pickD, note: pickClient ? "Servers that answered " + pickText(pickClient) : "", onClear: () => pickC("") }));
       clear(cnote).append(...clusterNote(d.cluster));   // which nodes are added together, when the Node menu says Cluster
       foot.hidden = true;
     }
