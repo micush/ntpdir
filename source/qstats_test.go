@@ -264,19 +264,16 @@ func TestQStatsClientServerPairs(t *testing.T) {
 	if r := s.Query(from, *cur, QFilter{Client: "192.0.2.9"}); len(r.Servers) != 0 {
 		t.Fatalf("unknown client: %+v", r.Servers)
 	}
-	// past the pair cap the difference shows as (others) and the client total stays exact
-	for i := 0; i < qsPairCaps[outAnswered]+40; i++ {
+	// every pair is kept: they go to disk, not into a capped table
+	for i := 0; i < 5000; i++ {
 		s.Record(b, "10.2."+fmtN(i/200)+"."+fmtN(i%200)+":123", 4, outAnswered)
 	}
 	s.flush()
-	s.mu.Lock()
-	n := 0
-	for _, tp := range s.fine {
-		n += tp.c[outAnswered].npairs
-	}
-	s.mu.Unlock()
-	if n > qsPairCaps[outAnswered] {
-		t.Fatalf("pair cap exceeded: %d", n)
+	u := cur.Unix() / 60 / pairUnitMin
+	rows := 0
+	s.pairs.scan(u-1, u+1, func(kind int, c, name string, v uint32) { rows++ })
+	if rows < 5000 {
+		t.Fatalf("%d pairs kept, want at least 5000", rows)
 	}
 }
 

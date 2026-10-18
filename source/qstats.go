@@ -67,31 +67,11 @@ var qsCaps = [qcCount][2]int{
 	outRefused:  {200, 10},
 }
 
-// qsPairCaps are the most distinct (client, server) pairs one slot keeps per outcome.
-// They answer "which servers answered this client" and "whom did this server answer".  A pair beyond the cap
-// is not kept; the reply makes up the difference as "(others)" from the client and server totals.
-var qsPairCaps = [qcCount]int{
-	outAnswered: 3000,
-	outFailed:   300,
-	outKoD:      300,
-	outRefused:  150,
-}
-
-// qsPairCapsCoarse is the same for the hour slots (the longer ranges), which are many more and so get less each.
-var qsPairCapsCoarse = [qcCount]int{
-	outAnswered: 1000,
-	outFailed:   100,
-	outKoD:      100,
-	outRefused:  50,
-}
-
 // qsKind is the top lists of one outcome in one slot.
 type qsKind struct {
 	clients  map[string]uint32
 	servers  map[string]uint32
 	versions map[string]uint32
-	pairs    map[string]map[string]uint32 // client → server → count
-	npairs   int
 	v4, v6   uint32
 }
 
@@ -103,6 +83,7 @@ type qsTop struct {
 // QStats is the collector.  The zero value is not usable: call NewQStats.
 type QStats struct {
 	mu         sync.Mutex
+	pairs      *pairStore            // who asked for what: on disk (qpairs.go)
 	who        map[netip.Addr]string // client address strings in use (whoString)
 	start      time.Time
 	now        func() time.Time
@@ -125,7 +106,7 @@ type rdnsEntry struct {
 }
 
 func NewQStats() *QStats {
-	return &QStats{start: time.Now(), now: time.Now, rdns: map[string]rdnsEntry{}, rwork: map[string]bool{}}
+	return &QStats{pairs: newPairStore(), start: time.Now(), now: time.Now, rdns: map[string]rdnsEntry{}, rwork: map[string]bool{}}
 }
 
 // qstats is the daemon-wide collector, fed by every NTP frontend.
@@ -206,12 +187,12 @@ func (s *QStats) apply(e qEvent) {
 		ms.refd += n
 	}
 	vn := versionName(e.version)
+	s.pairs.add(e.t, kind, who, server, n)
 	v6 := client.IsValid() && !client.Unmap().Is4()
 	for _, tier := range []struct {
 		slots []qsTop
 		span  int64
-		caps  *[qcCount]int
-	}{{s.fine[:], qsFineSpan, &qsPairCaps}, {s.coarse[:], qsCoarseSpan, &qsPairCapsCoarse}} {
+	}{{s.fine[:], qsFineSpan}, {s.coarse[:], qsCoarseSpan}} {
 		p := m / tier.span
 		tp := &tier.slots[p%int64(len(tier.slots))]
 		if tp.stamp != p {
@@ -220,21 +201,10 @@ func (s *QStats) apply(e qEvent) {
 		k := &tp.c[kind]
 		if k.clients == nil {
 			k.clients, k.servers, k.versions = map[string]uint32{}, map[string]uint32{}, map[string]uint32{}
-			k.pairs = map[string]map[string]uint32{}
 		}
 		bump(k.clients, who, qsCaps[kind][0], n)
 		bump(k.servers, server, qsCaps[kind][1], n)
 		k.versions[vn] += n
-		if sm := k.pairs[who]; sm != nil && sm[server] > 0 {
-			sm[server] += n
-		} else if k.npairs < tier.caps[kind] {
-			if sm == nil {
-				sm = map[string]uint32{}
-				k.pairs[who] = sm
-			}
-			sm[server] += n
-			k.npairs++
-		}
 		if v6 {
 			k.v6 += n
 		} else {
@@ -446,21 +416,22 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 			}
 			v4 += uint64(k.v4)
 			v6 += uint64(k.v6)
-			if f.Client != "" {
-				for n, v := range k.pairs[f.Client] {
-					pairServers[n] += uint64(v)
-				}
-			}
-			if f.Server != "" {
-				for c, m := range k.pairs {
-					if v := m[f.Server]; v > 0 {
-						pairClients[c] += uint64(v)
-					}
-				}
-			}
 		}
 	}
 	s.mu.Unlock()
+	if f.Client != "" || f.Server != "" { // the pairs are on disk: read the units the slots above cover
+		s.pairs.scan(from.Unix()/60/span*span/pairUnitMin, (to.Unix()/60/span+1)*span/pairUnitMin-1, func(kind int, c, name string, v uint32) {
+			if outcome != "" && qcNames[kind] != outcome {
+				return
+			}
+			if f.Client != "" && c == f.Client {
+				pairServers[name] += uint64(v)
+			}
+			if f.Server != "" && name == f.Server {
+				pairClients[c] += uint64(v)
+			}
+		})
+	}
 
 	for i := 0; i < n; i++ {
 		r.Sums.Total += r.Total[i]
@@ -782,4 +753,5 @@ func (s *QStats) Clear() {
 	s.coarse = [qsCoarseSlots]qsTop{}
 	s.who = nil
 	s.start = s.now()
+	s.pairs.clear()
 }

@@ -101,11 +101,7 @@ func (s *QStats) persistTo(emit func(pRec) error) error {
 					continue
 				}
 				used = true
-				rec.Top[ci] = pKind{Clients: copyU32(k.clients), Servers: copyU32(k.servers), Versions: copyU32(k.versions), NPairs: k.npairs, V4: k.v4, V6: k.v6,
-					Pairs: make(map[string]map[string]uint32, len(k.pairs))}
-				for c, dm := range k.pairs {
-					rec.Top[ci].Pairs[c] = copyU32(dm)
-				}
+				rec.Top[ci] = pKind{Clients: copyU32(k.clients), Servers: copyU32(k.servers), Versions: copyU32(k.versions), V4: k.v4, V6: k.v6}
 			}
 			s.mu.Unlock()
 			if !used {
@@ -189,6 +185,7 @@ func savePersistedOpt(dir string, durable bool) error {
 	if err := qstats.persistTo(emit); err != nil {
 		return err
 	}
+	qstats.pairs.saveOpen()
 	if err := hoststats.persistTo(emit); err != nil {
 		return err
 	}
@@ -301,17 +298,20 @@ func (s *QStats) restore(r pRec) int {
 				continue
 			}
 			q := &tp.c[ci]
-			q.clients, q.servers, q.versions, q.pairs = k.Clients, k.Servers, k.Versions, k.Pairs
-			q.npairs, q.v4, q.v6 = k.NPairs, k.V4, k.V6
+			q.clients, q.servers, q.versions = k.Clients, k.Servers, k.Versions
+			q.v4, q.v6 = k.V4, k.V6
 			if q.servers == nil {
 				q.servers = map[string]uint32{}
 			}
 			if q.versions == nil {
 				q.versions = map[string]uint32{}
 			}
-			if q.pairs == nil {
-				q.pairs = map[string]map[string]uint32{}
-			}
+		}
+		// pairs saved by an older version become the files of their units (a newer one keeps them there to begin with)
+		if r.K == "fine" {
+			s.pairs.importUnit(p, r.Top)
+		} else if p*qsCoarseSpan < nowMin-qsFineSlots*qsFineSpan {
+			s.pairs.importUnit(p*qsCoarseSpan/pairUnitMin, r.Top)
 		}
 		slots[p%int64(len(slots))] = tp
 		return 1
@@ -352,6 +352,7 @@ func (h *HostStats) restore(r pRec) int {
 // startPersistence loads the saved statistics and keeps saving them until stop is closed.  The returned
 // function stops the saver and writes the file one last time; call it once the NTP frontends have stopped.
 func startPersistence(dir string, stop <-chan struct{}) (final func()) {
+	qstats.pairs.setDir(filepath.Join(dir, "pairs"))
 	if n, err := loadPersisted(dir); err != nil {
 		warnf("statistics: reading %s: %v (kept %d entries)", filepath.Join(dir, persistFile), err, n)
 	} else if n > 0 {
