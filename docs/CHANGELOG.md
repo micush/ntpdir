@@ -1,5 +1,10 @@
 # Changelog
 
+## [v118] - 2026-10-18 — Help: signing in with Active Directory
+
+### Changed
+- **Help (Users)**: a new *Active Directory* part with the steps (join, directory group `ntpdir-users`, Login groups, group policy mapping, checks). No other change.
+
 ## [v117] - 2026-10-18 — README: signing in with Active Directory
 
 ### Changed

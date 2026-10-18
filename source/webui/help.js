@@ -586,7 +586,7 @@ const NTPDIR_HELP = {
   users: {
     title: "Users",
     body: [
-      "The accounts that may sign in to this web GUI: the members of the GUI group (`ntpdir` unless `web.group` says otherwise). They are ordinary operating-system accounts, so a password set here is the one PAM checks. In a cluster every change here is made on **every node** (the password hash is sent, not the password); if a node could not be reached the message says which, and the change can be repeated when it is back.",
+      "The accounts that may sign in to this web GUI: the members of the GUI group (`ntpdir` unless the login groups setting, `web.group`, says otherwise; the first of its groups that is local). They are ordinary operating-system accounts, so a password set here is the one PAM checks. In a cluster every change here is made on **every node** (the password hash is sent, not the password); if a node could not be reached the message says which, and the change can be repeated when it is back.",
       ["h", "What it does"],
       ["ul", [
         "The accounts are listed on the left (with a filter box); pick one to work on it on the right. **+ New** opens the form for a new account.",
@@ -605,6 +605,16 @@ const NTPDIR_HELP = {
         ["Name", "Lower-case letters, digits, `_` and `-`, up to 32 characters, starting with a letter or `_`. In *Add existing user*, the name of an account that is already on the machine."],
         ["Password", "The new account's password. It is passed to the system on standard input, never on a command line."],
         ["Expires", "Optional date after which the account cannot sign in. Empty means never."],
+      ]],
+      ["h", "Active Directory"],
+      "Directory accounts (Active Directory, through sssd) can sign in without being created here. Do this on every node; the README has the full steps (*Signing in with Active Directory*).",
+      ["ul", [
+        "**Join the node**: `realm join -U Administrator example.com` (with `realmd`, `sssd`, `adcli` installed; the node needs DNS for the domain and a clock within 5 minutes of the controller). In the domain's section of `/etc/sssd/sssd.conf` set `use_fully_qualified_names = False`, `fallback_homedir = /nonexistent` and `default_shell = /sbin/nologin`, then `systemctl restart sssd`.",
+        "**Make a group in the directory** called `ntpdir-users` and put the people in it. Its name must differ from the local `ntpdir` group: the local group is looked up first and would hide a directory group of the same name.",
+        "**Login groups** (Configure ▸ Web) takes both, separated by a comma: `ntpdir,ntpdir-users`. That is the default for a new installation; an existing configuration is not changed by an update, so set it on each node. A member of either may sign in; a group that does not exist on a node is skipped. This page manages the first one that is local.",
+        "**Group policy**: sssd refuses a PAM service it has no logon right for, which gives `pam account check (password accepted): Permission denied` in the log although ssh works. The daemon adds `ad_gpo_map_interactive = +ntpdir` to the domain's section of `sssd.conf` itself when it starts (the old file is kept as `sssd.conf.ntpdir.bak`) and restarts sssd.",
+        "**Check** with `sss_cache -E`, `id NAME` (lists `ntpdir-users`), `getent group ntpdir-users` and `pamtester ntpdir NAME authenticate acct_mgmt`. Sign in with the name `id` prints. The reason for a refusal is in the log: `journalctl -u ntpdir | grep 'login failed'`.",
+        "A directory account keeps its password and expiry in the directory, so those buttons refuse it here. *Add an existing account…* can still add one by name to the local group instead of using a directory group.",
       ]],
       ["cli", "ntpdir --users\nntpdir --user-add NAME [--expires YYYY-MM-DD]\nntpdir --user-passwd NAME\nntpdir --user-expiry NAME --expires YYYY-MM-DD|never\nntpdir --user-del NAME\nntpdir --user-grant NAME\nntpdir --user-revoke NAME"],
     ],
