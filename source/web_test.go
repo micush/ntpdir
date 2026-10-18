@@ -36,7 +36,7 @@ func (f *fakeAuth) Authenticate(service, user, pass string) error {
 }
 
 func (f *fakeAuth) InGroup(user, group string) (bool, error) {
-	if group != "ntpdir" {
+	if group != "ntpdir,ntpdir-users" {
 		return false, errors.New("wrong group")
 	}
 	return user == "alice" && !f.removed.Load(), nil
@@ -462,7 +462,7 @@ func TestWebConfigValidation(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if ok.Listen != ":12380" || ok.Group != "ntpdir" || ok.PAMService != "ntpdir" || ok.MaxFailedLogins != 3 || ok.FailedLoginWindowMinutes != 1 || ok.LockoutMinutes != 15 {
+	if ok.Listen != ":12380" || ok.Group != "ntpdir,ntpdir-users" || ok.PAMService != "ntpdir" || ok.MaxFailedLogins != 3 || ok.FailedLoginWindowMinutes != 1 || ok.LockoutMinutes != 15 {
 		t.Fatalf("defaults wrong: %+v", ok)
 	}
 	for name, mod := range map[string]func(*WebConfig){
