@@ -1,5 +1,10 @@
 # Changelog
 
+## [v102] - 2026-10-18 — Statistics page error fixed
+
+### Fixed
+- **Statistics showed "partialLast is not defined"** (v101): the helper that leaves the unfinished last step out of the charts was declared inside one function and used by another. It is now declared once where both can see it.
+
 ## [v101] - 2026-10-18 — No false drop at the end of the charts
 
 ### Fixed
