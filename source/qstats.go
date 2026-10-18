@@ -71,7 +71,15 @@ var qsCaps = [qcCount][2]int{
 // They answer "which servers answered this client" and "whom did this server answer".  A pair beyond the cap
 // is not kept; the reply makes up the difference as "(others)" from the client and server totals.
 var qsPairCaps = [qcCount]int{
-	outAnswered: 500,
+	outAnswered: 3000,
+	outFailed:   300,
+	outKoD:      300,
+	outRefused:  150,
+}
+
+// qsPairCapsCoarse is the same for the hour slots (the longer ranges), which are many more and so get less each.
+var qsPairCapsCoarse = [qcCount]int{
+	outAnswered: 1000,
 	outFailed:   100,
 	outKoD:      100,
 	outRefused:  50,
@@ -202,7 +210,8 @@ func (s *QStats) apply(e qEvent) {
 	for _, tier := range []struct {
 		slots []qsTop
 		span  int64
-	}{{s.fine[:], qsFineSpan}, {s.coarse[:], qsCoarseSpan}} {
+		caps  *[qcCount]int
+	}{{s.fine[:], qsFineSpan, &qsPairCaps}, {s.coarse[:], qsCoarseSpan, &qsPairCapsCoarse}} {
 		p := m / tier.span
 		tp := &tier.slots[p%int64(len(tier.slots))]
 		if tp.stamp != p {
@@ -218,7 +227,7 @@ func (s *QStats) apply(e qEvent) {
 		k.versions[vn] += n
 		if sm := k.pairs[who]; sm != nil && sm[server] > 0 {
 			sm[server] += n
-		} else if k.npairs < qsPairCaps[kind] {
+		} else if k.npairs < tier.caps[kind] {
 			if sm == nil {
 				sm = map[string]uint32{}
 				k.pairs[who] = sm

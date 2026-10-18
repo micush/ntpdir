@@ -64,7 +64,7 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/nettool", w.authed(w.op("nettool.start", nil)))
 	mux.HandleFunc("GET /api/nettool", w.authed(w.op("nettool.get", []string{"kind", "client"})))
 	// the whole cluster's numbers added together (not relayable: the node asked does the asking of the others)
-	mux.HandleFunc("GET /api/clusterstats", w.authed(w.op("qstats.cluster", []string{"from", "to", "outcome", "client", "server", "cmatch", "smatch"})))
+	mux.HandleFunc("GET /api/clusterstats", w.authed(w.op("qstats.cluster", []string{"gw", "from", "to", "outcome", "client", "server", "cmatch", "smatch"})))
 	mux.HandleFunc("GET /api/clusterhost", w.authed(w.op("host.cluster", []string{"from", "to"})))
 	mux.HandleFunc("GET /api/nodepause", w.authed(w.op("node.status", nil)))
 	mux.HandleFunc("POST /api/nodepause", w.authed(w.op("node.pause", nil)))
