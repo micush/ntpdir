@@ -520,8 +520,21 @@ func (s *Supervisor) stopGroupLocked(gid int) []*Engine {
 func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) {
 	want := map[int]NTPConfig{}
 	keyOf := map[int]int{}
+	// a gateway this node has been removed from (ExcludedNodes) is none of its business: its servers are not probed here and
+	// do not feed this node's chrony.  A node removed from every gateway keeps them all, so it still has time sources.
+	id := localNodeID()
+	skip := func(g *GroupConfig) bool { return id != "" && containsStr(g.ExcludedNodes, id) }
+	left := 0
+	for i := range nu.Groups {
+		if !skip(&nu.Groups[i]) {
+			left++
+		}
+	}
 	for i := range nu.Groups {
 		g := &nu.Groups[i]
+		if left > 0 && skip(g) {
+			continue
+		}
 		// a paused gateway (or node) keeps its pool: the servers are still this node's time sources
 		k, c := nu.poolFor(g)
 		keyOf[g.GroupID] = k

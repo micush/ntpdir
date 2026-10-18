@@ -1,5 +1,10 @@
 # Changelog
 
+## [v93] - 2026-10-18 — A node no longer probes the servers of gateways it was removed from
+
+### Fixed
+- **A node removed from a gateway (`excluded_nodes`) still probed that gateway's NTP servers** and used them as time sources for its own chrony: a node serving only `phx` logged `europe.pool.ntp.org` and `in.pool.ntp.org` going up and down, and its chrony sources listed them. The pools now start only for the gateways the node has not been removed from. A node removed from every gateway keeps all pools, so it is never left without a time source. `TestPoolsSkipExcludedGateways`.
+
 ## [v92] - 2026-10-17 — Months in two even rows
 
 ### Changed

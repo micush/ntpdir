@@ -757,3 +757,33 @@ func TestMergeFamilyMembersKeepsControllerFamilies(t *testing.T) {
 		t.Fatalf("both controllers on ntp1: %+v", ms)
 	}
 }
+
+func TestPoolsSkipExcludedGateways(t *testing.T) {
+	a, b := newFakeNTP(t), newFakeNTP(t)
+	mk := func(id int, vip string, own NTPConfig, excl ...string) GroupConfig {
+		g := defaultGroup()
+		g.GroupID, g.VIP4, g.NTP, g.ExcludedNodes = id, vip, &own, excl
+		return g
+	}
+	old := localNodeID()
+	setLocalNodeID("aaaaaaaaaaaaaaaa")
+	t.Cleanup(func() { setLocalNodeID(old) })
+	dc := newDaemonConfig()
+	dc.NTP = testNTPCfg(a.addr)
+	dc.Groups = []GroupConfig{mk(1, "10.1.0.1/24", testNTPCfg(a.addr)), mk(2, "10.2.0.1/24", testNTPCfg(b.addr), "aaaaaaaaaaaaaaaa")}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSupervisor(context.Background(), dc)
+	s.refreshPool(dc, true)
+	t.Cleanup(func() { s.StopAll() })
+	if s.poolFor(1) == nil || s.poolFor(2) != nil || len(s.poolList()) != 1 {
+		t.Fatalf("a gateway this node was removed from must have no pool here: %d pools", len(s.poolList()))
+	}
+	// removed from every gateway: all pools stay, so the node still has time sources
+	dc.Groups[0].ExcludedNodes = []string{"aaaaaaaaaaaaaaaa"}
+	s.refreshPool(dc, true)
+	if len(s.poolList()) != 2 {
+		t.Fatalf("a node removed from every gateway keeps all pools, got %d", len(s.poolList()))
+	}
+}
