@@ -1,5 +1,10 @@
 # Changelog
 
+## [v100] - 2026-10-18 — Controller mark on a node whose gateway is drawn from it
+
+### Fixed
+- **The topology drawing could leave the controller dot off the only node of a gateway.** For a gateway the signed-in node does not serve, the picture is taken from a node that does, and that node's own entry was matched to nodes by address only; when the address on the gateway subnet is not one the signed-in node knows for it, no node got the dot even though Monitor ▸ Gateways showed it as the controller. The serving node's own entry is now flagged (`via_local`) and matched to that node directly. `TestTakeFromClearsLocalOnMembers` checks the flag.
+
 ## [v99] - 2026-10-18 — The log filters stay when the node changes
 
 ### Changed
