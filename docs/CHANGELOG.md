@@ -1,5 +1,10 @@
 # Changelog
 
+## [v95] - 2026-10-18 — Menu order
+
+### Changed
+- The menu groups are now in the order Topology, Configure, Operate, Monitor (Monitor was second).
+
 ## [v94] - 2026-10-18 — A node no longer probes the servers of gateways it was removed from
 
 ### Fixed
