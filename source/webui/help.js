@@ -399,7 +399,6 @@ const NTPDIR_HELP = {
       ]],
       ["h", "Fields"],
       ["fields", [
-        ["Enabled", "The on/off switch of BGP on this node (the same as Disable / Enable BGP under **Operate → Anycast**). Off keeps the AS, router ID, timers and neighbors but starts no session and announces no anycast address. Needs a local AS number first."],
         ["Local AS number", "This node's AS number, for example `64512`. BGP runs on this node while it is set; clear it to turn BGP off."],
         ["Router ID", "An IPv4 address that identifies this router. Optional; empty lets FRR pick one. Needs a local AS number: the field is disabled until one is set."],
         ["Keepalive (seconds)", "How often this node sends a BGP keepalive. Default `3`. Must be shorter than the hold time."],

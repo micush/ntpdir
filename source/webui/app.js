@@ -3970,21 +3970,10 @@
         if (prep.checked) next.as_prepend = true; else delete next.as_prepend;
         save(next);
       };
-      // the on/off switch of BGP on this node (the same as Operate ▸ Anycast): off keeps every setting but announces nothing
-      const on = h("input", { type: "checkbox", checked: !cfg.disabled, disabled: !(cfg.asn > 0), "aria-label": "BGP enabled" });
-      on.addEventListener("change", async () => {
-        if (!on.checked && !confirm("Disable BGP on this node?\n\nIts sessions go down and the anycast addresses are no longer announced from this node. The settings are kept.")) { on.checked = true; return; }
-        on.disabled = true;
-        chain = chain.then(async () => {
-          try { await api("POST", "/api/bgp/operate", { enabled: on.checked }); say(status, "ok"); } catch (e) { fail(status)(e); }
-          await load();
-        });
-      });
       asn.addEventListener("input", needAS);
       for (const el of [asn, rid, ka, hold, prep]) el.addEventListener("change", commit);
       clear(settings).append(section("BGP",
         h("div", { class: "bgprow" },
-          h("label", { class: "f" }, h("span", {}, "\u00a0"), h("span", { class: "opt", title: cfg.asn > 0 ? "Off: every setting is kept, but no session is started and no anycast address is announced from this node." : "Set a local AS number first." }, on, " Enabled")),
           h("label", { class: "f" }, h("span", {}, "Local AS number"), asn),
           h("label", { class: "f" }, h("span", {}, "Router ID"), rid),
           h("label", { class: "f" }, h("span", {}, "Keepalive"), ka),

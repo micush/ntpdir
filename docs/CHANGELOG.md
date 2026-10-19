@@ -1,5 +1,10 @@
 # Changelog
 
+## [v125] - 2026-10-18 — One BGP switch, in Operate only
+
+### Removed
+- The Enabled box for BGP as a whole in Configure ▸ Anycast (added in the previous version): switching BGP off and on stays under Operate ▸ Anycast ▸ Disable BGP. The Enabled box on each neighbor's row stays.
+
 ## [v124] - 2026-10-18 — BGP on/off switch in Configure ▸ Anycast
 
 ### Added
