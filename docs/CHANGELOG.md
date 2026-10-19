@@ -1,5 +1,12 @@
 # Changelog
 
+## [v127] - 2026-10-19 — Whois no longer repeats a timeout for an hour
+
+### Fixed
+- **A whois server's IPv4 addresses are asked before its IPv6 ones, each address in turn.** On a node whose IPv6 path to whois.iana.org connects but never answers, every lookup waited out the timeout and failed although the IPv4 path worked.
+- **A whois lookup that failed to reach the server (timeout, connection refused or reset) was remembered for an hour** like a real "not found", so Run again returned the same error without asking anybody. It is now remembered for 15 seconds only; "not found" answers are kept as before.
+- When whois.iana.org does not answer, the common TLDs (com, net, org, info, biz, io, us, uk, de, fr, nl, edu, eu, ca, co, me, dev, app) go straight to their registry's whois server, the way the `whois` command does.
+
 ## [v126] - 2026-10-19 — The scheduler's "Only in" months on two lines
 
 ### Fixed
