@@ -1,5 +1,10 @@
 # Changelog
 
+## [v139] - 2026-10-20 — No read-only tag beside the user name
+
+### Removed
+- The "read-only" tag next to the signed-in name at the top. Read-only accounts still cannot change anything, and the Users page still marks them.
+
 ## [v138] - 2026-10-20 — The ntpdir-ro group is made on a web update too
 
 ### Fixed
