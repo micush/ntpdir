@@ -1,5 +1,11 @@
 # Changelog
 
+## [v137] - 2026-10-20 — Read-only users on the Users page, and a ntpdir-ro group made on install
+
+### Added
+- **Users page: Access.** Adding a user or an existing account has an Access choice (Full access or Read-only), and a user's page has one too (Save moves the account between the login group and the read-only group on every node). Read-only users show a read-only pill in the list. Read-only accounts are not counted as the last account that can sign in, and the account you are signed in as cannot make itself read-only.
+- **The installer creates the group `ntpdir-ro`** next to `ntpdir` (`--add-ro-user NAME` adds someone to it; the uninstaller keeps it unless `--remove-group`, or `--purge` when the installer made it). It is the new default of **Read-only groups** (`web.read_group`); an empty setting turns read-only access off, and a configuration written by the previous version, which had none, gets the default.
+
 ## [v136] - 2026-10-20 — Read-only group, and a test that the cards, chart and lists agree
 
 ### Added

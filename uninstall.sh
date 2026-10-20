@@ -19,11 +19,12 @@ UNIT=/etc/systemd/system/$UNIT_NAME
 PAM_FILE=/etc/pam.d/ntpdir
 NM_FILE=/etc/NetworkManager/conf.d/90-ntpdir-unmanaged.conf
 GROUP=ntpdir
+RO_GROUP=ntpdir-ro
 LEGACY_CONF_DIR=/etc/liras   # where releases before v15 kept the config
 STATE_DIR=/var/lib/ntpdir
 CONF_DIR=$STATE_DIR
 SYSTEMCTL=${NTPDIR_SYSTEMCTL:-systemctl}
-PAM_CREATED=""; NM_CREATED=""; GROUP_CREATED=""; PAM_SHA256=""; CHRONY_CONF=""
+PAM_CREATED=""; NM_CREATED=""; GROUP_CREATED=""; RO_GROUP_CREATED=""; PAM_SHA256=""; CHRONY_CONF=""
 CHRONY_BEGIN='# >>> ntpdir (managed block, removed by ntpdir-uninstall) >>>'
 CHRONY_END='# <<< ntpdir <<<'
 CHRONY_OFF='#ntpdir-off# '
@@ -73,7 +74,7 @@ fi
 mval() { sed -n "s/^$1=//p" "$MANIFEST" 2>/dev/null | head -n1; }
 if [ -f "$MANIFEST" ]; then
   PAM_CREATED=$(mval PAM_CREATED); NM_CREATED=$(mval NM_CREATED)
-  GROUP_CREATED=$(mval GROUP_CREATED); PAM_SHA256=$(mval PAM_SHA256); CHRONY_CONF=$(mval CHRONY_CONF)
+  GROUP_CREATED=$(mval GROUP_CREATED); RO_GROUP_CREATED=$(mval RO_GROUP_CREATED); PAM_SHA256=$(mval PAM_SHA256); CHRONY_CONF=$(mval CHRONY_CONF)
 else
   warn "no install manifest at $MANIFEST — using the default layout; the group and PAM file will be left alone unless --purge"
 fi
@@ -217,6 +218,13 @@ if [ "$RM_GROUP" = 1 ] || { [ "$PURGE" = 1 ] && [ "$GROUP_CREATED" = 1 ]; }; the
   fi
 elif getent group "$GROUP" >/dev/null 2>&1; then
   info "kept group $GROUP (use --remove-group to delete it)"
+fi
+if [ "$RM_GROUP" = 1 ] || { [ "$PURGE" = 1 ] && [ "$RO_GROUP_CREATED" = 1 ]; }; then
+  if getent group "$RO_GROUP" >/dev/null 2>&1; then
+    run groupdel "$RO_GROUP" && info "removed group $RO_GROUP" || warn "could not remove group $RO_GROUP"
+  fi
+elif getent group "$RO_GROUP" >/dev/null 2>&1; then
+  info "kept group $RO_GROUP (use --remove-group to delete it)"
 fi
 
 step "AnyTime removed"
