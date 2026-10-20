@@ -307,7 +307,7 @@
         h("div", { class: "muted small" }, "v" + s.version + (s.hostname && s.hostname.toLowerCase() !== "ntpdir" ? " · " + s.hostname : ""))),
       h("div", { class: "nav-section" }, groups),
       h("div", { class: "nav-footer" },
-        h("div", { class: "who" }, "Signed in as ", h("strong", {}, s.user)),
+        h("div", { class: "who" }, "Signed in as ", h("strong", {}, s.user), s.read_only ? h("span", { class: "ro-badge", title: "This account can look at everything but cannot change anything" }, "read-only") : null),
         h("button", { class: "nav-signout", type: "button", onclick: logout }, "Sign out")));
     root.append(helpControls());
     root.append(h("div", { class: "shell" }, nav,
@@ -2092,6 +2092,7 @@
   const WEB_FIELDS = [
     { k: "listen", l: "Listen address", t: "port", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
     { shared: true, k: "group", l: "Login groups", t: "text", hint: "one or more, separated by commas: a member of any may sign in. The first one that is a local group is the one the Users page manages; the others can be directory (Active Directory) groups" },
+    { shared: true, k: "read_group", l: "Read-only groups", t: "text", hint: "optional, same form: a member of one of these (and of none of the login groups) can sign in and look at everything but change nothing, for example ntpdir-view" },
     { k: "pam_service", l: "PAM service", t: "text" },
     { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", min: 1 },
     { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", min: 1 },
@@ -2969,7 +2970,7 @@
         tile("q-fail", "Failed", d.sums.failed, pct(d.sums.failed, t), "failed"),
         tile("q-nx", "Kiss-o'-death", d.sums.kod, pct(d.sums.kod, t), "kod"),
         tile("q-ref", "Refused", d.sums.refused, pct(d.sums.refused, t), "refused"),
-        tile("q-clients", "Clients", d.sums.clients, "", "clients", "Click to draw the number of distinct clients over time in the chart (every ten minutes up to a day and a half, hourly beyond; a lower bound, and in a cluster the busiest node's count)"));
+        tile("q-clients", "Clients", d.sums.clients, "", "clients", "Click to draw the clients counted so far in the chart; its last point is this number (the line moves in steps of ten minutes up to a day and a half, an hour beyond)"));
     }
 
     function drawChart(d) {
@@ -2986,7 +2987,7 @@
         h("button", { type: "button", class: "qchip " + s.cls, "aria-pressed": hidden.has(s.key) && !only ? "false" : "true", disabled: only || single ? "" : null,
           onclick: () => { if (hidden.has(s.key)) hidden.delete(s.key); else hidden.add(s.key); drawChart(d); } },
           h("span", { class: "sw" }), s.label)));
-      const n = d.total.length - (partialLast(d, d.total.length) ? 1 : 0);   // the bucket still filling is left out
+      const n = d.total.length - (partialLast(d, d.total.length) && !clientsView ? 1 : 0);   // the bucket still filling is left out (not for the running client count: it only grows, and its last point is the tile)
       const top = Math.max(qpsView ? 0.1 : 1, ...shown.flatMap((s) => d[s.key].slice(0, n))), max = qpsView ? 4 * niceMax(top / 4) : niceMax(top);   // a rate gets four round steps
       const yLabels = [0, 1, 2, 3, 4].map((g) => (qpsView ? fq((max * g) / 4) : n0(Math.round((max * g) / 4))));
       const W = 1000, H = 300, L = axisMargin(yLabels, 52), R = 14, T = 12, B = 28, pw = W - L - R, ph = H - T - B;

@@ -299,27 +299,28 @@ type NameCount struct {
 // QStatsResult is the answer to a query: parallel series, one point per Step seconds
 // from Start, plus the totals and top lists over the whole range.
 type QStatsResult struct {
-	Client   string       `json:"client,omitempty"` // when set, Servers lists the servers that answered this client
-	Server   string       `json:"server,omitempty"` // when set, Clients lists whom this server answered
-	Outcome  string       `json:"outcome"`          // the outcome the versions, families and top lists are limited to; empty is all
-	Start    int64        `json:"start"`
-	Step     int          `json:"step"`
-	From     int64        `json:"from"`
-	To       int64        `json:"to"`
-	Since    int64        `json:"since"` // when the daemon started counting
-	Total    []uint64     `json:"total"`
-	Answered []uint64     `json:"answered"`
-	Failed   []uint64     `json:"failed"`
-	KoD      []uint64     `json:"kod"`
-	Refused  []uint64     `json:"refused"`
-	ClientsN []uint64     `json:"client_counts"` // distinct clients seen in each point (10-minute resolution up to a day and a half, an hour beyond; a lower bound)
-	Sums     QStatsSums   `json:"sums"`
-	Guard    MemGuardInfo `json:"guard"` // what the memory guard has dropped
-	Versions []NameCount  `json:"versions"`
-	Families []NameCount  `json:"families"`
-	Clients  []NameCount  `json:"clients"`
-	Servers  []NameCount  `json:"servers"`
-	Cluster  *ClusterInfo `json:"cluster,omitempty"` // set when the numbers are those of several nodes added together
+	Client     string       `json:"client,omitempty"` // when set, Servers lists the servers that answered this client
+	Server     string       `json:"server,omitempty"` // when set, Clients lists whom this server answered
+	Outcome    string       `json:"outcome"`          // the outcome the versions, families and top lists are limited to; empty is all
+	Start      int64        `json:"start"`
+	Step       int          `json:"step"`
+	From       int64        `json:"from"`
+	To         int64        `json:"to"`
+	Since      int64        `json:"since"` // when the daemon started counting
+	Total      []uint64     `json:"total"`
+	Answered   []uint64     `json:"answered"`
+	Failed     []uint64     `json:"failed"`
+	KoD        []uint64     `json:"kod"`
+	Refused    []uint64     `json:"refused"`
+	ClientsN   []uint64     `json:"client_counts"`        // distinct clients seen so far in the range, per point (10-minute resolution up to a day and a half, an hour beyond; a lower bound)
+	ClientsNew [][]string   `json:"client_new,omitempty"` // the clients first seen at each point, so a cluster can take the union exactly
+	Sums       QStatsSums   `json:"sums"`
+	Guard      MemGuardInfo `json:"guard"` // what the memory guard has dropped
+	Versions   []NameCount  `json:"versions"`
+	Families   []NameCount  `json:"families"`
+	Clients    []NameCount  `json:"clients"`
+	Servers    []NameCount  `json:"servers"`
+	Cluster    *ClusterInfo `json:"cluster,omitempty"` // set when the numbers are those of several nodes added together
 }
 
 type QStatsSums struct {
@@ -397,7 +398,7 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 	if now.Sub(from) <= qsFineWithin {
 		slots, span = s.fine[:], qsFineSpan
 	}
-	r.ClientsN = distinctPerPoint(slots, span, outcome, start, step, n)
+	r.ClientsN, r.ClientsNew = distinctPerPoint(slots, span, outcome, start, step, n, from.Unix()/60/span, to.Unix()/60/span)
 	for p := from.Unix() / 60 / span; p <= to.Unix()/60/span; p++ {
 		tp := &slots[p%int64(len(slots))]
 		if tp.stamp != p {
@@ -894,46 +895,39 @@ func (s *QStats) Clear() {
 	s.pairs.clear()
 }
 
-// distinctPerPoint counts the distinct clients in each of the n points of a chart: the union of the
-// clients of every top-list slot the point overlaps (limited to one outcome when outcome is set).
-// A slot is longer than a point at the finest steps; then the points inside it share its count.
-func distinctPerPoint(slots []qsTop, span int64, outcome string, start, step int64, n int) []uint64 {
+// distinctPerPoint counts, for each of the n points of a chart, the distinct clients seen from the start
+// of the range up to and including that point (limited to one outcome when set), so the last point is the
+// Clients tile.  It also returns the clients first seen at each point.  Top-list slots run from pMin to
+// pMax; a slot longer than a point is counted at the first point that overlaps it.
+func distinctPerPoint(slots []qsTop, span int64, outcome string, start, step int64, n int, pMin, pMax int64) ([]uint64, [][]string) {
 	out := make([]uint64, n)
-	memo := map[int64]uint64{}
-	for i := 0; i < n; i++ {
-		m0, m1 := (start+int64(i)*step)/60, (start+int64(i+1)*step-1)/60
-		p0, p1 := m0/span, m1/span
-		if p0 == p1 {
-			c, ok := memo[p0]
-			if !ok {
-				c = distinctIn(slots, p0, p0, outcome)
-				memo[p0] = c
-			}
-			out[i] = c
-			continue
-		}
-		out[i] = distinctIn(slots, p0, p1, outcome)
-	}
-	return out
-}
-
-func distinctIn(slots []qsTop, p0, p1 int64, outcome string) uint64 {
+	news := make([][]string, n)
 	seen := map[string]struct{}{}
-	for p := p0; p <= p1; p++ {
-		tp := &slots[p%int64(len(slots))]
-		if tp.stamp != p {
-			continue
-		}
-		for ci := range tp.c {
-			if outcome != "" && qcNames[ci] != outcome {
+	done := map[int64]bool{}
+	for i := 0; i < n; i++ {
+		p0, p1 := (start+int64(i)*step)/60/span, (start+int64(i+1)*step-1)/60/span
+		for p := max(p0, pMin); p <= min(p1, pMax); p++ {
+			if done[p] {
 				continue
 			}
-			for c := range tp.c[ci].clients {
-				if c != qsOthers {
-					seen[c] = struct{}{}
+			done[p] = true
+			tp := &slots[p%int64(len(slots))]
+			if tp.stamp != p {
+				continue
+			}
+			for ci := range tp.c {
+				if outcome != "" && qcNames[ci] != outcome {
+					continue
+				}
+				for c := range tp.c[ci].clients {
+					if _, ok := seen[c]; !ok && c != qsOthers {
+						seen[c] = struct{}{}
+						news[i] = append(news[i], c)
+					}
 				}
 			}
 		}
+		out[i] = uint64(len(seen))
 	}
-	return uint64(len(seen))
+	return out, news
 }
