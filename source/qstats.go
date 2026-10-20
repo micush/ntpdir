@@ -312,6 +312,7 @@ type QStatsResult struct {
 	Failed   []uint64     `json:"failed"`
 	KoD      []uint64     `json:"kod"`
 	Refused  []uint64     `json:"refused"`
+	ClientsN []uint64     `json:"client_counts"` // distinct clients seen in each point (10-minute resolution up to a day and a half, an hour beyond; a lower bound)
 	Sums     QStatsSums   `json:"sums"`
 	Guard    MemGuardInfo `json:"guard"` // what the memory guard has dropped
 	Versions []NameCount  `json:"versions"`
@@ -371,7 +372,7 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 		n = qsMaxPoints
 	}
 	r := &QStatsResult{Outcome: outcome, Client: f.Client, Server: f.Server, Start: start, Step: int(step), From: from.Unix(), To: to.Unix(), Since: s.start.Unix(),
-		Total: make([]uint64, n), Answered: make([]uint64, n), Failed: make([]uint64, n), KoD: make([]uint64, n), Refused: make([]uint64, n),
+		Total: make([]uint64, n), Answered: make([]uint64, n), Failed: make([]uint64, n), KoD: make([]uint64, n), Refused: make([]uint64, n), ClientsN: make([]uint64, n),
 		Versions: []NameCount{}, Families: []NameCount{}, Clients: []NameCount{}, Servers: []NameCount{}}
 	versions, clients, servers := map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
 	var v4, v6 uint64
@@ -396,6 +397,7 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 	if now.Sub(from) <= qsFineWithin {
 		slots, span = s.fine[:], qsFineSpan
 	}
+	r.ClientsN = distinctPerPoint(slots, span, outcome, start, step, n)
 	for p := from.Unix() / 60 / span; p <= to.Unix()/60/span; p++ {
 		tp := &slots[p%int64(len(slots))]
 		if tp.stamp != p {
@@ -890,4 +892,48 @@ func (s *QStats) Clear() {
 	s.who = nil
 	s.start = s.now()
 	s.pairs.clear()
+}
+
+// distinctPerPoint counts the distinct clients in each of the n points of a chart: the union of the
+// clients of every top-list slot the point overlaps (limited to one outcome when outcome is set).
+// A slot is longer than a point at the finest steps; then the points inside it share its count.
+func distinctPerPoint(slots []qsTop, span int64, outcome string, start, step int64, n int) []uint64 {
+	out := make([]uint64, n)
+	memo := map[int64]uint64{}
+	for i := 0; i < n; i++ {
+		m0, m1 := (start+int64(i)*step)/60, (start+int64(i+1)*step-1)/60
+		p0, p1 := m0/span, m1/span
+		if p0 == p1 {
+			c, ok := memo[p0]
+			if !ok {
+				c = distinctIn(slots, p0, p0, outcome)
+				memo[p0] = c
+			}
+			out[i] = c
+			continue
+		}
+		out[i] = distinctIn(slots, p0, p1, outcome)
+	}
+	return out
+}
+
+func distinctIn(slots []qsTop, p0, p1 int64, outcome string) uint64 {
+	seen := map[string]struct{}{}
+	for p := p0; p <= p1; p++ {
+		tp := &slots[p%int64(len(slots))]
+		if tp.stamp != p {
+			continue
+		}
+		for ci := range tp.c {
+			if outcome != "" && qcNames[ci] != outcome {
+				continue
+			}
+			for c := range tp.c[ci].clients {
+				if c != qsOthers {
+					seen[c] = struct{}{}
+				}
+			}
+		}
+	}
+	return uint64(len(seen))
 }

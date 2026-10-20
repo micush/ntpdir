@@ -367,7 +367,7 @@ func mergeQStats(parts []clusterPart[QStatsResult], infos []ClusterNodeInfo) *QS
 	start, n := commonSpan(starts, lens, step)
 	r := &QStatsResult{Outcome: use[0].R.Outcome, Client: use[0].R.Client, Server: use[0].R.Server,
 		Start: start, Step: step, From: use[0].R.From, To: use[0].R.To, Since: use[0].R.Since,
-		Total: make([]uint64, n), Answered: make([]uint64, n), Failed: make([]uint64, n), KoD: make([]uint64, n), Refused: make([]uint64, n),
+		Total: make([]uint64, n), Answered: make([]uint64, n), Failed: make([]uint64, n), KoD: make([]uint64, n), Refused: make([]uint64, n), ClientsN: make([]uint64, n),
 		Versions: []NameCount{}, Families: []NameCount{}, Clients: []NameCount{}, Servers: []NameCount{}}
 	versions, families, clients, servers := map[string]*NameCount{}, map[string]*NameCount{}, map[string]*NameCount{}, map[string]*NameCount{}
 	maxClients := 0
@@ -395,6 +395,11 @@ func mergeQStats(parts []clusterPart[QStatsResult], infos []ClusterNodeInfo) *QS
 		add(r.Failed, q.Failed)
 		add(r.KoD, q.KoD)
 		add(r.Refused, q.Refused)
+		for i, v := range q.ClientsN { // nodes see the same clients, so a sum would count them twice: the busiest node is the lower bound
+			if j := off + i; j >= 0 && j < len(r.ClientsN) && v > r.ClientsN[j] {
+				r.ClientsN[j] = v
+			}
+		}
 		s := q.Sums
 		r.Sums.Total, r.Sums.Answered, r.Sums.Failed = r.Sums.Total+s.Total, r.Sums.Answered+s.Answered, r.Sums.Failed+s.Failed
 		r.Sums.KoD, r.Sums.Refused = r.Sums.KoD+s.KoD, r.Sums.Refused+s.Refused
