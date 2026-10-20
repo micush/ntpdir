@@ -1,5 +1,10 @@
 # Changelog
 
+## [v138] - 2026-10-20 — The ntpdir-ro group is made on a web update too
+
+### Fixed
+- A node updated from the web page (or by hand) never ran `install.sh`, so it did not get the `ntpdir-ro` group. The daemon now creates it when it starts (and when the settings change) if it is the first of the Read-only groups and is missing, only when running as root; any other name, such as a directory group, is left alone.
+
 ## [v137] - 2026-10-20 — Read-only users on the Users page, and a ntpdir-ro group made on install
 
 ### Added
