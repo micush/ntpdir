@@ -197,6 +197,7 @@ type ChronyState struct {
 // x falseticker, ~ too variable).
 type ChronySrc struct {
 	Name  string `json:"name"`
+	Alias string `json:"alias,omitempty"` // the name the source was configured with ("time.google.com"), when Name is its address
 	State string `json:"state"`
 	Reach int    `json:"reach"` // how many of its last 8 polls were answered
 }
@@ -211,7 +212,7 @@ func (s ChronyState) stateOf(addr string) string {
 		host = addr[1 : len(addr)-1]
 	}
 	for _, c := range s.Sources {
-		if strings.EqualFold(c.Name, host) {
+		if strings.EqualFold(c.Name, host) || (c.Alias != "" && strings.EqualFold(c.Alias, host)) {
 			return c.State
 		}
 	}
@@ -223,6 +224,9 @@ type chronyMgr struct {
 	last     []string // the servers last written (sorted lines)
 	pending  bool     // the file was written but chrony has not yet taken it
 	state    ChronyState
+	aliasKey string                  // the addresses of the sources the aliases were read for
+	aliasAt  time.Time               // when
+	aliases  []string                // the configured name of each source, in the order of the numeric list (nil: not known)
 	confBody string                  // the client file as last written, "" before the first look
 	offLimit int                     // how far the clock may be off and still serve, ms (0: no limit)
 	offOver  bool                    // the clock is beyond that now
@@ -631,8 +635,14 @@ func (m *chronyMgr) readState() ChronyState {
 			haveSources = err == nil
 		}
 		if haveSources {
-			for _, s := range parseSources(so) {
-				st.Sources = append(st.Sources, ChronySrc{Name: s.Name, State: s.State, Reach: s.Reach})
+			srcs := parseSources(so)
+			names := m.sourceNames(srcs)
+			for i, s := range srcs {
+				cs := ChronySrc{Name: s.Name, State: s.State, Reach: s.Reach}
+				if names != nil && names[i] != s.Name {
+					cs.Alias = names[i]
+				}
+				st.Sources = append(st.Sources, cs)
 			}
 		}
 		m.mu.Lock()
@@ -648,6 +658,42 @@ func (m *chronyMgr) readState() ChronyState {
 	m.state = st
 	m.mu.Unlock()
 	return st
+}
+
+// sourceNames gives, for each source of the numeric list, the name it was configured with (chronyc -N: "time.google.com"
+// where the numeric list has 216.239.35.8), so a server written as a host name can be found in chrony's list.  It
+// is asked again only when the list of addresses changes or once a minute, not at every look; nil when this chrony
+// cannot say (before 4.0) or the two lists do not line up.
+func (m *chronyMgr) sourceNames(srcs []chronySource) []string {
+	ips := make([]string, len(srcs))
+	for i, s := range srcs {
+		ips[i] = s.Name
+	}
+	key := strings.Join(ips, ",")
+	m.mu.Lock()
+	if key == m.aliasKey && time.Since(m.aliasAt) < time.Minute {
+		a := m.aliases
+		m.mu.Unlock()
+		return a
+	}
+	m.mu.Unlock()
+	var names []string
+	if out, err := chronyc("-c", "-N", "sources"); err == nil {
+		if ns := parseSources(out); len(ns) == len(srcs) {
+			names = make([]string, len(ns))
+			for i := range ns {
+				if ns[i].Mode != srcs[i].Mode {
+					names = nil
+					break
+				}
+				names[i] = ns[i].Name
+			}
+		}
+	}
+	m.mu.Lock()
+	m.aliasKey, m.aliasAt, m.aliases = key, time.Now(), names
+	m.mu.Unlock()
+	return names
 }
 
 // State is the last reading.

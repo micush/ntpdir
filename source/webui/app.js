@@ -1893,7 +1893,7 @@
           oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
             openMenu(e, [["New gateway", () => gatewayForm(null)]].concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
-          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time (* selected)");
+          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
         main.append(svgHost, legend);
         cv.loaded = false;
         load().then(() => {

@@ -1,5 +1,15 @@
 # Changelog
 
+## [v133] - 2026-10-20 — Topology finds servers written as host names in chrony's list
+
+### Fixed
+- **No blue line (and no chrony state in the tooltip) for a server written as a host name**, such as `time.google.com`, although chrony was using it: the topology looks the server up in chrony's numeric list (`chronyc sources -n`), where it is an IP address. The daemon now also asks chrony for the names its sources were configured with (`chronyc -N sources`, chrony 4.0 and later; once a minute or when the list of addresses changes, not at every look) and matches on those too. A chrony without `-N` behaves as before.
+
+## [v132] - 2026-10-20 — Topology legend
+
+### Fixed
+- The legend under the topology said "used for time (* selected)", but nothing on the page shows a `*`. It now says "used for time".
+
 ## [v131] - 2026-10-19 — Capture keeps its filter when the node changes
 
 ### Fixed
