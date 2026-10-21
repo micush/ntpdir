@@ -425,17 +425,16 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 	s.mu.Unlock()
 	cset, dset := pickSet(f.Client), pickSet(f.Server)
 	if cset != nil || dset != nil { // the pairs are on disk: read the units the slots above cover
-		s.pairs.scan(from.Unix()/60/span*span/pairUnitMin, (to.Unix()/60/span+1)*span/pairUnitMin-1, func(kind int, c, name string, v uint32) {
-			if outcome != "" && qcNames[kind] != outcome {
-				return
+		okind := -1
+		for i, n := range qcNames {
+			if outcome != "" && n == outcome {
+				okind = i
 			}
-			if cset[c] {
-				pairServers[name] += uint64(v)
-			}
-			if dset[name] {
-				pairClients[c] += uint64(v)
-			}
-		})
+		}
+		if outcome != "" && okind < 0 {
+			okind = qcCount // no such outcome: nothing matches
+		}
+		pairServers, pairClients = s.pairs.lookup(from.Unix()/60/span*span/pairUnitMin, (to.Unix()/60/span+1)*span/pairUnitMin-1, now.Unix()/60/pairUnitMin, okind, cset, dset)
 	}
 
 	for i := 0; i < n; i++ {
