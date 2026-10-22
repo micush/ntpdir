@@ -1,5 +1,10 @@
 # Changelog
 
+## [v150] - 2026-10-22 — Last apply shows just the tag
+
+### Changed
+- **Anycast ▸ Last apply** shows only the **ok** tag when the last apply worked (no "FRR is configured" beside it); a failure still shows its message.
+
 ## [v149] - 2026-10-22 — Empty new rows go away
 
 ### Changed
