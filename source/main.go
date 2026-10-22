@@ -117,7 +117,7 @@ the web GUI):
                                                  (per node; ntpdir then owns /etc/frr/frr.conf; BFD is always on)
   Cluster          --cluster-status  --cluster-token  --cluster-join CODE
                    --cluster-promote  --cluster-remove ADDR
-                   --cluster-unremove ADDR  --cluster-leave  --cluster-sync
+                   --cluster-delete ADDR  --cluster-unremove ADDR  --cluster-leave  --cluster-sync
                    (GUI: the Node menu, top right, configures any member)
   Upgrade          --update-status  --update-history  --update-upload FILE
                    --update-apply  --update-push all|ADDR,...

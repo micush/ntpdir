@@ -23,7 +23,7 @@ type cliFlags struct {
 	updateStatus, updateApply, updateHistory, noWait, yes                                                                                                                                                                                   *bool
 	versionShow, versionDiff, versionRestore, versionExport, configImport, note                                                                                                                                                             *string
 	certFile, keyFile, cn, san                                                                                                                                                                                                              *string
-	clusterJoin, clusterRemove, clusterUnremove                                                                                                                                                                                             *string
+	clusterJoin, clusterRemove, clusterUnremove, clusterDelete                                                                                                                                                                              *string
 	users, schedule, scheduleHistory                                                                                                                                                                                                        *bool
 	scheduleSet, scheduleDel, scheduleRun                                                                                                                                                                                                   *string
 	userAdd, userPasswd, userExpiry, userDel, userGrant, userRevoke, expires                                                                                                                                                                *string
@@ -52,7 +52,7 @@ func registerCLIFlags(fs *flag.FlagSet) *cliFlags {
 		versionShow: s("version-show"), versionDiff: s("version-diff"), versionRestore: s("version-restore"),
 		versionExport: s("version-export"), configImport: s("config-import"), note: s("note"),
 		certFile: s("cert-file"), keyFile: s("key-file"), cn: s("cn"), san: s("san"),
-		clusterJoin: s("cluster-join"), clusterRemove: s("cluster-remove"), clusterUnremove: s("cluster-unremove"),
+		clusterJoin: s("cluster-join"), clusterRemove: s("cluster-remove"), clusterUnremove: s("cluster-unremove"), clusterDelete: s("cluster-delete"),
 		canvas: b("canvas"), vmacTest: b("test-vmac"), tshoot: b("tshoot"), tshootCapture: b("tshoot-capture"), tshootFile: s("tshoot-file"), realMACs: s("real-macs"), canvasAdd: s("canvas-add"), canvasDel: s("canvas-del"),
 		canvasSet: s("canvas-set"), canvasMove: s("canvas-move"), pos: fs.Int("to", 0, ""), canvasPause: s("canvas-pause"), canvasResume: s("canvas-resume"), vip6: s("vip6"), label: s("label"), anycast: s("anycast"), address: s("address"), scope: s("scope"), node: s("node"),
 		serverStats: s("server-stats"), gatewayStats: s("gateway-stats"), lbMode: s("lb"), maxStratum: fs.Int("max-stratum", 0, ""), maxRootDist: fs.Int("max-root-distance", 0, ""), maxOffset: s("max-offset"),
@@ -334,6 +334,10 @@ func (f *cliFlags) run(sock string) bool {
 		askYes("Remove "+*f.clusterRemove+" from the cluster?", *f.yes)
 		op(sock, "cluster.remove", map[string]any{"addr": *f.clusterRemove})
 		fmt.Println("Removed.")
+	case *f.clusterDelete != "":
+		askYes("Delete "+*f.clusterDelete+" from the cluster for good? Nothing is kept about it, not even a block on its address.", *f.yes)
+		op(sock, "cluster.delete", map[string]any{"addr": *f.clusterDelete})
+		fmt.Println("Deleted.")
 	case *f.clusterUnremove != "":
 		op(sock, "cluster.unremove", map[string]any{"addr": *f.clusterUnremove})
 		fmt.Println("Removal lifted; the node can join again with a new join code.")

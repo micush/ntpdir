@@ -1,5 +1,10 @@
 # Changelog
 
+## [v143] - 2026-10-21 — Delete a cluster member in one step
+
+### Changed
+- **Cluster ▸ Members:** right-click a member ▸ **Delete** drops it from the cluster and leaves nothing behind (before, **Remove** put its address on a removed list and a second step, **Allow again**, was needed to clear it). A member that is still running resets itself to a cluster of one. The removed-nodes card now has a **Delete** button on each address to forget one that is already there. Command line: `--cluster-delete ADDR`. `--cluster-remove` and `--cluster-unremove` are unchanged, for blocking a node that must not come back.
+
 ## [v142] - 2026-10-21 — Picking a client or a domain in the statistics is much faster
 
 ### Changed

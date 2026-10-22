@@ -320,7 +320,7 @@ const NTPDIR_HELP = {
       ["ul", [
         "One node is the **primary**; the others are **replicas**. Shared settings are checked on the primary and copied out within the sync interval.",
         "If the primary is gone for good, choose **Promote** on the replica you want. Failover is automatic: a replica promotes itself when the primary has not answered for 5 minutes and more than half of the members, that replica included, agree; the one with the newest settings promotes and the others follow. It is on from three members and off with two. A replica cut off from the others never has a majority, so a network split cannot create two primaries; with two members only you can promote.",
-        "Right-click a member (not this node) and choose **Remove**: it drops the member (it resets itself to a cluster of one when it next hears from the cluster); it can be allowed back with **Unremove**. **Leave cluster** does it from the node itself.",
+        "Right-click a member (not this node) and choose **Delete**: the member is dropped for good, nothing is kept about it (a copy that is still running resets itself to a cluster of one), and it is not put on a removed list, so a new node can use its address. Command line: `--cluster-delete ADDR`. **Leave cluster** does it from the node itself. (`--cluster-remove` still drops a member but blocks its address and identity until `--cluster-unremove`, for a node that is still running and must not come back.)",
         "**Sync now** pulls the latest state immediately.",
       ]],
       ["h", "Epoch"],
@@ -342,7 +342,7 @@ const NTPDIR_HELP = {
         ["Node", "The menu at the top right of every page. It picks which member the page shows and acts on: this node (the default) or any other member of the cluster."],
         ["Join code", "On the new node: paste the code made by **Create join code** on a member. It is single-use, valid for an hour, and not shown again; the member shows it read only for you to copy."],
       ]],
-      ["cli", "ntpdir --cluster-status\nntpdir --cluster-token\nntpdir --cluster-join CODE\nntpdir --cluster-promote\nntpdir --cluster-remove ADDR / --cluster-unremove ADDR\nntpdir --cluster-leave\nntpdir --cluster-sync"],
+      ["cli", "ntpdir --cluster-status\nntpdir --cluster-token\nntpdir --cluster-join CODE\nntpdir --cluster-promote\nntpdir --cluster-delete ADDR / --cluster-remove ADDR / --cluster-unremove ADDR\nntpdir --cluster-leave\nntpdir --cluster-sync"],
     ],
   },
   updates: {

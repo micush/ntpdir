@@ -2462,7 +2462,7 @@
       const d = Math.abs(p.clock.offset_ms - me.clock.offset_ms);
       return h("td", { class: "num", title: "offsets from chrony's time: this node " + me.clock.offset_ms.toFixed(3) + " ms, that node " + p.clock.offset_ms.toFixed(3) + " ms" }, d.toFixed(2));
     };
-    const rows = v.peers.map((p) => h("tr", Object.assign({ class: p.self ? "local" : "" }, onRemove && !p.self ? { tabindex: "0", oncontextmenu: rowMenu([["Remove", () => onRemove(p), "danger"]]) } : {}),
+    const rows = v.peers.map((p) => h("tr", Object.assign({ class: p.self ? "local" : "" }, onRemove && !p.self ? { tabindex: "0", oncontextmenu: rowMenu([["Delete", () => onRemove(p), "danger"]]) } : {}),
       named ? h("td", { class: "nname", title: p.addr }, p.hostname || p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)) : h("td", { class: "mono" }, p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)),
       named ? h("td", { class: "mono" }, (p.ips && p.ips.length) ? p.ips.map((ip) => h("div", {}, ip)) : "–") : null,
       h("td", {}, pill(roleOf(p), p.is_primary ? "ok" : "info")),
@@ -2732,11 +2732,11 @@
         stat("Primary", v.primary_addr, true), stat("Shared settings rev.", v.shared_rev)));
       dyn.append(h("div", { class: "card" },
         h("header", {}, h("h2", {}, tc("Members"))),
-        membersTable(v, (p) => act("/api/cluster/peers/remove", { addr: p.addr }, "Remove " + p.addr + " from the cluster? It resets itself to a single-node cluster.", p.addr + " removed."))));
+        membersTable(v, (p) => act("/api/cluster/peers/delete", { addr: p.addr }, "Delete " + p.addr + " from the cluster? Nothing is kept about it. A copy that is still running resets itself to a single-node cluster.", p.addr + " deleted."))));
       if (v.removed.length) dyn.append(h("div", { class: "card" }, h("header", {}, h("h2", {}, tc("Removed nodes"))), h("div", { class: "body" },
-        h("p", { class: "hint" }, "These cannot be re-added by gossip. Lift the block to let one join again with a new code."),
+        h("p", { class: "hint" }, "Nodes removed from the cluster before (on the command line, with --cluster-remove). They cannot be re-added by gossip. Delete one to forget it entirely."),
         v.removed.map((a) => h("div", { class: "toolbar" }, h("span", { class: "mono" }, a),
-          h("button", { class: "btn small", type: "button", onclick: () => act("/api/cluster/peers/unremove", { addr: a }, null, "Block lifted for " + a) }, "Allow again"))))));
+          h("button", { class: "btn small", type: "button", onclick: () => act("/api/cluster/peers/delete", { addr: a }, null, a + " deleted.") }, "Delete"))))));
       // join form only makes sense for an untouched node
       joinBox.classList.toggle("hidden", !v.joinable);
       leaveBtn.classList.toggle("hidden", v.joinable);
