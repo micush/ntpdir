@@ -1,5 +1,11 @@
 # Changelog
 
+## [v146] - 2026-10-22 — Tidier tables and SSO page
+
+### Changed
+- The **Add row** button is gone from the list tables; right-click ▸ **Add row** does it (the empty table says so).
+- The text on the **SSO** tab is in the help now (Configure ▸ Users ▸ SSO), not on the page.
+
 ## [v145] - 2026-10-22 — Sign in with Google or Microsoft
 
 ### Changed
