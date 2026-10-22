@@ -1,5 +1,10 @@
 # Changelog
 
+## [v148] - 2026-10-22 — Narrower list tables
+
+### Changed
+- The list tables are no longer as wide as the whole card (at most 42 rem), and their number column is narrow, so a one-column table is not half number column.
+
 ## [v147] - 2026-10-22 — Help for Local and SSO users
 
 ### Changed
