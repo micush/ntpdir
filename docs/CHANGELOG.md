@@ -1,5 +1,12 @@
 # Changelog
 
+## [v145] - 2026-10-22 — Sign in with Google or Microsoft
+
+### Changed
+- **Single sign-on.** The login page can offer **Sign in with Google** and **Sign in with Microsoft** (Entra ID) besides the system password (which stays). OpenID Connect with PKCE; the ID token's signature, issuer, audience, expiry and nonce are checked, Microsoft accounts must belong to the configured tenant, Google addresses must be verified.
+- **Configure ▸ Users** has two tabs now: **Local** (the accounts of this host, as before) and **SSO** (the provider settings and a table of the e-mail addresses that may sign in, each `rw` or `ro`). Only those addresses get in. An SSO session is checked against the list every minute: removing an address ends it, and `rw` to `ro` makes it read-only.
+- The settings are shared by the cluster; the client secrets are hidden from read-only accounts. Each node needs HTTPS access to accounts.google.com or login.microsoftonline.com. Not tested against a real Google or Microsoft tenant, only against a stand-in provider.
+
 ## [v144] - 2026-10-22 — Lists as tables
 
 ### Changed

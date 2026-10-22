@@ -654,3 +654,6 @@ table.policy tr.incomplete td { box-shadow: inset 0 0 0 2px var(--amber); }
 table.policy.zones th:nth-child(n+2) { width: auto; }
 table.policy td select { width: 100%; min-width: 0; max-width: none; border: 0; border-radius: 0; }
 table.zones.one th:first-child, table.zones.one td.grip { width: 6rem; }
+
+.sso-buttons { display: grid; gap: .5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.sso-buttons a.btn { text-align: center; text-decoration: none; }

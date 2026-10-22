@@ -4,7 +4,7 @@
 
 (() => {
   const POLL_MS = 2000;
-  const state = { prefill: {}, topo: { list: [], gid: null, action: null }, session: null, tab: "topology", timer: null, cfg: null, cfgMode: "form", cfgInfo: null,
+  const state = { prefill: {}, topo: { list: [], gid: null, action: null }, session: null, tab: "topology", timer: null, cfg: null, cfgMode: "form", cfgInfo: null, usersTab: 0,
     target: null, nodes: [], clustered: false }; // target: address of the node being driven, null = this one
   const root = document.getElementById("app");
 
@@ -233,15 +233,24 @@
       h("label", { class: "f" }, "Username", user),
       h("label", { class: "f" }, "Password", pass),
       btn);
+    const ssoBox = h("div", { class: "sso-buttons hidden" });
     root.append(h("div", { class: "login-wrap" }, h("div", { class: "login" },
       h("div", { class: "card" }, h("div", { class: "body" },
         h("h1", {}, "AnyTime NTP Director"),
         h("p", { class: "sub" }, "Sign in with your system account"),
-        err, form)))));
+        err, form, ssoBox)))));
     user.focus();
+    // back from a failed single sign-on: say why
+    try {
+      const sp = new URLSearchParams(location.search);
+      if (sp.get("sso_error")) { err.textContent = sp.get("sso_error"); err.classList.remove("hidden"); history.replaceState(null, "", location.pathname); }
+    } catch (_) { /* no message */ }
     // already locked out (page reloaded)? show it before anything is typed
     fetch("/api/login/state", { credentials: "same-origin" }).then((r) => r.json()).then((d) => {
       if (d.locked && d.retry_after) lockFor(d.retry_after);
+      // the providers that are set up: a full-page trip to the provider and back (no script on the way)
+      for (const p of d.sso || []) ssoBox.append(h("a", { class: "btn sso", href: "/api/sso/start?p=" + encodeURIComponent(p.id) }, "Sign in with " + p.title));
+      if ((d.sso || []).length) ssoBox.classList.remove("hidden");
     }).catch(() => { /* the form still works */ });
   }
 
@@ -2089,6 +2098,16 @@
     { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", min: 1 },
     { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", min: 1 },
   ];
+  const SSO_FIELDS = [
+    { shared: true, k: "sso_base_url", l: "Address of this console", t: "text", hint: "Optional, https://name:port with no path. Use it when the provider is to send the browser back to one fixed address (a cluster behind one name); empty uses the address the browser used." },
+    { shared: true, k: "sso_google_client_id", l: "Google client ID", t: "text" },
+    { shared: true, k: "sso_google_client_secret", l: "Google client secret", t: "secret" },
+    { shared: true, k: "sso_entra_tenant", l: "Microsoft tenant ID", t: "text", hint: "The Directory (tenant) ID, a GUID. Only accounts of this organisation can sign in." },
+    { shared: true, k: "sso_entra_client_id", l: "Microsoft client ID", t: "text", hint: "The Application (client) ID." },
+    { shared: true, k: "sso_entra_client_secret", l: "Microsoft client secret", t: "secret" },
+    { shared: true, k: "sso_users", l: "Users", t: "rows", rows: "ssousers", wide: true, hint: "rw may change settings; ro may only look. Only these addresses can sign in with a provider." },
+  ];
+
   const WEB_FIELDS = [
     { k: "listen", l: "Listen address", t: "port", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
     { shared: true, k: "group", l: "Login groups", t: "text", hint: "one or more, separated by commas: a member of any may sign in. The first one that is a local group is the one the Users page manages; the others can be directory (Active Directory) groups" },
@@ -2315,6 +2334,14 @@
       format: (c) => [c[0] + (c[1] === "key" ? " key " + c[2] : " nts")],
       mark: (c) => !c[0] || (c[1] === "key" && !c[2]),
     },
+    // single sign-on users: "alice@example.com rw"
+    ssousers: {
+      key: "ssousers", empty: "Nobody may sign in with single sign-on yet.",
+      cols: [{ name: "E-mail address", ph: "alice@example.com" }, { name: "Access", opts: ["ro", "rw"] }],
+      parse: (line) => { const f = line.trim().split(/\s+/); return [f[0] || "", f[1] === "rw" ? "rw" : "ro"]; },
+      format: (c) => [c[0] + " " + (c[1] || "ro")],
+      mark: (c) => !c[0],
+    },
   };
 
   // Build inputs for one object; returns {el, get()} where get() reads values back with types.
@@ -2365,6 +2392,10 @@
         input = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false" });
         input.value = v == null ? "" : String(v).replace(/^:(\d+)$/, "$1");
         get = () => { const t = input.value.trim(); return /^\d+$/.test(t) ? ":" + t : t; };
+      } else if (f.t === "secret") {
+        input = h("input", { type: "password", autocomplete: "new-password", spellcheck: "false" });
+        input.value = v == null ? "" : v;
+        get = () => input.value.trim();
       } else if (f.t === "int" || f.t === "float") {
         input = h("input", { type: "number", step: f.t === "float" ? "any" : "1", min: f.min, max: f.max });
         input.value = v == null ? "" : v;
@@ -2398,6 +2429,7 @@
     function renderForm(cfg) {
       const general = fieldset(GENERAL_FIELDS, cfg);
       const web = fieldset(WEB_FIELDS, cfg.web);
+      const sso = fieldset(SSO_FIELDS, cfg.web);
       const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
       const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
@@ -2472,7 +2504,7 @@
         groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...g.fs.get() })),
         ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
-        web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get() },
+        web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get() },
         cluster: cluster.get(),
         snmp: snmpLocal(),
         ...(cfg.bgp ? { bgp: cfg.bgp } : {}), // edited on the Anycast page
@@ -2518,6 +2550,9 @@
         ["groups", "Gateway groups", h("div", {}, groupsEl)],
         ["ntp", "NTP", ntpTabs()],
         ["web", "Web GUI", h("div", {}, section("Web GUI", web.el), certBox)],
+        ["sso", "SSO", section("Single sign-on",
+          h("p", { class: "hint" }, "Lets people sign in with a Google or Microsoft account instead of a system password (the password login stays). Register this console with the provider as a web application; its redirect URI is the address of this page followed by /api/sso/callback (https://this-node:12380/api/sso/callback). Only the e-mail addresses in the Users table may sign in, whatever account they use."),
+          sso.el)],
         ["snmp", "SNMP", h("div", {}, (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })())],
         ["cluster", "Cluster", section("Cluster", cluster.el)],
       ];
@@ -2581,7 +2616,7 @@
       },
     };
   };
-  for (const id of ["general", "groups", "ntp", "web", "snmp", "cluster"]) VIEWS["cfg_" + id] = makeConfigView(id);
+  for (const id of ["general", "groups", "ntp", "web", "sso", "snmp", "cluster"]) VIEWS["cfg_" + id] = makeConfigView(id);
 
   // ── shared helpers for the management pages ───────────────────────────────
   // Nothing is said when every node answered (the Node menu says "Cluster"); when one could not, which and why, since the
@@ -4501,7 +4536,7 @@
   })();
 
   // ── Users  (CLI: --users, --user-add, --user-passwd, --user-expiry, --user-del) ──
-  VIEWS.users = (() => {
+  VIEWS.usersLocal = (() => {
     // Layout: the accounts in a list on the left, the chosen one (or the "new user" / "existing account" form) on the right.
     let status, listBox, detail, filterIn, users = [], others = [], group = "", readGroup = "", sel = null, mode = "user", otherList = null;
     const dateText = (u) => (u.expires ? new Date(u.expires * 1000).toISOString().slice(0, 10) : "never");
@@ -4516,7 +4551,7 @@
         const r = (await api("POST", "/api/users/" + path, body)).data;
         if (r.partial) say(status, "bad", r.message); else clear(status); // success shows in the list; only a node that missed it is worth saying
         if (done) done();
-        await VIEWS.users.poll();
+        await VIEWS.usersLocal.poll();
       } catch (e) { fail(status)(e); }
     }
 
@@ -4636,6 +4671,34 @@
         // the panel is left alone on a poll so what is being typed survives, and redrawn when what it should show has changed
         if (!detail.firstChild || shown !== mode + "/" + (mode === "user" ? sel : "")) drawDetail();
       },
+    };
+  })();
+
+  // Configure ▸ Users: two tabs, Local (the accounts of this host) and SSO (Google / Microsoft sign-in and who may use it)
+  VIEWS.users = (() => {
+    return {
+      mount(main) {
+        const TABS = [["Local", VIEWS.usersLocal], ["SSO", VIEWS.cfg_sso]];
+        const panes = TABS.map(([, v]) => { const p = h("div", { role: "tabpanel" }); v.mount(p); return p; });
+        const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
+        function show(i, focus) {
+          state.usersTab = i;
+          panes.forEach((p, j) => { p.hidden = j !== i; });
+          buttons.forEach((b, j) => { b.setAttribute("aria-selected", j === i ? "true" : "false"); b.tabIndex = j === i ? 0 : -1; b.classList.toggle("on", j === i); });
+          if (focus) buttons[i].focus();
+        }
+        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "Users" }, buttons);
+        strip.addEventListener("keydown", (e) => {
+          const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+          if (!d) return;
+          e.preventDefault();
+          show((state.usersTab + d + TABS.length) % TABS.length, true);
+        });
+        main.append(strip, ...panes);
+        show(state.usersTab >= 0 && state.usersTab < TABS.length ? state.usersTab : 0);
+      },
+      poll: () => VIEWS.usersLocal.poll(),
+      poll_ms: 5000,
     };
   })();
 
