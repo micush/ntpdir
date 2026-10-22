@@ -1,5 +1,10 @@
 # Changelog
 
+## [v149] - 2026-10-22 — Empty new rows go away
+
+### Changed
+- In the list tables, a row added with right-click ▸ **Add** and left empty disappears again when you press Esc or click elsewhere. A row with anything in it stays.
+
 ## [v148] - 2026-10-22 — Narrower list tables
 
 ### Changed
