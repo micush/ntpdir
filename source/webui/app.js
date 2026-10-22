@@ -2045,8 +2045,8 @@
     { k: "interface", l: "Interface", t: "text" },
     { shared: true, k: "vip4", l: "IPv4 VIP/prefix", t: "text", hint: "e.g. 10.0.0.1/24 — empty to disable" },
     { shared: true, k: "vip6", l: "IPv6 VIP/prefix", t: "text", hint: "e.g. 2001:db8::1/64 — empty to disable" },
-    { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "list", hint: "Same subnet as the VIP, one per line, no prefix length." },
-    { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "list", hint: "Same subnet as the VIP, one per line, no prefix length." },
+    { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
+    { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "rows", rows: "morevip6", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
     { k: "priority", l: "Priority", t: "int", min: 0, max: 255 },
     { shared: true, k: "lb_method", l: "LB method", t: "select", options: LB },
     { k: "weight", l: "Weight", t: "int", min: 0, max: 255 },
@@ -2056,12 +2056,12 @@
     { shared: true, k: "key", l: "HMAC shared key", t: "text", weakKey: true },
     { k: "preempt", l: "Preemption", t: "bool" },
     { shared: true, k: "real_macs", l: "Use real MAC addresses (no virtual MACs)", t: "bool", hint: "On for a gateway you add now (most networks need it: a VMware port group that is not promiscuous, a cloud with one MAC per interface, a switch with port security); gateways that already existed keep their setting. Off is the older way with a virtual MAC per node. On: the VIP is on every node's lo and the controller answers ARP with the real MAC of the node it picks. Failover then depends on the neighbors honoring an unsolicited ARP. Restarts the gateway; set it on every node's cluster together." },
-    { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "list", wide: true, hint: "Every node, one IP per line. Empty: multicast." },
+    { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "rows", rows: "neighbors", wide: true, hint: "Every node, one IP per row. Empty: multicast." },
   ];
   const NTP_FIELDS = [
     { section: "Upstream servers" },
-    { shared: true, k: "servers", l: "Servers", t: "list", wide: true, hint: "One per line: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
-    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "list", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are never probed and always count as up." },
+    { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
+    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are never probed and always count as up." },
     { section: "Health", cols: 3, note: "A server that fails a check is taken out as a source of every node. Applies to every gateway unless it has its own checks (Topology ▸ right-click the gateway ▸ Edit)." },
     { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", min: 1, max: 15 },
     { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", min: 0, max: 60000 },
@@ -2072,14 +2072,14 @@
     { section: "Serving" },
     { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", min: 1, max: 65535 },
     { section: "Client Rate Limiting", note: "Written to chrony (allow, ratelimit). This node itself is always allowed. The rate limit restarts chrony." },
-    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "list", wide: true, hint: "Networks that may ask, one per line: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
-    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "list", wide: true, hint: "Clients and networks that get no answers, one per line, whatever Allowed clients says (the block wins). Statistics ▸ Top Clients ▸ right-click ▸ Block adds one. This node itself cannot be blocked." },
+    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "rows", rows: "allowedclients", wide: true, hint: "Networks that may ask, one per row: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
+    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "rows", rows: "blockedclients", wide: true, hint: "Clients and networks that get no answers, one per row, whatever Allowed clients says (the block wins). Statistics ▸ Top Clients ▸ right-click ▸ Block adds one. This node itself cannot be blocked." },
     { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit. A client is one IPv4 address or one IPv6 /64." },
     { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
     { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
     { section: "Authentication", note: "Symmetric keys and Network Time Security (NTS). Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
-    { shared: true, k: "keys", l: "Keys", t: "list", wide: true },
-    { shared: true, k: "server_auth", l: "Authenticated servers", t: "list", wide: true },
+    { shared: true, k: "keys", l: "Keys", t: "rows", rows: "keys", wide: true },
+    { shared: true, k: "server_auth", l: "Authenticated servers", t: "rows", rows: "serverauth", wide: true },
     { shared: true, k: "nts_server", l: "Serve NTS to clients", t: "bool" },
     { section: "Leap seconds", note: "Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
     { shared: true, k: "leap_tz", l: "Leap second table", t: "text" },
@@ -2101,7 +2101,7 @@
     { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", min: 0, max: 128, hint: "0 = 8" },
   ];
   const SNMP_FIELDS = [
-    { shared: true, k: "snmp_communities", l: "Community strings", t: "list", wide: true },
+    { shared: true, k: "snmp_communities", l: "Community strings", t: "rows", rows: "community", wide: true },
     { k: "location", l: "Location", t: "text" },
     { shared: true, k: "snmp_contact", l: "Contact", t: "text" },
   ];
@@ -2115,6 +2115,207 @@
   // Shown only when this node is part of a multi-node cluster.
   const sharedTag = (f) => (f.shared && state.clustered
     ? h("span", { class: "pill info tiny", title: "Replicated from the cluster's primary. Changes made here are accepted by the primary first." }, "shared") : null);
+
+  // A small table for a list of lines made of a few columns (servers, clients, keys): rows to edit in place, drag to
+  // reorder, a filter box, paging, a right-click menu (Edit, Copy, Paste, Add, Move, Delete) and an Add row button.
+  // spec: {cols: [{name, ph, opts?}], parse(line) -> [cell, ...], format(cells) -> [line, ...], mark(cells) -> true when the row is
+  // not complete (outlined and not saved), empty: text for no rows}.
+  const rowClips = {};
+  function rowTable(spec, lines) {
+    const N = spec.cols.length;
+    const data = (lines || []).map((l) => ({ v: spec.parse(l) }));
+    let page = 0, size = 50, dragging = null;
+    const tbody = h("tbody", {});
+    const tbl = h("table", { class: "policy zones" + (N === 1 ? " one" : "") },
+      h("thead", {}, h("tr", {}, h("th", { "aria-label": "Row number and order" }, "#"), ...spec.cols.map((c) => h("th", {}, c.name)))), tbody);
+    const empty = h("div", { class: "policy-empty" }, "");
+    const wrap = h("div", { class: "policy-wrap" }, tbl, empty);
+    const filter = h("input", { type: "text", class: "policy-filter", placeholder: "Filter rows", "aria-label": "Filter rows", autocomplete: "off", spellcheck: "false" });
+    const count = h("span", { class: "policy-count muted" }, "");
+    const addBtn = h("button", { type: "button", class: "btn small" }, "Add row");
+    const sizeSel = h("select", { "aria-label": "Rows per page" }, [25, 50, 100, 250, 500].map((n) => h("option", { value: String(n) }, n + " per page")));
+    sizeSel.value = String(size);
+    const mkBtn = (label, title) => h("button", { type: "button", class: "btn small", title, "aria-label": title }, label);
+    const first = mkBtn("«", "First page"), prev = mkBtn("‹", "Previous page"), next = mkBtn("›", "Next page"), last = mkBtn("»", "Last page");
+    const pageIn = h("input", { type: "number", min: "1", class: "policy-page", "aria-label": "Page number" });
+    const pages = h("span", { class: "muted" }, "");
+    const pager = h("span", { class: "policy-pager" }, first, prev, pageIn, pages, next, last);
+    const bar = h("div", { class: "policy-bar" }, addBtn, filter, count, h("span", { class: "grow" }), pager, sizeSel);
+    const box = h("div", { class: "policy-box" }, bar, wrap);
+    bar.addEventListener("change", (e) => e.stopPropagation());   // the filter and paging controls are not settings
+    const changed = () => tbl.dispatchEvent(new Event("change", { bubbles: true }));
+    const visible = () => { const q = filter.value.trim().toLowerCase(); return q ? data.filter((r) => r.v.some((x) => x.toLowerCase().includes(q))) : data; };
+    const clearMarks = () => tbody.querySelectorAll(".drop-above, .drop-below").forEach((x) => x.classList.remove("drop-above", "drop-below"));
+    const trOf = (row) => [...tbody.children].find((t) => t._row === row);
+    const cells = (row) => row.v.map((x) => x.trim());
+    const mark = (tr, row) => { tr.classList.toggle("incomplete", !!spec.mark(cells(row))); };
+
+    function render(follow) {
+      const vis = visible();
+      const n = Math.max(1, Math.ceil(vis.length / size));
+      if (follow) { const i = vis.indexOf(follow); if (i >= 0) page = Math.floor(i / size); }
+      page = Math.min(Math.max(page, 0), n - 1);
+      const from = page * size;
+      tbody.replaceChildren(...vis.slice(from, from + size).map(mk));
+      const filtered = vis.length !== data.length;
+      count.textContent = vis.length
+        ? `${from + 1}–${Math.min(from + size, vis.length)} of ${vis.length}${filtered ? ` (filtered from ${data.length})` : ""}`
+        : (filtered ? `0 of ${data.length}` : "0 rows");
+      pager.hidden = n < 2;
+      pageIn.value = String(page + 1);
+      pageIn.max = String(n);
+      pages.textContent = "of " + n;
+      first.disabled = prev.disabled = page === 0;
+      next.disabled = last.disabled = page >= n - 1;
+      empty.hidden = vis.length > 0;
+      empty.textContent = data.length ? "No rows match the filter." : (spec.empty || "No rows.") + " Add row, or right-click here.";
+    }
+    function moveTo(row, target, after) {
+      if (row === target) return;
+      data.splice(data.indexOf(row), 1);
+      const j = data.indexOf(target);
+      data.splice(after ? j + 1 : j, 0, row);
+      render(row);
+      changed();
+    }
+    function mk(row) {
+      const tr = h("tr", {});
+      tr._row = row;
+      const grip = h("span", { class: "grip-h", draggable: "true", title: "Drag to reorder", "aria-hidden": "true" }, "⋮⋮");
+      tr.append(h("td", { class: "grip" }, h("span", { class: "rownum" }, String(data.indexOf(row) + 1)), grip));
+      spec.cols.forEach((c, i) => {
+        let inp;
+        if (c.opts) {
+          const opts = c.opts.includes(row.v[i]) || !row.v[i] ? c.opts : [...c.opts, row.v[i]];   // a value this list does not know is kept
+          inp = h("select", { "aria-label": c.name }, opts.map((o) => h("option", { value: o }, o)));
+          if (!row.v[i]) row.v[i] = c.opts[0];
+          inp.value = row.v[i];
+          inp.addEventListener("change", () => { row.v[i] = inp.value; mark(tr, row); });
+        } else {
+          inp = h("input", { type: "text", autocomplete: "off", spellcheck: "false", "aria-label": c.name, placeholder: c.ph || "" });
+          inp.value = row.v[i] || "";
+          inp.addEventListener("input", () => { row.v[i] = inp.value; mark(tr, row); });
+        }
+        tr.append(h("td", {}, inp));
+      });
+      grip.addEventListener("dragstart", (e) => {
+        dragging = row;
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", "row"); e.dataTransfer.setDragImage(tr, 0, 0); } catch (x) { /* a browser without drag images */ }
+        tr.classList.add("dragging");
+      });
+      grip.addEventListener("dragend", () => { dragging = null; tr.classList.remove("dragging"); clearMarks(); });
+      tr.addEventListener("dragover", (e) => {
+        if (!dragging || dragging === row) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const r = tr.getBoundingClientRect();
+        clearMarks();
+        tr.classList.add(e.clientY > r.top + r.height / 2 ? "drop-below" : "drop-above");
+      });
+      tr.addEventListener("drop", (e) => {
+        if (!dragging || dragging === row) return;
+        e.preventDefault();
+        const below = tr.classList.contains("drop-below");
+        clearMarks();
+        const d = dragging;
+        dragging = null;
+        moveTo(d, row, below);
+      });
+      tr.addEventListener("contextmenu", (e) => rowMenu(menuFor(row))(e));
+      mark(tr, row);
+      return tr;
+    }
+    function insert(vals, after) {
+      const row = { v: Array.from({ length: N }, (_, i) => vals[i] || "") };
+      data.splice(after ? data.indexOf(after) + 1 : data.length, 0, row);
+      filter.value = "";
+      render(row);
+      return row;
+    }
+    const focusRow = (row, col) => { const t = trOf(row); const el = t && t.querySelectorAll("input, select")[col || 0]; if (el) el.focus(); };
+    // pasted rows: the cells separated by tabs, one row to a line (the lines of a spreadsheet), or one line of the list's own form
+    const parseText = (txt) => txt.split(/\r?\n/).filter((l) => l.trim()).map((l) => (l.includes("\t") ? l.split("\t").map((x) => x.trim()) : spec.parse(l.trim())));
+    async function paste(after) {
+      let list = [];
+      try { list = parseText(await navigator.clipboard.readText()); } catch (e) { /* no permission: the last copied row is used */ }
+      if (!list.length && rowClips[spec.key]) list = [rowClips[spec.key]];
+      if (!list.length) return;
+      let at = after;
+      for (const v of list) at = insert(v, at);
+      changed();
+    }
+    function menuFor(row) {
+      const vis = visible(), i = vis.indexOf(row), di = data.indexOf(row);
+      return [
+        ["Edit", () => focusRow(row, 0)],
+        ["Copy", () => { rowClips[spec.key] = cells(row); try { navigator.clipboard.writeText(cells(row).join("\t")); } catch (e) { /* the row stays in the page's own clipboard */ } }],
+        ["Paste", () => paste(row)],
+        ["Add", () => focusRow(insert([], row), 0)],
+        ...(i > 0 ? [["Move up", () => moveTo(row, vis[i - 1], false)]] : []),
+        ...(i >= 0 && i < vis.length - 1 ? [["Move down", () => moveTo(row, vis[i + 1], true)]] : []),
+        ...(di > 0 ? [["Move to top", () => moveTo(row, data[0], false)]] : []),
+        ...(di < data.length - 1 ? [["Move to bottom", () => moveTo(row, data[data.length - 1], true)]] : []),
+        ["Delete", () => { data.splice(data.indexOf(row), 1); render(); changed(); }, "danger"],
+      ];
+    }
+    wrap.addEventListener("contextmenu", rowMenu([
+      ["Add", () => focusRow(insert([], null), 0)],
+      ["Paste", () => paste(data[data.length - 1])],
+    ]));
+    addBtn.addEventListener("click", () => focusRow(insert([], null), 0));
+    filter.addEventListener("input", () => { page = 0; render(); });
+    sizeSel.addEventListener("change", () => { size = +sizeSel.value || 50; page = 0; render(); });
+    first.addEventListener("click", () => { page = 0; render(); });
+    prev.addEventListener("click", () => { page--; render(); });
+    next.addEventListener("click", () => { page++; render(); });
+    last.addEventListener("click", () => { page = 1e9; render(); });
+    pageIn.addEventListener("change", () => { page = (parseInt(pageIn.value, 10) || 1) - 1; render(); });
+    pageIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); pageIn.blur(); } });
+    filter.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    render();
+    return {
+      el: box,
+      get: () => (spec.obj ? data.filter((r) => !spec.mark(cells(r))).map((r) => spec.obj(cells(r)))
+        : data.flatMap((r) => (spec.mark(cells(r)) ? [] : spec.format(cells(r))))),
+    };
+  }
+
+  // one value to a row, one row to a list entry (a row with several, separated by commas or spaces, is saved as several entries)
+  const oneCol = (key, name, ph, empty) => ({
+    key, empty, cols: [{ name, ph }],
+    parse: (line) => [String(line).trim()],
+    format: (c) => c[0].split(/[\s,]+/).filter(Boolean),
+    mark: (c) => !c[0],
+  });
+  // the lists that are tables
+  const ROW_TABLES = {
+    servers: oneCol("servers", "Server", "10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com", "No servers."),
+    fallback: oneCol("fallback", "Fallback server", "pool.ntp.org", "No fallback servers."),
+    allowedclients: oneCol("allowedclients", "Network", "10.0.0.0/8, 192.168.1.5, 2001:db8::/32", "No restriction: every client may ask."),
+    blockedclients: oneCol("blockedclients", "Client or network", "203.0.113.7", "Nobody is blocked."),
+    neighbors: oneCol("neighbors", "Neighbor IP address", "10.0.0.2", "No neighbors: multicast."),
+    morevip4: oneCol("morevip4", "IPv4 address", "10.0.0.11", "No more IPv4 addresses."),
+    morevip6: oneCol("morevip6", "IPv6 address", "2001:db8::11", "No more IPv6 addresses."),
+    // a community string may contain commas: one string to a row, never split
+    community: { ...oneCol("community", "Community string", "", "No community strings: SNMP is off."), format: (c) => [c[0]] },
+    // symmetric keys, as chrony's key file has them: "7 SHA256 HEX:5e0c..."
+    keys: {
+      key: "keys", empty: "No keys.",
+      cols: [{ name: "Key ID", ph: "7" }, { name: "Hash", opts: ["SHA256", "SHA1", "MD5", "SHA384", "SHA512", "SHA3-224", "SHA3-256", "SHA3-384", "SHA3-512", "RMD160"] }, { name: "Key", ph: "HEX:5e0c... or up to 64 characters" }],
+      parse: (line) => { const f = String(line).trim().split(/\s+/); return [f[0] || "", (f[1] || "SHA256").toUpperCase(), f.slice(2).join(" ")]; },
+      format: (c) => [c[0] + " " + (c[1] || "SHA256") + " " + c[2]],
+      mark: (c) => !c[0] || !c[2],
+    },
+    // how chrony reaches an upstream server: "ntp.example.com nts" or "10.0.0.5 key 7"
+    serverauth: {
+      key: "serverauth", empty: "No authenticated servers.",
+      cols: [{ name: "Server", ph: "ntp.example.com" }, { name: "Method", opts: ["nts", "key"] }, { name: "Key ID (for key)", ph: "7" }],
+      parse: (line) => { const f = String(line).trim().split(/\s+/); return [f[0] || "", (f[1] || "nts").toLowerCase() === "key" ? "key" : "nts", f[1] && f[1].toLowerCase() === "key" ? (f[2] || "") : ""]; },
+      format: (c) => [c[0] + (c[1] === "key" ? " key " + c[2] : " nts")],
+      mark: (c) => !c[0] || (c[1] === "key" && !c[2]),
+    },
+  };
 
   // Build inputs for one object; returns {el, get()} where get() reads values back with types.
   // With asCards, every {section} spec starts a card of its own (title in the header, optional note above the fields).
@@ -2144,6 +2345,12 @@
         get = () => input.checked;
         grid.append(h("label", { class: "f check" }, input, f.l, sharedTag(f)));
         getters[f.k] = get;
+        continue;
+      }
+      if (f.t === "rows") {
+        const rt = rowTable(ROW_TABLES[f.rows], v || []);
+        getters[f.k] = rt.get;
+        grid.append(h("div", { class: "f wide" }, h("span", {}, f.l, sharedTag(f)), rt.el, f.hint ? h("span", { class: "hint" }, f.hint) : null));
         continue;
       }
       if (f.t === "select") {

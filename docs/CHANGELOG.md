@@ -1,5 +1,10 @@
 # Changelog
 
+## [v144] - 2026-10-22 — Lists as tables
+
+### Changed
+- These lists are tables now (edit in place, drag to reorder, right-click menu, filter, paging, **Add row**): **Servers**, **Fallback servers**, **Allowed clients**, **Blocked clients**, **Keys** (Key ID, Hash, Key), **Authenticated servers** (Server, Method, Key ID), **Neighbors**, **More IPv4 / IPv6 addresses** and the SNMP **Community strings**. The stored settings are unchanged.
+
 ## [v143] - 2026-10-21 — Delete a cluster member in one step
 
 ### Changed
