@@ -1,5 +1,11 @@
 # Changelog
 
+## [v147] - 2026-10-22 — Help for Local and SSO users
+
+### Changed
+- **Users** has two help pages now, one for the **Local** tab and one for the **SSO** tab, each describing its own settings (the SSO one has the Google and Microsoft set-up steps and how an address is matched to a provider).
+- On the SSO tab the fields are in three rows: the console address; the two Google fields; the three Microsoft fields.
+
 ## [v146] - 2026-10-22 — Tidier tables and SSO page
 
 ### Changed

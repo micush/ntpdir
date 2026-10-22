@@ -657,3 +657,5 @@ table.zones.one th:first-child, table.zones.one td.grip { width: 6rem; }
 
 .sso-buttons { display: grid; gap: .5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .sso-buttons a.btn { text-align: center; text-decoration: none; }
+
+.grid .brk { grid-column-start: 1; }   /* a field that starts a new row of the grid */
