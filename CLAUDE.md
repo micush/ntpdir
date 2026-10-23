@@ -296,6 +296,6 @@ README), so the version and changelog describe the final tree.
   starting anyway.
 
 ## Piggyback on dnsdir (v167)
-- When dnsdir is installed (`dnsdirMarkers`), `piggyback.go` keeps one `GroupConfig{Piggyback:true, Name:"dnsdir"}` whose `DNSDirVIPs` are all of dnsdir's gateway and anycast addresses (`dnsdirAddrs`). Gateways without `Piggyback` are inactive (`inactiveReason`, `Supervisor.inactive`, shown by `markInactive`); the piggyback gateway has no VIP/interface and is inactive when dnsdir is absent.
+- When dnsdir is installed (`dnsdirMarkers`), `piggyback.go` keeps one `GroupConfig{Piggyback:true, PiggybackOf:<dnsdir group id>}` per dnsdir gateway (`dnsdirGateways`), named as dnsdir names it, whose `DNSDirVIPs` are that gateway's shared and anycast addresses. They share one NTP list (`syncPiggybackNTP` after every canvas edit). Gateways without `Piggyback` are inactive (`inactiveReason`, `Supervisor.inactive`, shown by `markInactive`); the piggyback gateway has no VIP/interface and is inactive when dnsdir is absent.
 - ntpdir only listens: `anycastSet.extShared` addresses are checked on any interface, anycast ones on `lo`. Never add/remove/announce them, never touch FRR.
 - `piggybackRefusal` blocks the edits that make no sense on it; `RunPiggyback` (syncs, primary only) and `RunReevaluate` (starts/stops groups when dnsdir appears or goes) run from `main.go`. Tests: `piggyback_test.go`.

@@ -290,7 +290,7 @@
         oncontextmenu: g.piggyback ? null : rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
           ["Delete", () => { state.topo.gid = g.id; state.topo.action = "delete"; selectTab("topology"); }, "danger"]]) },
       h("span", { class: "dot st-" + g.status }), g.label)),
-      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host, so ntpdir answers on dnsdir's gateway and anycast addresses and keeps no gateway of its own." }, "Answering on dnsdir's addresses")
+      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host: these are dnsdir's gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Gateways of dnsdir")
         : h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
   }
 
@@ -858,11 +858,11 @@
       const COLW = 190, SW = 156;
       // The circle shows bare addresses (no /prefix) and grows until the longest one fits,
       // up to a full 39-character IPv6 address (monospace 12px ≈ 7.3px per character).
-      const ip4 = g.piggyback ? "dnsdir's addresses" : (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
+      const ip4 = g.piggyback ? (g.piggyback_vip4 || "") : (g.vip4 || "").split("/")[0], ip6 = g.piggyback ? (g.piggyback_vip6 || "") : (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
       const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);   // wide enough for the clock line too
       const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
-      const own = g.extra_vips || [], dds = g.dnsdir_vips || [], anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
+      const own = g.extra_vips || [], dds = (g.dnsdir_vips || []).filter((a) => !g.piggyback || (a !== g.piggyback_vip4 && a !== g.piggyback_vip6)), anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
       const AW = Math.max(170, Math.ceil(Math.max(0, ...anys.map((a) => a.length)) * 7.3 + 28));  // wide enough for the longest address in full (monospace 12px)
       const waiting = cv.nodeWait || {};
       // a node removed from the gateway is not drawn (right-click the gateway ▸ Add node brings it back); the saved list decides, so it goes at once

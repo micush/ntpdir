@@ -1,5 +1,19 @@
 # Changelog
 
+## [v168] - 2026-10-23 — Installed next to dnsdir, AnyTime shows one gateway for each gateway of dnsdir
+
+### Changed
+- v167 made one merged gateway named "dnsdir" holding every address dnsdir has. Now there is one gateway for each gateway of dnsdir, with dnsdir's name (PHX.SITEDNS, PTX.SITEDNS ...), answering on that gateway's shared and anycast addresses, so the Topology matches dnsdir's. Gateways are added, renamed and removed to follow dnsdir; a v167 gateway is adopted.
+- All of them share one list of NTP servers: a server added, removed or renamed on one is applied to the others.
+- The circle shows the gateway's shared addresses as dnsdir's circle does; only its anycast addresses are pills. A node that does not hold the shared address (dnsdir holds it on one node at a time) is no longer shown as degraded for that.
+- Renaming a mirrored gateway is refused (rename it in dnsdir). The same anycast address on two dnsdir gateways is accepted.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite (one unrelated race in `TestLogServerFlips` appeared once and did not repeat in five runs or the full rerun).
+
+### Not verified
+- Not run against a real dnsdir install; tests use a fake dnsdir configuration. The GUI drawing was not checked in a browser.
+
 ## [v167] - 2026-10-23 — Installed next to dnsdir, AnyTime answers on dnsdir's gateway and anycast addresses
 
 ### Added

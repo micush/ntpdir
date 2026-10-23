@@ -31,6 +31,8 @@ type SharedGroup struct {
 	ExtraVIPs []string `json:"extra_vips,omitempty"`
 	// Piggyback: the gateway that answers on dnsdir's addresses (omitted when not: the hash is unchanged).
 	Piggyback bool `json:"piggyback,omitempty"`
+	// PiggybackOf is the dnsdir gateway it mirrors (omitted when none).
+	PiggybackOf int `json:"piggyback_of,omitempty"`
 	// DNSDirVIPs are the dnsdir anycast addresses the gateway also answers NTP on (omitted when none: the hash is unchanged).
 	DNSDirVIPs []string `json:"dnsdir_vips,omitempty"`
 	// MoreVIP4 / MoreVIP6 are the further shared addresses in the subnet (omitted when none: the hash is unchanged).
@@ -127,7 +129,7 @@ func sharedOf(dc *DaemonConfig) SharedConfig {
 		sc.Groups = append(sc.Groups, SharedGroup{
 			GroupID: g.GroupID, Name: g.Name, VIP4: g.VIP4, VIP6: g.VIP6, LBMethod: g.LBMethod,
 			HelloMS: g.HelloMS, HoldMS: g.HoldMS, MaxAFNs: g.MaxAFNs, Key: g.Key,
-			NTP: cloneNTPPtr(g.NTP), Piggyback: g.Piggyback, ExtraVIPs: nonEmpty(g.ExtraVIPs), DNSDirVIPs: nonEmpty(g.DNSDirVIPs), MoreVIP4: nonEmpty(g.MoreVIP4), MoreVIP6: nonEmpty(g.MoreVIP6), PausedVIPs: nonEmpty(g.PausedVIPs), PausedAll: g.PausedAll, Neighbors: nonEmpty(g.Neighbors), RealMACs: g.RealMACs, ExcludedNodes: nonEmpty(g.ExcludedNodes), NodeOrder: nonEmpty(g.NodeOrder),
+			NTP: cloneNTPPtr(g.NTP), Piggyback: g.Piggyback, PiggybackOf: g.PiggybackOf, ExtraVIPs: nonEmpty(g.ExtraVIPs), DNSDirVIPs: nonEmpty(g.DNSDirVIPs), MoreVIP4: nonEmpty(g.MoreVIP4), MoreVIP6: nonEmpty(g.MoreVIP6), PausedVIPs: nonEmpty(g.PausedVIPs), PausedAll: g.PausedAll, Neighbors: nonEmpty(g.Neighbors), RealMACs: g.RealMACs, ExcludedNodes: nonEmpty(g.ExcludedNodes), NodeOrder: nonEmpty(g.NodeOrder),
 		})
 	}
 	sort.Slice(sc.Groups, func(i, j int) bool { return sc.Groups[i].GroupID < sc.Groups[j].GroupID })
@@ -173,7 +175,7 @@ func applySharedGroup(gc *GroupConfig, g SharedGroup) {
 	gc.NTP = cloneNTPPtr(g.NTP)
 	gc.ExtraVIPs = append([]string(nil), g.ExtraVIPs...)
 	gc.DNSDirVIPs = append([]string(nil), g.DNSDirVIPs...)
-	gc.Piggyback = g.Piggyback
+	gc.Piggyback, gc.PiggybackOf = g.Piggyback, g.PiggybackOf
 	gc.MoreVIP4 = append([]string(nil), g.MoreVIP4...)
 	gc.MoreVIP6 = append([]string(nil), g.MoreVIP6...)
 	gc.PausedVIPs = append([]string(nil), g.PausedVIPs...)

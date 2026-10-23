@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -27,42 +28,141 @@ func inactiveReason(g GroupConfig) string {
 	return ""
 }
 
-// piggybackName is the name of the gateway created for dnsdir's addresses.
-const piggybackName = "dnsdir"
+// piggybackGroup says whether the gateway with this group number is one that mirrors a dnsdir gateway.
+func piggybackGroup(dc *DaemonConfig, id int) bool {
+	for _, g := range dc.Groups {
+		if g.GroupID == id {
+			return g.Piggyback
+		}
+	}
+	return false
+}
 
-// wantPiggyback returns dc changed so that, while dnsdir is installed, it has the piggyback gateway and that gateway
-// answers on every address dnsdir has now.  changed says whether anything was altered.  Without dnsdir nothing is changed.
+// piggybackLabel is the name a mirrored gateway shows: dnsdir's name for it, else its address, else its number.
+func piggybackLabel(gw dnsdirGateway) string {
+	n := gw.Name
+	if n == "" {
+		n = gw.VIP4
+	}
+	if n == "" {
+		n = gw.VIP6
+	}
+	if n == "" {
+		n = "dnsdir gateway " + strconv.Itoa(gw.ID)
+	}
+	if r := []rune(n); len(r) > maxGatewayName {
+		n = string(r[:maxGatewayName])
+	}
+	return n
+}
+
+// wantPiggyback returns dc changed so that, while dnsdir is installed, it has one gateway for each gateway of dnsdir (the same
+// name, answering on that gateway's shared and anycast addresses as dnsdir has them now), and none for a gateway dnsdir no
+// longer has.  They all use one list of NTP servers.  changed says whether anything was altered.  Without dnsdir, or when
+// dnsdir's configuration shows no gateway, nothing is changed.
 func wantPiggyback(dc *DaemonConfig) (changed bool) {
-	if !dnsdirPresent() {
+	gws := dnsdirGateways()
+	if len(gws) == 0 {
 		return false
 	}
-	addrs := dnsdirOffered()
-	for i := range dc.Groups {
-		g := &dc.Groups[i]
-		if !g.Piggyback {
+	want := map[int]bool{}
+	for _, gw := range gws {
+		want[gw.ID] = true
+	}
+	// drop the ones whose dnsdir gateway is gone; a gateway made by v167 (no number yet) is adopted below
+	var legacy []int
+	kept := dc.Groups[:0:0]
+	for _, g := range dc.Groups {
+		if g.Piggyback && g.PiggybackOf != 0 && !want[g.PiggybackOf] {
+			changed = true
 			continue
 		}
-		if !sameList(g.DNSDirVIPs, addrs) {
-			g.DNSDirVIPs = addrs
-			return true
-		}
-		return false
+		kept = append(kept, g)
 	}
-	id := firstGroupID
+	dc.Groups = kept
+	by := map[int]int{}
+	for i, g := range dc.Groups {
+		switch {
+		case !g.Piggyback:
+		case g.PiggybackOf == 0:
+			legacy = append(legacy, i)
+		default:
+			by[g.PiggybackOf] = i
+		}
+	}
+	var tmpl *NTPConfig // the servers every mirrored gateway uses: those of the first one that has its own list
+	for _, g := range dc.Groups {
+		if g.Piggyback && g.NTP != nil {
+			tmpl = g.NTP
+			break
+		}
+	}
 	used := map[int]bool{}
 	for _, g := range dc.Groups {
 		used[g.GroupID] = true
 	}
-	for used[id] {
-		id++
+	for _, gw := range gws {
+		addrs := append(append([]string{}, gw.Shared...), gw.Anycast...)
+		sort.Strings(addrs)
+		idx, ok := by[gw.ID]
+		if !ok && len(legacy) > 0 {
+			idx, ok, legacy = legacy[0], true, legacy[1:]
+			dc.Groups[idx].PiggybackOf = gw.ID
+			changed = true
+		}
+		if !ok {
+			id := firstGroupID
+			for used[id] {
+				id++
+			}
+			used[id] = true
+			g := defaultGroup()
+			g.GroupID, g.Piggyback, g.PiggybackOf, g.VIP4, g.VIP6, g.Interface = id, true, gw.ID, "", "", ""
+			g.Neighbors = nil
+			g.NTP = cloneNTPPtr(tmpl)
+			dc.Groups = append(dc.Groups, g)
+			idx, changed = len(dc.Groups)-1, true
+			if tmpl == nil && dc.Groups[idx].NTP != nil {
+				tmpl = dc.Groups[idx].NTP
+			}
+		}
+		g := &dc.Groups[idx]
+		if label := piggybackLabel(gw); g.Name != label {
+			g.Name, changed = label, true
+		}
+		if !sameList(g.DNSDirVIPs, addrs) {
+			g.DNSDirVIPs, changed = addrs, true
+		}
 	}
-	g := defaultGroup()
-	g.GroupID, g.Name, g.Piggyback, g.VIP4, g.VIP6, g.Interface = id, piggybackName, true, "", "", ""
-	g.DNSDirVIPs = addrs
-	g.Neighbors = nil
-	dc.Groups = append(dc.Groups, g)
+	// a v167 gateway nothing was left to adopt
+	if len(legacy) > 0 {
+		drop := map[int]bool{}
+		for _, i := range legacy {
+			drop[dc.Groups[i].GroupID] = true
+		}
+		kept := dc.Groups[:0:0]
+		for _, g := range dc.Groups {
+			if !drop[g.GroupID] {
+				kept = append(kept, g)
+			}
+		}
+		dc.Groups, changed = kept, true
+	}
 	sort.Slice(dc.Groups, func(i, j int) bool { return dc.Groups[i].GroupID < dc.Groups[j].GroupID })
-	return true
+	return changed
+}
+
+// syncPiggybackNTP makes every mirrored gateway use the NTP servers of the one with group number from: they share one list.
+func syncPiggybackNTP(dc *DaemonConfig, from int) {
+	src, err := findGroup(dc, from)
+	if err != nil || !src.Piggyback {
+		return
+	}
+	for i := range dc.Groups {
+		if g := &dc.Groups[i]; g.Piggyback && g.GroupID != from {
+			g.NTP = cloneNTPPtr(src.NTP)
+		}
+	}
 }
 
 // piggybackEvery is how often the primary compares its gateway with dnsdir's addresses.
@@ -89,7 +189,7 @@ func (m *Mgmt) syncPiggyback() error {
 	if err := m.PutConfig(dc, "dnsdir", "dnsdir addresses"); err != nil {
 		return fmt.Errorf("could not follow dnsdir's addresses: %w", err)
 	}
-	infof("piggyback: answering NTP on dnsdir's %d address(es)", len(dc.Groups[len(dc.Groups)-1].DNSDirVIPs))
+	infof("piggyback: answering NTP on the addresses of dnsdir's %d gateway(s)", len(dnsdirGateways()))
 	return nil
 }
 
@@ -168,7 +268,7 @@ func (s *Supervisor) RunReevaluate(ctx context.Context) {
 // the gateway that follows dnsdir's addresses except its name, its NTP servers and pausing it.
 func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 	if e.Kind == "gateway" && e.Action == "add" && dnsdirPresent() {
-		return errors.New("dnsdir is installed on this host, so ntpdir has no gateways of its own: it answers NTP on dnsdir's addresses (add NTP servers to the gateway named dnsdir)")
+		return errors.New("dnsdir is installed on this host, so ntpdir has no gateways of its own: it answers NTP on the addresses of dnsdir's gateways (add NTP servers to one of them)")
 	}
 	g, err := findGroup(dc, e.Group)
 	if err != nil || !g.Piggyback {
@@ -178,7 +278,9 @@ func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 	case e.Kind == "anycast" || e.Kind == "dnsdirvip":
 		return errors.New("this gateway answers on dnsdir's addresses, all of them; they come from dnsdir and cannot be chosen here")
 	case e.Kind == "gateway" && e.Action == "del":
-		return errors.New("this gateway answers on dnsdir's addresses; it goes when dnsdir is uninstalled")
+		return errors.New("this gateway mirrors a gateway of dnsdir; it goes when dnsdir's gateway does")
+	case e.Kind == "gateway" && e.Action == "set" && e.Label != "":
+		return errors.New("this gateway has dnsdir's name for its gateway; rename it in dnsdir")
 	case e.Kind == "gateway" && e.Action == "set" && (e.VIP != "" || e.VIP6 != "" || e.Interface != "" || e.Anycast != "" || e.RealMACs != ""):
 		return errors.New("this gateway has no address, interface or virtual MACs of its own: it answers on dnsdir's addresses")
 	}

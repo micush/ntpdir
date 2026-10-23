@@ -50,20 +50,31 @@ func dnsdirSharedSet() map[string]bool {
 	return m
 }
 
-// dnsdirAddrs reads dnsdir's configuration: its anycast addresses, and the shared addresses of its gateways.  The shared
-// ones are held by dnsdir on whichever node serves the gateway (they are not on lo everywhere), and ntpdir only listens
-// on them.
-func dnsdirAddrs() (anycast, shared []string) {
-	anycast, shared = []string{}, []string{}
+// dnsdirGateway is one gateway of dnsdir: its id, name, its shared addresses and its anycast addresses (bare, sorted).
+type dnsdirGateway struct {
+	ID      int
+	Name    string
+	Shared  []string
+	Anycast []string
+	VIP4    string // the primary shared addresses, for the circle
+	VIP6    string
+}
+
+// dnsdirGateways reads dnsdir's configuration: its gateways with their shared and anycast addresses.  The shared ones are
+// held by dnsdir on whichever node serves the gateway (they are not on lo everywhere), and ntpdir only listens on them.
+// Nothing when dnsdir is not installed or its configuration cannot be read.
+func dnsdirGateways() []dnsdirGateway {
 	if !dnsdirPresent() {
-		return
+		return nil
 	}
 	b, err := os.ReadFile(dnsdirConfPath)
 	if err != nil {
-		return
+		return nil
 	}
 	var c struct {
 		Groups []struct {
+			GroupID   int      `json:"group_id"`
+			Name      string   `json:"name"`
 			ExtraVIPs []string `json:"extra_vips"`
 			VIP4      string   `json:"vip4"`
 			VIP6      string   `json:"vip6"`
@@ -72,28 +83,59 @@ func dnsdirAddrs() (anycast, shared []string) {
 		} `json:"groups"`
 	}
 	if json.Unmarshal(b, &c) != nil {
-		return
+		return nil
 	}
-	seen := map[string]bool{}
-	add := func(dst *[]string, a string) {
+	bare := func(a string) string {
 		a = strings.TrimSpace(a)
 		if ip, _, err := net.ParseCIDR(a); err == nil {
 			a = ip.String()
 		}
-		if n, err := normalizeAnycast(a); err == nil && !seen[n] {
-			seen[n] = true
-			*dst = append(*dst, n)
+		n, err := normalizeAnycast(a)
+		if err != nil {
+			return ""
 		}
+		return n
 	}
+	var out []dnsdirGateway
 	for _, g := range c.Groups {
-		for _, a := range g.ExtraVIPs {
-			add(&anycast, a)
+		gw := dnsdirGateway{ID: g.GroupID, Name: strings.TrimSpace(g.Name), VIP4: bare(g.VIP4), VIP6: bare(g.VIP6)}
+		seen := map[string]bool{}
+		add := func(dst *[]string, a string) {
+			if n := bare(a); n != "" && !seen[n] {
+				seen[n] = true
+				*dst = append(*dst, n)
+			}
 		}
-	}
-	for _, g := range c.Groups {
 		for _, a := range append(append([]string{g.VIP4, g.VIP6}, g.MoreVIP4...), g.MoreVIP6...) {
 			if a != "" {
-				add(&shared, a)
+				add(&gw.Shared, a)
+			}
+		}
+		for _, a := range g.ExtraVIPs {
+			add(&gw.Anycast, a)
+		}
+		sort.Strings(gw.Shared)
+		sort.Strings(gw.Anycast)
+		out = append(out, gw)
+	}
+	return out
+}
+
+// dnsdirAddrs is every anycast address and every shared address of dnsdir's gateways, each sorted and without repeats.
+func dnsdirAddrs() (anycast, shared []string) {
+	anycast, shared = []string{}, []string{}
+	seenA, seenS := map[string]bool{}, map[string]bool{}
+	for _, g := range dnsdirGateways() {
+		for _, a := range g.Anycast {
+			if !seenA[a] {
+				seenA[a] = true
+				anycast = append(anycast, a)
+			}
+		}
+		for _, a := range g.Shared {
+			if !seenS[a] {
+				seenS[a] = true
+				shared = append(shared, a)
 			}
 		}
 	}

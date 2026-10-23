@@ -50,13 +50,16 @@ type CanvasGateway struct {
 	Interface string `json:"interface"`
 	WeakKey   bool   `json:"weak_key,omitempty"` // the gateway's HMAC key is well known or short (gkey.go)
 	// Piggyback marks the gateway that answers on dnsdir's addresses (piggyback.go); it has no address or interface of its own.
-	Piggyback bool           `json:"piggyback,omitempty"`
-	VIP4      string         `json:"vip4"`
-	VIP6      string         `json:"vip6"`
-	Anycast   []AnycastState `json:"anycast,omitempty"`
-	Status    string         `json:"status"`
-	Detail    string         `json:"detail"`
-	Families  []CanvasFamily `json:"families"`
+	Piggyback bool `json:"piggyback,omitempty"`
+	// PiggybackVIP4 and PiggybackVIP6 are the shared addresses of the dnsdir gateway this one mirrors: what the circle shows.
+	PiggybackVIP4 string         `json:"piggyback_vip4,omitempty"`
+	PiggybackVIP6 string         `json:"piggyback_vip6,omitempty"`
+	VIP4          string         `json:"vip4"`
+	VIP6          string         `json:"vip6"`
+	Anycast       []AnycastState `json:"anycast,omitempty"`
+	Status        string         `json:"status"`
+	Detail        string         `json:"detail"`
+	Families      []CanvasFamily `json:"families"`
 	// Vmac is the last virtual-MAC test on this node (see vmactest.go); absent until one has run.
 	Vmac *VmacResult `json:"vmac,omitempty"`
 	// LB is the load-balancing settings this gateway runs with; LBOwn says they are its own rather than Settings'.
@@ -197,6 +200,14 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 		g := &dc.Groups[i]
 		cg := CanvasGateway{Name: g.Name, Piggyback: g.Piggyback, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
 			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.NodePaused, ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
+
+		if g.Piggyback {
+			for _, d := range dnsdirGateways() {
+				if d.ID == g.PiggybackOf {
+					cg.PiggybackVIP4, cg.PiggybackVIP6 = d.VIP4, d.VIP6
+				}
+			}
+		}
 
 		stats := map[string]ServerStat{}
 		var cfg NTPConfig
@@ -518,10 +529,16 @@ func markPiggyback(groups []CanvasGateway) {
 		if !g.Piggyback || g.Status == "idle" && strings.HasPrefix(g.Detail, "not running here") {
 			continue
 		}
-		held, total := 0, len(g.Anycast)
+		// An address of the gateway itself is held on one node of dnsdir's gateway at a time, so a node that does not hold it
+		// is not short of anything; an anycast address is held on every node that serves.
+		shared := dnsdirSharedSet()
+		held, total := 0, 0
 		for _, a := range g.Anycast {
 			if a.Up {
 				held++
+				total++
+			} else if !shared[a.Addr] {
+				total++
 			}
 		}
 		healthy, down, paused := 0, 0, 0
@@ -536,12 +553,12 @@ func markPiggyback(groups []CanvasGateway) {
 			}
 		}
 		switch {
-		case total == 0:
+		case len(g.Anycast) == 0:
 			g.Status, g.Detail = "idle", "dnsdir has no addresses yet"
 		case g.Paused:
 			g.Status, g.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
 		case held == 0:
-			g.Status, g.Detail = "idle", "this node holds none of dnsdir's addresses right now; the nodes that do answer"
+			g.Status, g.Detail = "idle", "this node holds none of this dnsdir gateway's addresses right now; the nodes that do answer"
 		case len(g.Servers) == 0:
 			g.Status, g.Detail = "warn", "answering on dnsdir's addresses, but no NTP server is configured yet, so clients cannot be answered"
 		case healthy == 0 && !g.UsingFallback:
@@ -551,9 +568,9 @@ func markPiggyback(groups []CanvasGateway) {
 		case down > 0:
 			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses, but some NTP servers are down"
 		case held < total:
-			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses here (dnsdir holds the others on other nodes)"
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses here"
 		default:
-			g.Status, g.Detail = "ok", "answering on all "+strconv.Itoa(total)+" of dnsdir's addresses"
+			g.Status, g.Detail = "ok", "answering on "+strconv.Itoa(held)+" of this dnsdir gateway's addresses"
 		}
 	}
 }
@@ -1205,6 +1222,7 @@ func (m *Mgmt) CanvasEdit(e canvasEdit, actor string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	syncPiggybackNTP(dc, e.Group) // the gateways that mirror dnsdir's share one list of servers
 	if err := m.PutConfig(dc, actor, "canvas: "+e.Action+" "+e.Kind); err != nil {
 		return "", err
 	}

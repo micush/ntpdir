@@ -125,6 +125,9 @@ type GroupConfig struct {
 	// or election of its own and answers NTP on every address of dnsdir's gateways (DNSDirVIPs, kept in step with dnsdir's
 	// configuration by the primary, see piggyback.go).  Shared.
 	Piggyback bool `json:"piggyback,omitempty"`
+	// PiggybackOf is the group id of the dnsdir gateway this gateway mirrors (0: none, or one made by v167, adopted on the
+	// next sync).  Shared.
+	PiggybackOf int `json:"piggyback_of,omitempty"`
 	// DNSDirVIPs are anycast addresses of the Anyname DNS Director (dnsdir) on the same host that this gateway also
 	// answers NTP on (dnsdir.go).  ntpdir only listens on them: dnsdir holds and announces them.  Shared.
 	DNSDirVIPs []string `json:"dnsdir_vips,omitempty"`
@@ -411,7 +414,7 @@ func (g *GroupConfig) Validate() error {
 
 // restartDiffers reports whether a change between a and b needs an engine restart.
 func restartDiffers(a, b *GroupConfig) bool {
-	return a.Paused != b.Paused || a.Piggyback != b.Piggyback || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
+	return a.Paused != b.Paused || a.Piggyback != b.Piggyback || a.PiggybackOf != b.PiggybackOf || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
 		!sameList(a.MoreVIP4, b.MoreVIP4) || !sameList(a.MoreVIP6, b.MoreVIP6) ||
 		a.Key != b.Key || a.RealMACs != b.RealMACs || // the MAC mode changes what the node sets up: restart the gateway
 		!reflect.DeepEqual(a.Neighbors, b.Neighbors)
@@ -959,14 +962,14 @@ func (dc *DaemonConfig) Validate() error {
 		}
 		ids[g.GroupID] = true
 	}
-	nPig := 0
+	pigOf := map[int]int{}
 	for _, g := range dc.Groups {
-		if g.Piggyback {
-			nPig++
+		if g.Piggyback && g.PiggybackOf != 0 {
+			if other, dup := pigOf[g.PiggybackOf]; dup {
+				return fmt.Errorf("groups %d and %d both mirror dnsdir's gateway %d", other, g.GroupID, g.PiggybackOf)
+			}
+			pigOf[g.PiggybackOf] = g.GroupID
 		}
-	}
-	if nPig > 1 {
-		return errors.New("only one gateway can answer on dnsdir's addresses")
 	}
 	// two gateways cannot own the same shared address, and an anycast address is not a gateway's shared address; the same
 	// anycast address on several gateways is how an anycast service is run (it is held while any of them can answer)
@@ -1000,7 +1003,7 @@ func (dc *DaemonConfig) Validate() error {
 			if seen[a] {
 				return fmt.Errorf("group %d lists the dnsdir address %s twice", g.GroupID, a)
 			}
-			if other, dup := dnsdirOwner[a]; dup {
+			if other, dup := dnsdirOwner[a]; dup && !(g.Piggyback && piggybackGroup(dc, other)) {
 				return fmt.Errorf("groups %d and %d both answer on the dnsdir address %s", other, g.GroupID, a)
 			}
 			for _, o := range dc.Groups {

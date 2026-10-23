@@ -23,8 +23,8 @@ func dnsdirWith(t *testing.T, conf string) string {
 }
 
 const dnsdirConf = `{"groups":[
- {"group_id":1,"vip4":"10.0.0.53/24","vip6":"2001:db8::53/64","more_vip4":["10.0.0.54/24"],"extra_vips":["203.0.113.53"]},
- {"group_id":2,"vip4":"10.0.1.53/24","extra_vips":["203.0.113.54","203.0.113.53"]}]}`
+ {"group_id":1,"name":"PHX","vip4":"10.0.0.53/24","vip6":"2001:db8::53/64","more_vip4":["10.0.0.54/24"],"extra_vips":["203.0.113.53"]},
+ {"group_id":2,"name":"PTX","vip4":"10.0.1.53/24","extra_vips":["203.0.113.54","203.0.113.53"]}]}`
 
 func TestDNSDirAddrs(t *testing.T) {
 	dnsdirWith(t, dnsdirConf)
@@ -45,8 +45,8 @@ func TestDNSDirAddrs(t *testing.T) {
 
 func TestWantPiggyback(t *testing.T) {
 	dc := newDaemonConfig()
-	g := defaultGroup()
-	dc.Groups = []GroupConfig{g}
+	own := defaultGroup()
+	dc.Groups = []GroupConfig{own}
 	// no dnsdir: nothing is added
 	old := dnsdirMarkers
 	dnsdirMarkers = []string{filepath.Join(t.TempDir(), "absent")}
@@ -55,25 +55,64 @@ func TestWantPiggyback(t *testing.T) {
 	}
 	dnsdirMarkers = old
 	conf := dnsdirWith(t, dnsdirConf)
-	if !wantPiggyback(dc) || len(dc.Groups) != 2 {
-		t.Fatalf("no gateway was made: %+v", dc.Groups)
+	if !wantPiggyback(dc) || len(dc.Groups) != 3 {
+		t.Fatalf("one gateway for each of dnsdir's was not made: %+v", dc.Groups)
 	}
-	p := dc.Groups[1]
-	if !p.Piggyback || p.Name != "dnsdir" || p.GroupID == g.GroupID || len(p.DNSDirVIPs) != 6 || p.VIP4 != "" {
-		t.Fatalf("piggyback gateway: %+v", p)
+	phx, ptx := dc.Groups[1], dc.Groups[2]
+	if !phx.Piggyback || phx.Name != "PHX" || phx.PiggybackOf != 1 || phx.GroupID == own.GroupID || phx.VIP4 != "" {
+		t.Fatalf("PHX: %+v", phx)
 	}
+	if strings.Join(phx.DNSDirVIPs, " ") != "10.0.0.53 10.0.0.54 2001:db8::53 203.0.113.53" {
+		t.Errorf("PHX addresses: %v", phx.DNSDirVIPs)
+	}
+	if ptx.Name != "PTX" || ptx.PiggybackOf != 2 || strings.Join(ptx.DNSDirVIPs, " ") != "10.0.1.53 203.0.113.53 203.0.113.54" {
+		t.Errorf("PTX: %+v", ptx)
+	}
+	// the same anycast address on two of dnsdir's gateways is fine
 	if err := dc.Validate(); err != nil {
-		t.Fatalf("a gateway with no address of its own must validate: %v", err)
+		t.Fatalf("the gateways must validate: %v", err)
 	}
 	if wantPiggyback(dc) {
 		t.Fatal("changed again with nothing new")
 	}
-	// dnsdir gets a new address: the gateway follows
-	if err := os.WriteFile(conf, []byte(`{"groups":[{"group_id":1,"vip4":"10.0.0.53/24","extra_vips":["203.0.113.99"]}]}`), 0o644); err != nil {
+	// a server added to one is the list of the others (the edit path calls syncPiggybackNTP)
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "add", Kind: "server", Group: phx.GroupID, Server: "198.51.100.1"}); err != nil {
 		t.Fatal(err)
 	}
-	if !wantPiggyback(dc) || strings.Join(dc.Groups[1].DNSDirVIPs, " ") != "10.0.0.53 203.0.113.99" || len(dc.Groups) != 2 {
+	syncPiggybackNTP(dc, phx.GroupID)
+	if dc.Groups[2].NTP == nil || !strings.Contains(strings.Join(dc.Groups[2].NTP.Servers, " "), "198.51.100.1") {
+		t.Fatalf("the list was not shared: %+v", dc.Groups[2].NTP)
+	}
+	// a new dnsdir gateway gets the same list; one that is gone takes its gateway with it; a rename follows
+	if err := os.WriteFile(conf, []byte(`{"groups":[{"group_id":1,"name":"PHX2","vip4":"10.0.0.53/24","extra_vips":["203.0.113.99"]},{"group_id":3,"name":"LAX","vip4":"10.0.3.53/24"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !wantPiggyback(dc) || len(dc.Groups) != 3 {
 		t.Fatalf("did not follow dnsdir: %+v", dc.Groups)
+	}
+	names := []string{}
+	for _, g := range dc.Groups {
+		if g.Piggyback {
+			names = append(names, g.Name)
+			if g.NTP == nil || !strings.Contains(strings.Join(g.NTP.Servers, " "), "198.51.100.1") {
+				t.Errorf("%s does not have the shared list", g.Name)
+			}
+		}
+	}
+	if strings.Join(names, " ") != "PHX2 LAX" {
+		t.Errorf("names: %v", names)
+	}
+}
+
+func TestWantPiggybackAdoptsAV167Gateway(t *testing.T) {
+	dnsdirWith(t, dnsdirConf)
+	dc := newDaemonConfig()
+	old := defaultGroup()
+	old.GroupID, old.Piggyback, old.Name, old.VIP4, old.Interface = 100, true, "dnsdir", "", ""
+	dc.Groups = []GroupConfig{old}
+	wantPiggyback(dc)
+	if len(dc.Groups) != 2 || dc.Groups[0].GroupID != 100 || dc.Groups[0].PiggybackOf != 1 || dc.Groups[0].Name != "PHX" {
+		t.Fatalf("not adopted: %+v", dc.Groups)
 	}
 }
 
@@ -88,12 +127,12 @@ func TestPiggybackValidate(t *testing.T) {
 		t.Error("a piggyback gateway with an address of its own was accepted")
 	}
 	a, b := defaultGroup(), defaultGroup()
-	a.Piggyback, a.VIP4, a.Interface, a.GroupID = true, "", "", 100
-	b.Piggyback, b.VIP4, b.Interface, b.GroupID = true, "", "", 101
+	a.Piggyback, a.PiggybackOf, a.VIP4, a.Interface, a.GroupID = true, 1, "", "", 100
+	b.Piggyback, b.PiggybackOf, b.VIP4, b.Interface, b.GroupID = true, 1, "", "", 101
 	dc := newDaemonConfig()
 	dc.Groups = []GroupConfig{a, b}
 	if err := dc.Validate(); err == nil {
-		t.Error("two piggyback gateways were accepted")
+		t.Error("two gateways mirroring one dnsdir gateway were accepted")
 	}
 	// the flag travels with the shared settings
 	dc.Groups = []GroupConfig{a}
@@ -159,6 +198,7 @@ func TestSupervisorStartsOnlyThePiggybackGateway(t *testing.T) {
 }
 
 func TestMarkPiggyback(t *testing.T) {
+	dnsdirWith(t, dnsdirConf)
 	srv := func(st ...string) []CanvasServer {
 		var out []CanvasServer
 		for _, s := range st {
@@ -180,12 +220,13 @@ func TestMarkPiggyback(t *testing.T) {
 		contain string
 	}{
 		{"no addresses", CanvasGateway{Servers: srv("ok")}, "idle", "no addresses"},
-		{"none held here", CanvasGateway{Servers: srv("ok"), Anycast: up(0, 2)}, "idle", "none of dnsdir"},
+		{"none held here", CanvasGateway{Servers: srv("ok"), Anycast: up(0, 2)}, "idle", "none of this dnsdir"},
 		{"no servers", CanvasGateway{Anycast: up(2, 2)}, "warn", "no NTP server is configured"},
 		{"all down", CanvasGateway{Servers: srv("bad", "bad"), Anycast: up(2, 2)}, "bad", "no NTP server is healthy"},
 		{"some down", CanvasGateway{Servers: srv("ok", "bad"), Anycast: up(2, 2)}, "warn", "some NTP servers are down"},
 		{"some held", CanvasGateway{Servers: srv("ok"), Anycast: up(1, 2)}, "warn", "1 of dnsdir's 2"},
-		{"fine", CanvasGateway{Servers: srv("ok", "ok"), Anycast: up(2, 2)}, "ok", "all 2"},
+		{"shared held elsewhere", CanvasGateway{Servers: srv("ok"), Anycast: []AnycastState{{Addr: "10.0.0.53", External: true}, {Addr: "203.0.113.53", External: true, Up: true}}}, "ok", "answering on 1"},
+		{"fine", CanvasGateway{Servers: srv("ok", "ok"), Anycast: up(2, 2)}, "ok", "answering on 2 of this"},
 		{"paused", CanvasGateway{Servers: srv("ok"), Anycast: up(2, 2), Paused: true}, "paused", "Paused"},
 	} {
 		c.g.Piggyback = true
@@ -209,13 +250,13 @@ func TestPiggybackRefusal(t *testing.T) {
 		{Action: "add", Kind: "dnsdirvip", Group: 101, Address: "203.0.113.53"},
 		{Action: "del", Kind: "gateway", Group: 101},
 		{Action: "set", Kind: "gateway", Group: 101, VIP: "10.9.0.1/24"},
+		{Action: "set", Kind: "gateway", Group: 101, Label: "NTP"},
 	} {
 		if err := piggybackRefusal(dc, e); err == nil {
 			t.Errorf("%+v was accepted", e)
 		}
 	}
 	for _, e := range []canvasEdit{
-		{Action: "set", Kind: "gateway", Group: 101, Label: "NTP"},
 		{Action: "add", Kind: "server", Group: 101, Server: "10.1.1.1"},
 		{Action: "set", Kind: "gateway", Group: 100, VIP: "10.9.0.1/24"},
 	} {
