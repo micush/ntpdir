@@ -1,5 +1,17 @@
 # Changelog
 
+## [v165] - 2026-10-23 — Scheduler: "Ignore the exit status" for shell tasks
+
+### Added
+- A shell task has a new option, **Ignore the exit status** (`ignore_exit` in the task, so `--schedule-set` takes it too). A command that ran and exited with any status then counts as done, and its output ends with `(exit status N, ignored)`. A command that cannot start, or that the time limit stops, still fails. Before, any non-zero exit marked the run failed, which made commands like `systemctl status` on a stopped service or `grep` unusable as tasks. Without the option nothing changes.
+- Help (Operate ▸ Scheduler ▸ Good to know) and README describe it. The scheduler test covers exit 3 with and without the option, and a timeout with it.
+
+### Verified
+- `gofmt`, `go vet`, `go test` on the full suite.
+
+### Not verified
+- A live multi-node run with the option on a real cluster.
+
 ## [v164] - 2026-10-23 — Configure ▸ Cluster moved to Configure ▸ Settings ▸ Cluster
 
 ### Changed
