@@ -1,5 +1,11 @@
 # Changelog
 
+## [v160] - 2026-10-23 — Operate ▸ Anycast and Monitor ▸ Anycast get BGP and OSPF tabs
+
+### Changed
+- **Operate ▸ Anycast** and **Monitor ▸ Anycast** now have a **BGP** tab and an **OSPF** tab (BGP first), like Configure ▸ Anycast. Before, OSPF appeared as extra sections on the same page. Nothing else changes: the same buttons, tables and live state, and the *Anycast addresses* table is on both Monitor tabs.
+- **Help:** each of the two pages now has two panels (`BGP` and `OSPF`), and the panel follows the tab.
+
 ## [v159] - 2026-10-23 — Anycast over OSPF, and Configure ▸ Anycast split into BGP and OSPF tabs
 
 ### Changed
