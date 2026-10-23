@@ -1,5 +1,10 @@
 # Changelog
 
+## [v151] - 2026-10-22 — No filter or paging on the short lists
+
+### Changed
+- The short list tables (servers, fallback servers, neighbors, more VIP addresses, community strings, keys, authenticated servers) no longer have the filter box and page controls; the long ones (clients, domains, users and the like) keep them.
+
 ## [v150] - 2026-10-22 — Last apply shows just the tag
 
 ### Changed
