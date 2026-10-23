@@ -471,7 +471,7 @@
   }
   function fillHelp() {
     // the NTP page has a help page for each of its tabs
-    const topic = state.tab === "cfg_ntp" && NTPDIR_HELP["config_ntp" + state.ntpTab] ? "config_ntp" + state.ntpTab : state.tab.startsWith("cfg_") ? "config" : state.tab === "users" ? (state.usersTab === 1 ? "users_sso" : "users_local") : state.tab;
+    const topic = state.tab === "cfg_ntp" && NTPDIR_HELP["config_ntp" + state.ntpTab] ? "config_ntp" + state.ntpTab : state.tab.startsWith("cfg_") ? "config" : state.tab === "users" ? (state.usersTab === 2 ? "users_ldap" : state.usersTab === 1 ? "users_sso" : "users_local") : state.tab;
     const [t, kids] = helpBody(topic);
     document.getElementById("help-title").textContent = t;
     const body = clear(document.getElementById("help-body"));
@@ -2109,6 +2109,7 @@
     { shared: true, k: "sso_oidc_issuer", l: "OpenID Connect issuer", t: "text" },
     { shared: true, k: "sso_oidc_client_id", l: "OpenID Connect client ID", t: "text" },
     { shared: true, k: "sso_oidc_client_secret", l: "OpenID Connect client secret", t: "secret" },
+    { shared: true, k: "sso_oidc_skip_verify", l: "Do not check the provider's certificate", t: "bool" },
     { shared: true, k: "sso_users", l: "Users", t: "rows", rows: "ssousers", wide: true },
   ];
 
@@ -2117,7 +2118,7 @@
     ["General", ["sso_base_url", "sso_users"]],
     ["Google", ["sso_google_client_id", "sso_google_client_secret"]],
     ["Microsoft", ["sso_entra_tenant", "sso_entra_client_id", "sso_entra_client_secret"]],
-    ["OpenID Connect", ["sso_oidc_name", "sso_oidc_issuer", "sso_oidc_client_id", "sso_oidc_client_secret"]],
+    ["OpenID Connect", ["sso_oidc_name", "sso_oidc_issuer", "sso_oidc_client_id", "sso_oidc_client_secret", "sso_oidc_skip_verify"]],
   ];
   function ssoTabs(obj) {
     const sets = SSO_TABS.map(([, keys]) => fieldset(SSO_FIELDS.filter((f) => keys.includes(f.k)).map((f) => ({ ...f, brk: false })), obj));
@@ -2138,6 +2139,43 @@
     });
     show(state.ssoTab >= 0 && state.ssoTab < SSO_TABS.length ? state.ssoTab : 0);
     return { el: h("div", {}, strip, ...panes), get: () => Object.assign({}, ...sets.map((fs) => fs.get())) };
+  }
+
+  // Configure ▸ Users ▸ LDAP: sign-in with a directory (Active Directory, Samba 4), and a Test button that says what happens
+  const LDAP_FIELDS = [
+    { shared: true, k: "ldap_servers", l: "LDAP servers", t: "rows", rows: "ldapservers", wide: true },
+    { shared: true, k: "ldap_skip_verify", l: "Do not check the server's certificate", t: "bool" },
+    { shared: true, k: "ldap_bind_dn", l: "Bind account", t: "text" },
+    { shared: true, k: "ldap_bind_password", l: "Bind password", t: "secret" },
+    { shared: true, k: "ldap_base_dn", l: "Search base", t: "text" },
+    { shared: true, k: "ldap_rw_group", l: "Full-access group", t: "text" },
+    { shared: true, k: "ldap_ro_group", l: "Read-only group", t: "text" },
+  ];
+  function ldapTab(obj) {
+    const fs = fieldset(LDAP_FIELDS, obj);
+    const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", "aria-label": "User name to test", placeholder: "alice" });
+    const pass = h("input", { type: "password", autocomplete: "new-password", "aria-label": "Password to test", placeholder: "optional" });
+    const out = h("pre", { class: "ldap-out hidden", role: "status", "aria-live": "polite" });
+    const btn = h("button", { type: "button", class: "btn" }, "Test");
+    const run = async () => {
+      btn.disabled = true;
+      out.classList.remove("hidden");
+      out.textContent = "Trying…";
+      try {
+        const d = (await api("POST", "/api/ldap/test", { username: user.value.trim(), password: pass.value }, true)).data;
+        out.textContent = (d.ok ? "OK" + (d.read_only ? " (read-only access)" : "") : "Not accepted") + "\n" + d.steps.map((x) => "  " + x).join("\n");
+      } catch (e) { out.textContent = "Could not test: " + (e.message || e); }
+      btn.disabled = false;
+    };
+    btn.addEventListener("click", run);
+    for (const i of [user, pass]) i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } });
+    const test = h("div", { class: "ldap-test" },
+      h("h3", {}, "Test"),
+      h("div", { class: "ldap-test-row" },
+        h("label", { class: "f" }, "User name", user), h("label", { class: "f" }, "Password", pass), btn),
+      out);
+    test.addEventListener("change", (e) => e.stopPropagation());   // the test boxes are not settings
+    return { el: h("div", {}, fs.el, test), get: fs.get };
   }
 
   const WEB_FIELDS = [
@@ -2173,7 +2211,7 @@
   // not complete (outlined and not saved), empty: text for no rows}.
   const rowClips = {};
   // the short lists (a handful of rows) have no filter box and no paging; the long ones (clients, domains, users) do
-  const SMALL_TABLES = new Set(["servers", "fallback", "neighbors", "morevip4", "morevip6", "community", "keys", "serverauth"]);
+  const SMALL_TABLES = new Set(["ldapservers", "servers", "fallback", "neighbors", "morevip4", "morevip6", "community", "keys", "serverauth"]);
   function rowTable(spec, lines) {
     const N = spec.cols.length;
     const small = SMALL_TABLES.has(spec.key);
@@ -2383,6 +2421,7 @@
       mark: (c) => !c[0] || (c[1] === "key" && !c[2]),
     },
     // single sign-on users: "alice@example.com rw"
+    ldapservers: oneCol("ldapservers", "Server", "ldaps://dc1.example.lan:636", "No directory servers yet."),
     ssousers: {
       key: "ssousers", empty: "Nobody may sign in with single sign-on yet.",
       cols: [{ name: "E-mail address", ph: "alice@example.com" }, { name: "Access", opts: ["ro", "rw"] }, { name: "Provider", opts: ["any", "google", "microsoft", "oidc"] }],
@@ -2490,6 +2529,7 @@
       const general = fieldset(GENERAL_FIELDS, cfg);
       const web = fieldset(WEB_FIELDS, cfg.web);
       const sso = ssoTabs(cfg.web);
+      const ldap = ldapTab(cfg.web);
       const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
       const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
@@ -2564,7 +2604,7 @@
         groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...g.fs.get() })),
         ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
-        web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get() },
+        web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get(), ...ldap.get() },
         cluster: cluster.get(),
         snmp: snmpLocal(),
         ...(cfg.bgp ? { bgp: cfg.bgp } : {}), // edited on the Anycast page
@@ -2612,6 +2652,7 @@
         ["web", "Web GUI", h("div", {}, section("Web GUI", web.el), certBox)],
         ["sso", "SSO", section("Single sign-on",
           sso.el)],
+        ["ldap", "LDAP", section("LDAP sign-in", ldap.el)],
         ["snmp", "SNMP", h("div", {}, (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })())],
         ["cluster", "Cluster", section("Cluster", cluster.el)],
       ];
@@ -2675,7 +2716,7 @@
       },
     };
   };
-  for (const id of ["general", "groups", "ntp", "web", "sso", "snmp", "cluster"]) VIEWS["cfg_" + id] = makeConfigView(id);
+  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "snmp", "cluster"]) VIEWS["cfg_" + id] = makeConfigView(id);
 
   // ── shared helpers for the management pages ───────────────────────────────
   // Nothing is said when every node answered (the Node menu says "Cluster"); when one could not, which and why, since the
@@ -4737,7 +4778,7 @@
   VIEWS.users = (() => {
     return {
       mount(main) {
-        const TABS = [["Local", VIEWS.usersLocal], ["SSO", VIEWS.cfg_sso]];
+        const TABS = [["Local", VIEWS.usersLocal], ["SSO", VIEWS.cfg_sso], ["LDAP", VIEWS.cfg_ldap]];
         const panes = TABS.map(([, v]) => { const p = h("div", { role: "tabpanel" }); v.mount(p); return p; });
         const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
         function show(i, focus) {
