@@ -1,5 +1,10 @@
 # Changelog
 
+## [v164] - 2026-10-23 — Configure ▸ Cluster moved to Configure ▸ Settings ▸ Cluster
+
+### Changed
+- The **Cluster** settings (binding address, advertised address, sync interval) are now the **Cluster** tab of **Configure ▸ Settings**, after Logs and Upgrades. The *Cluster* entry under Configure is gone; an old `#cfg_cluster` bookmark opens the new tab. Nothing else changes, and the help panel follows the tab.
+
 ## [v163] - 2026-10-23 — Configure ▸ Settings with Logs and Upgrades tabs; syslog forwarding; Gateways
 
 ### Changed

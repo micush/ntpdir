@@ -88,7 +88,7 @@ Both nodes now answer on the shared address and one of them is the controller (s
 
 ## 7. Worth knowing
 
-- **Settings, Gateways, NTP, Web GUI and Cluster** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
+- **Settings (with its Logs, Upgrades and Cluster tabs), Gateways, NTP and Web GUI** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
 - **History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.
 - **Operate ▸ Upgrade**: upload a newer AnyTime tarball, tick the nodes to update and press the button in the Nodes card (none ticked = this node). A bad update rolls back by itself.
 - **Operate ▸ Anycast**: switch BGP, or a single neighbor, off and on without losing the settings (set them under **Configure ▸ Anycast**).
