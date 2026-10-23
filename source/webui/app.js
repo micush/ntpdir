@@ -396,6 +396,8 @@
       if (typeof blk === "string") return h("p", {}, richText(blk));
       if (blk[0] === "h") return h("h3", {}, blk[1]);
       if (blk[0] === "ul") return h("ul", {}, blk[1].map((li) => h("li", {}, richText(li))));
+      if (blk[0] === "ol") return h("ol", {}, blk[1].map((li) => h("li", {}, richText(li))));
+      if (blk[0] === "note") return h("p", { class: "help-note" }, richText(blk[1]));
       if (blk[0] === "fields") return h("dl", { class: "help-fields" }, blk[1].flatMap(([name, text]) => [h("dt", {}, name), h("dd", {}, richText(text))]));
       if (blk[0] === "cli") return h("div", {}, h("h3", {}, "Command line"), h("pre", { class: "help-cli" }, blk[1]));
       return null;
@@ -469,9 +471,29 @@
     document.getElementById("help-find-count").textContent = (helpAt + 1) + " / " + helpHits.length;
     if (jump) m.scrollIntoView({ block: "center" });
   }
+  // Which panel the help shows: one for every page, and for every tab and sub-tab of a page that has them.
+  function helpTopicKey() {
+    const k = (() => {
+      switch (state.tab) {
+      case "cfg_general": return "config_general";
+      case "cfg_groups": return "config_groups";
+      case "cfg_web": return "config_web";
+      case "cfg_snmp": return "config_snmp";
+      case "cfg_cluster": return "config_cluster";
+      case "cfg_ntp": return "config_ntp" + (state.ntpTab >= 0 ? state.ntpTab : 0);
+      case "users": return state.usersTab === 2 ? "users_ldap" : state.usersTab === 1 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
+      default: return state.tab;
+      }
+    })();
+    return NTPDIR_HELP[k] ? k : state.tab;
+  }
+  // a tab inside a page was changed: if the help is open, show the panel of that tab
+  function refreshHelp() {
+    const pn = document.getElementById("help-panel");
+    if (pn && pn.classList.contains("open")) fillHelp();
+  }
   function fillHelp() {
-    // the NTP page has a help page for each of its tabs
-    const topic = state.tab === "cfg_ntp" && NTPDIR_HELP["config_ntp" + state.ntpTab] ? "config_ntp" + state.ntpTab : state.tab.startsWith("cfg_") ? "config" : state.tab === "users" ? (state.usersTab === 2 ? "users_ldap" : state.usersTab === 1 ? "users_sso" : "users_local") : state.tab;
+    const topic = helpTopicKey();
     const [t, kids] = helpBody(topic);
     document.getElementById("help-title").textContent = t;
     const body = clear(document.getElementById("help-body"));
@@ -2126,6 +2148,7 @@
     const buttons = SSO_TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab sub", onclick: () => show(i) }, name));
     function show(i, focus) {
       state.ssoTab = i;
+      refreshHelp();
       panes.forEach((pn, j) => { pn.hidden = j !== i; });
       buttons.forEach((b, j) => { b.setAttribute("aria-selected", j === i ? "true" : "false"); b.tabIndex = j === i ? 0 : -1; b.classList.toggle("on", j === i); });
       if (focus) buttons[i].focus();

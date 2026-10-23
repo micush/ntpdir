@@ -1,5 +1,14 @@
 # Changelog
 
+## [v158] - 2026-10-23 — Help rewritten: one plain-English panel for every screen and tab
+
+### Changed
+- Every help panel was rewritten. Each screen now has a panel of its own, and so does every tab and sub-tab: the Configure ▸ General, Gateway groups, Web GUI, SNMP and Cluster pages, each of the five NTP tabs (Servers, Health, Clients, Security, Leap seconds), the Users tabs (Local, SSO with its General, Google, Microsoft and OpenID Connect tabs, and LDAP), and every Operate and Monitor page.
+- The panel follows you: change a tab or a sub-tab while the help is open and the panel changes with it.
+- All panels use the same layout: what the screen is for, what you can do on it, numbered steps for the usual jobs, a Fields list with the exact on-screen labels, notes on what to watch out for, and the command-line equivalents. Warnings stand out in a highlighted note.
+- The existing explanations were carried over and reorganised; the long single paragraphs (statistics, the topology page) were split into short, headed parts.
+- The checks now require a panel for every page and tab (and fail on one left over from a page that is gone), the same layout in every panel, and every labelled field in the panel of the tab it is on.
+
 ## [v157] - 2026-10-22 — A joining node does not pull the cluster up to its version
 
 ### Changed
