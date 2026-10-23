@@ -825,6 +825,8 @@ type DaemonConfig struct {
 	// BGP is this node's FRR/BGP settings (see bgp.go).  A pointer with omitempty so
 	// a config that never used BGP has no "bgp" key and older versions still read it.
 	BGP *BGPConfig `json:"bgp,omitempty"`
+	// OSPF is this node's OSPF settings (see ospf.go), per node like BGP.  Nil when never used: no "ospf" key.
+	OSPF *OSPFConfig `json:"ospf,omitempty"`
 	// SNMP is this node's snmpd settings (see snmp.go).  A pointer with omitempty so a config that never used SNMP has no
 	// "snmp" key and older versions still read it.  Local to the node, never replicated.
 	SNMP *SNMPConfig `json:"snmp,omitempty"`
@@ -1077,6 +1079,14 @@ func (dc *DaemonConfig) Validate() error {
 	if dc.BGP != nil {
 		if err := dc.BGP.Validate(); err != nil {
 			return err
+		}
+	}
+	if dc.OSPF != nil {
+		if err := dc.OSPF.Validate(); err != nil {
+			return err
+		}
+		if !dc.OSPF.Configured() {
+			dc.OSPF = nil
 		}
 	}
 	return dc.Cluster.Validate()

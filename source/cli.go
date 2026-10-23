@@ -31,6 +31,8 @@ type cliFlags struct {
 	powerIn                                                                                                                                                                                                                                 *int
 	bgp, bgpDisable, bgpEnable, logShow, statsShow, statsClear, hostShow, nodePause, nodeResume, nodeStatus, allNodes, captureList                                                                                                          *bool
 	logMin, logGrep, logSince, logLines, statsRange, statsOutcome, statsClient, statsServer, whoisName, nodeRename, scanAddr, pingAddr, traceAddr, hostLookup, hostRange, captureIface, captureSecs, captureFilter, captureFile, tshootFile *string
+	ospf, ospfDisable, ospfEnable                                                                                                                                                                                                           *bool
+	ospfRouterID, ospfIfAdd, ospfIfDel, ospfIfDisable, ospfIfEnable, ospfArea, ospfNetwork, ospfKey, ospfHello, ospfDead, ospfMetric                                                                                                        *string
 	asn, routerID, asPrepend, nbrAdd, nbrDel, nbrDisable, nbrEnable, remoteAS, descr, passwd, multihop, keepalive, hold                                                                                                                     *string
 	updateUpload, updatePush, updateCancel, updateAuto, updateRepo                                                                                                                                                                          *string
 	canvas, vmacTest, tshoot, tshootCapture                                                                                                                                                                                                 *bool
@@ -66,6 +68,9 @@ func registerCLIFlags(fs *flag.FlagSet) *cliFlags {
 		logShow: b("log"), logMin: s("log-min"), logGrep: s("log-grep"), logSince: s("log-since"), logLines: s("log-lines"), statsShow: b("stats"), statsClear: b("stats-clear"), scanAddr: s("scan"), pingAddr: s("ping"), traceAddr: s("traceroute"), statsRange: s("stats-range"), statsOutcome: s("stats-outcome"), statsClient: s("stats-client"), statsServer: s("stats-server"), whoisName: s("whois"), nodeRename: s("node-rename"), hostLookup: s("host-lookup"), hostShow: b("host"), allNodes: b("all-nodes"), captureList: b("capture-interfaces"), captureIface: s("capture"), captureSecs: s("capture-seconds"), captureFilter: s("capture-filter"), captureFile: s("capture-file"), hostRange: s("host-range"),
 		bgp: b("bgp"), bgpDisable: b("bgp-disable"), bgpEnable: b("bgp-enable"), nbrDisable: s("bgp-neighbor-disable"), nbrEnable: s("bgp-neighbor-enable"), asn: s("asn"), routerID: s("router-id"), asPrepend: s("as-prepend"),
 		nbrAdd: s("bgp-neighbor-add"), nbrDel: s("bgp-neighbor-del"), remoteAS: s("remote-as"), descr: s("description"),
+		ospf: b("ospf"), ospfDisable: b("ospf-disable"), ospfEnable: b("ospf-enable"), ospfRouterID: s("ospf-router-id"), ospfIfAdd: s("ospf-interface-add"), ospfIfDel: s("ospf-interface-del"),
+		ospfIfDisable: s("ospf-interface-disable"), ospfIfEnable: s("ospf-interface-enable"), ospfArea: s("ospf-area"), ospfNetwork: s("ospf-network"), ospfKey: s("ospf-key"),
+		ospfHello: s("ospf-hello"), ospfDead: s("ospf-dead"), ospfMetric: s("ospf-metric"),
 		passwd:       s("password"),
 		multihop:     s("multihop"),
 		keepalive:    s("keepalive"),
@@ -355,6 +360,10 @@ func (f *cliFlags) run(sock string) bool {
 	case *f.bgp || *f.asn != "" || *f.routerID != "" || *f.asPrepend != "" || *f.keepalive != "" || *f.hold != "" || *f.nbrAdd != "" || *f.nbrDel != "" ||
 		*f.bgpDisable || *f.bgpEnable || *f.nbrDisable != "" || *f.nbrEnable != "":
 		runBGP(sock, f)
+	// ── ospf ──
+	case *f.ospf || *f.ospfRouterID != "" || *f.ospfIfAdd != "" || *f.ospfIfDel != "" || *f.ospfHello != "" || *f.ospfDead != "" || *f.ospfMetric != "" ||
+		*f.ospfDisable || *f.ospfEnable || *f.ospfIfDisable != "" || *f.ospfIfEnable != "":
+		runOSPF(sock, f)
 	// ── statistics ──
 	case *f.statsShow:
 		runStats(sock, f)

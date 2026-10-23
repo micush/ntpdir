@@ -155,6 +155,9 @@ type anycastSet struct {
 	// bgp returns the node's BGP settings; ok false (or a nil hook) turns the gate off.  An address is only held while
 	// BGP is configured and at least one neighbor of its family is established (see anycastBGPGate).
 	bgp func() (*BGPConfig, bool)
+	// ospf returns the node's OSPF settings; nil (or a nil hook) means OSPF carries nothing.  OSPF is the other way an
+	// address is carried: it is held while BGP or OSPF can carry it.
+	ospf func() *OSPFConfig
 	// ext are the addresses that belong to dnsdir: ntpdir listens on them while dnsdir is installed and announces
 	// them, and never touches lo for them (see stepExternal)
 	ext map[string]bool
@@ -309,7 +312,11 @@ func (a *anycastSet) step() {
 		}
 		if why == "" && a.bgp != nil {
 			if cfg, ok := a.bgp(); ok {
-				why = anycastGateFn(cfg, addr)
+				var oc *OSPFConfig
+				if a.ospf != nil {
+					oc = a.ospf()
+				}
+				why = anycastRouteGate(cfg, oc, addr)
 			}
 		}
 		switch paused[addr] {
