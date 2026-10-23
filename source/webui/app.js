@@ -272,7 +272,8 @@
     try {
       // always the node you signed in to, and the gateway's state for the cluster as a whole (from its nodes), so the dot does not change with the Node menu
       const r = await api("GET", "/api/canvas?own=1", undefined, true);
-      state.topo.list = (r.data || []).map((g) => ({ id: g.group_id, label: g.name || bareIP(g.vip4) || bareIP(g.vip6) || "gateway " + g.group_id,
+      state.topo.dnsdir = !!(r.dnsdir && r.dnsdir.present);   // dnsdir is installed here: ntpdir answers on its addresses and makes no gateway of its own
+      state.topo.list = (r.data || []).map((g) => ({ id: g.group_id, piggyback: !!g.piggyback, label: g.name || bareIP(g.vip4) || bareIP(g.vip6) || "gateway " + g.group_id,
         status: g.cluster_status || g.status, title: "Group " + g.group_id + (g.name ? " · " + (bareIP(g.vip4) || bareIP(g.vip6)) : "") + " — " + (g.cluster_status ? g.cluster_detail : g.detail) }));
     } catch (_) { return; }
     state.topo.list.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }) || a.id - b.id);   // alphabetical (10.0.0.2 before 10.0.0.10)
@@ -286,10 +287,11 @@
     clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title, "data-gw": g.id,
         "aria-current": here && g.id === state.topo.gid ? "page" : null,
         onclick: () => { state.topo.gid = g.id; selectTab("topology"); },
-        oncontextmenu: rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
+        oncontextmenu: g.piggyback ? null : rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
           ["Delete", () => { state.topo.gid = g.id; state.topo.action = "delete"; selectTab("topology"); }, "danger"]]) },
       h("span", { class: "dot st-" + g.status }), g.label)),
-      h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
+      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host, so ntpdir answers on dnsdir's gateway and anycast addresses and keeps no gateway of its own." }, "Answering on dnsdir's addresses")
+        : h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
   }
 
   function openNavGroup(name) {
@@ -856,7 +858,7 @@
       const COLW = 190, SW = 156;
       // The circle shows bare addresses (no /prefix) and grows until the longest one fits,
       // up to a full 39-character IPv6 address (monospace 12px ≈ 7.3px per character).
-      const ip4 = (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
+      const ip4 = g.piggyback ? "dnsdir's addresses" : (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
       const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);   // wide enough for the clock line too
       const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
@@ -1409,7 +1411,8 @@
       else items.push(["Pause" + (noun ? " " + noun : ""), null, "", subs(true), whyNot || ""]);
       return items;
     };
-    const gwItems = (g) => [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
+    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)], ...addNodeItems(g),
+      ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p))] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
       ...(cv.dnsdir && cv.dnsdir.present ? [["Add dnsdir address", () => dnsdirForm(g)]] : []),
       ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
@@ -1925,7 +1928,7 @@
           onmouseout: (e) => { if (cv.stale && !cv.drag && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".shape"))) draw(); },
           // right-click on empty canvas (shapes and tabs handle their own menus)
           oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
-            openMenu(e, [["New gateway", () => gatewayForm(null)]].concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
+            openMenu(e, (cv.dnsdir && cv.dnsdir.present ? [] : [["New gateway", () => gatewayForm(null)]]).concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
           h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
         main.append(svgHost, legend);

@@ -121,6 +121,10 @@ type GroupConfig struct {
 	// against the interface) that every running node holds on lo and answers NTP
 	// on, while this gateway's NTP pool is healthy.  Shared across the cluster.
 	ExtraVIPs []string `json:"extra_vips,omitempty"`
+	// Piggyback marks the one gateway ntpdir has while dnsdir is installed on the same host: it has no address, interface
+	// or election of its own and answers NTP on every address of dnsdir's gateways (DNSDirVIPs, kept in step with dnsdir's
+	// configuration by the primary, see piggyback.go).  Shared.
+	Piggyback bool `json:"piggyback,omitempty"`
 	// DNSDirVIPs are anycast addresses of the Anyname DNS Director (dnsdir) on the same host that this gateway also
 	// answers NTP on (dnsdir.go).  ntpdir only listens on them: dnsdir holds and announces them.  Shared.
 	DNSDirVIPs []string `json:"dnsdir_vips,omitempty"`
@@ -326,7 +330,10 @@ func (g *GroupConfig) Validate() error {
 	if err := validGatewayName(g.Name); err != nil {
 		return fmt.Errorf("%s: %v", pre, err)
 	}
-	if g.VIP4 == "" && g.VIP6 == "" {
+	if g.Piggyback && (g.VIP4 != "" || g.VIP6 != "" || len(g.MoreVIP4)+len(g.MoreVIP6)+len(g.ExtraVIPs) > 0) {
+		return fmt.Errorf("%s: a gateway that answers on dnsdir's addresses has no addresses of its own", pre)
+	}
+	if !g.Piggyback && g.VIP4 == "" && g.VIP6 == "" {
 		return fmt.Errorf("%s: at least one of vip4 or vip6 must be set", pre)
 	}
 	if g.VIP4 != "" {
@@ -391,7 +398,7 @@ func (g *GroupConfig) Validate() error {
 	if g.HelloMS > g.HoldMS {
 		return fmt.Errorf("%s: hello_ms (%d) cannot be larger than hold_ms (%d): a neighbour would be declared gone between two hellos", pre, g.HelloMS, g.HoldMS)
 	}
-	if g.Interface == "" {
+	if g.Interface == "" && !g.Piggyback {
 		return fmt.Errorf("%s: interface must be set", pre)
 	}
 	for _, n := range g.Neighbors {
@@ -404,7 +411,7 @@ func (g *GroupConfig) Validate() error {
 
 // restartDiffers reports whether a change between a and b needs an engine restart.
 func restartDiffers(a, b *GroupConfig) bool {
-	return a.Paused != b.Paused || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
+	return a.Paused != b.Paused || a.Piggyback != b.Piggyback || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
 		!sameList(a.MoreVIP4, b.MoreVIP4) || !sameList(a.MoreVIP6, b.MoreVIP6) ||
 		a.Key != b.Key || a.RealMACs != b.RealMACs || // the MAC mode changes what the node sets up: restart the gateway
 		!reflect.DeepEqual(a.Neighbors, b.Neighbors)
@@ -951,6 +958,15 @@ func (dc *DaemonConfig) Validate() error {
 			return fmt.Errorf("duplicate group_id %d", g.GroupID)
 		}
 		ids[g.GroupID] = true
+	}
+	nPig := 0
+	for _, g := range dc.Groups {
+		if g.Piggyback {
+			nPig++
+		}
+	}
+	if nPig > 1 {
+		return errors.New("only one gateway can answer on dnsdir's addresses")
 	}
 	// two gateways cannot own the same shared address, and an anycast address is not a gateway's shared address; the same
 	// anycast address on several gateways is how an anycast service is run (it is held while any of them can answer)

@@ -54,6 +54,11 @@ type Supervisor struct {
 	// Anycast address sets of the running groups (guarded by mu).
 	anycast map[int]*anycastSet
 
+	// Groups that do not run on this node because of dnsdir: the reason (guarded by mu).  dnsdirSeen is what the last check
+	// of whether dnsdir is installed found (see piggyback.go).
+	inactive   map[int]string
+	dnsdirSeen bool
+
 	// The loop that keeps chrony's sources in line with the pools' health (chronyloop.go).
 	chronyCancel context.CancelFunc
 	chronyDone   chan struct{}
@@ -80,7 +85,7 @@ var (
 func NewSupervisor(ctx context.Context, dc *DaemonConfig) *Supervisor {
 	s := &Supervisor{ctx: ctx, dc: dc.effective(), engines: map[engineKey]*Engine{},
 		pools: map[int]*Pool{}, ntps: map[int]NTPConfig{}, keyOf: map[int]int{},
-		warming: map[int]*warmup{}, offnet: map[int]*offnetWait{}, anycast: map[int]*anycastSet{}}
+		warming: map[int]*warmup{}, offnet: map[int]*offnetWait{}, anycast: map[int]*anycastSet{}, inactive: map[int]string{}}
 	s.notePausedAnycast(s.dc)
 	return s
 }
@@ -364,6 +369,14 @@ func (s *Supervisor) AllAnycastStates() []AnycastState {
 // fine.  The wait runs in the background; a reload that pauses, restarts or
 // removes the group cancels it.
 func (s *Supervisor) startGroupWhenReadyLocked(gc GroupConfig) {
+	if why := inactiveReason(gc); why != "" {
+		if s.inactive[gc.GroupID] != why {
+			infof("Group %d: not running here — %s", gc.GroupID, why)
+		}
+		s.inactive[gc.GroupID] = why
+		return
+	}
+	delete(s.inactive, gc.GroupID)
 	if !gc.Paused {
 		if ok, why := onGatewaySubnet(gc); !ok {
 			w := &offnetWait{why: why}
@@ -378,7 +391,9 @@ func (s *Supervisor) startGroupWhenReadyLocked(gc GroupConfig) {
 
 // startAfterSubnetLocked is the rest of the start: wait for the NTP servers, then go.
 func (s *Supervisor) startAfterSubnetLocked(gc GroupConfig) {
-	vmacAtStart(gc) // a background check that clients' replies can reach this node; no-op in tests
+	if !gc.Piggyback {
+		vmacAtStart(gc) // a background check that clients' replies can reach this node; no-op in tests
+	}
 	if gc.Paused || s.ntpReady(gc.GroupID, 0, warmFloor) {
 		s.startGroupLocked(gc)
 		return
@@ -481,6 +496,17 @@ func (s *Supervisor) waitForSubnet(gid int, w *offnetWait) {
 }
 
 // offnetGroups maps the groups held back for being on the wrong subnet to the reason.
+// inactiveGroups lists the groups that do not run here because of dnsdir, with the reason.
+func (s *Supervisor) inactiveGroups() map[int]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[int]string{}
+	for gid, why := range s.inactive {
+		out[gid] = why
+	}
+	return out
+}
+
 func (s *Supervisor) offnetGroups() map[int]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -505,6 +531,7 @@ func (s *Supervisor) warmingGroups() map[int]bool {
 func (s *Supervisor) stopGroupLocked(gid int) []*Engine {
 	delete(s.warming, gid) // a pending warm-up must not start a group that was stopped
 	delete(s.offnet, gid)
+	delete(s.inactive, gid)
 	s.stopAnycastLocked(gid)
 	var out []*Engine
 	for _, af := range []AF{afIPv4, afIPv6} {
@@ -529,6 +556,9 @@ func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) {
 	for i := range nu.Groups {
 		g := &nu.Groups[i]
 		if id != "" && containsStr(g.ExcludedNodes, id) {
+			continue
+		}
+		if inactiveReason(*g) != "" { // a gateway dnsdir takes over (or a piggyback one with no dnsdir) has no pool here
 			continue
 		}
 		// a paused gateway (or node) keeps its pool: the servers are still this node's time sources
@@ -639,6 +669,7 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 				for _, af := range []AF{afIPv4, afIPv6} {
 					running = running || s.engines[engineKey{gid, af}] != nil
 				}
+				running = running || (gc.Piggyback && !gc.Paused && inactiveReason(*gc) == "") // its addresses come and go with dnsdir's
 				if running {
 					infof("Group %d anycast addresses changed", gid)
 					s.stopAnycastLocked(gid)

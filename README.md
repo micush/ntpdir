@@ -324,6 +324,15 @@ An address is held only while this node can answer on it: the gateway is running
 
 The drawing and `--canvas` show whether each address is announced from the node you are looking at. When the node manages BGP, the pill is **green** when every neighbor of its family has an established session (IPv4 address → IPv4 neighbors, IPv6 → IPv6), **amber** when some do and some do not, and **red** when none does, when it has no neighbor of that family, or when BGP is disabled on the node (Operate ▸ Anycast). A neighbor that is disabled or still connecting counts as not established. With OSPF (below) the same colours count the enabled interfaces that have a neighbor in state Full, and with both protocols the better picture is shown.
 
+### Installed next to dnsdir: AnyTime answers on dnsdir's addresses
+
+When the Anyname DNS Director (`dnsdir`) is installed on the same host, ntpdir does not use a gateway VIP or anycast addresses of its own. It **piggybacks on dnsdir**: it answers NTP on every gateway VIP and anycast address dnsdir has, picked up automatically (every few seconds, read from `/var/lib/dnsdir/dnsdir.conf`: `extra_vips`, `vip4`, `vip6`, `more_vip4`, `more_vip6`).
+
+- A gateway named **dnsdir** is created by itself (and kept up to date) with the addresses dnsdir has. It has one list of NTP servers for all of them. There is no per-address choice. *New gateway*, *Edit*, *Add anycast address*, *Add dnsdir address* and *Delete* are refused on it (GUI, CLI and API), and no other gateway can be added while dnsdir is present.
+- Gateways ntpdir had of its own stay in the configuration but do not run (no engine, no VIP, no anycast) and show grey with the reason. When dnsdir is removed they run again and the "dnsdir" gateway stops. Standalone, nothing changes.
+- ntpdir only **listens**. dnsdir adds, removes and announces the addresses; ntpdir never adds, removes or announces them and never touches FRR. The circle is green when this node holds dnsdir's addresses and a server answers, amber when only some are held or some servers are down, grey when this node holds none (the nodes that do answer).
+- The "dnsdir" gateway is shared by the cluster like any other. Run it on every node that runs dnsdir.
+
 ### NTP on dnsdir's anycast addresses
 
 Only when the Anyname DNS Director (`dnsdir`) is installed on the same host. BGP is then dnsdir's (see below), so ntpdir cannot announce anything itself, but a gateway can **also answer NTP on anycast addresses that dnsdir announces** (`dnsdir_vips`). In the GUI, right-click the gateway circle ▸ *Add dnsdir address* lists what dnsdir announces (read from `/var/lib/dnsdir/dnsdir.conf`, the `extra_vips` of its gateways); on the command line use `--canvas-add dnsdirvip --group 100 --address 203.0.113.53` and `--canvas-del dnsdirvip ...`. The pill sits under the anycast pills.

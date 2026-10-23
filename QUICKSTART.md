@@ -88,6 +88,8 @@ Both nodes now answer on the shared address and one of them is the controller (s
 
 ## 7. Worth knowing
 
+- **dnsdir on the same host:** AnyTime then answers NTP on dnsdir's gateway and anycast addresses by itself, as a gateway named “dnsdir”. You only choose its NTP servers; there is no gateway to draw.
+
 - **Settings (with its Logs, Upgrades and Cluster tabs), Gateways, NTP and Web GUI** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
 - **History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.
 - **Operate ▸ Upgrade**: upload a newer AnyTime tarball, tick the nodes to update and press the button in the Nodes card (none ticked = this node). A bad update rolls back by itself.

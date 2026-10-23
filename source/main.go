@@ -58,6 +58,7 @@ the web GUI):
                    --canvas-add server  --group N --server ADDR [--label NAME]
                    --canvas-add fallback --group N --server ADDR   (used only while every server of the gateway is down)
                    --canvas-add anycast --group N --address ADDR   (one anycast address; see --anycast)
+                   (With dnsdir installed here, a gateway "dnsdir" answers on all of dnsdir's addresses by itself; only its servers can be edited.)
                    --canvas-add dnsdirvip --group N --address ADDR   (also answer NTP on an anycast address of dnsdir,
                                         which must be installed here and announce it; --canvas-del dnsdirvip stops)
                    --canvas-set gateway --group N [--vip A/P] [--vip6 A/P] [--interface IF]
@@ -435,6 +436,8 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	go applySNMP(dc.snmpSettings())
 	go memguard.Run(ctx.Done())
 	go mg.sched.Run(ctx)
+	go sup.RunReevaluate(ctx)
+	go mg.RunPiggyback(ctx)
 
 	st := NewStatusServer(sockPath, sup)
 	st.mg = mg

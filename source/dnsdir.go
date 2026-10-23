@@ -2,14 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"sort"
+	"strings"
 )
 
 // The Anyname DNS Director (dnsdir) can live on the same host.  The two products cannot share BGP (each owns
 // /etc/frr/frr.conf, see bgp.go), so while dnsdir is installed ntpdir does no BGP of its own; instead a gateway may
-// answer NTP on chosen anycast addresses that dnsdir holds on lo and announces (GroupConfig.DNSDirVIPs).  ntpdir only
-// listens on them: it never adds or removes them on lo and never announces them.
+// answer NTP on chosen addresses of dnsdir: anycast addresses it holds on lo and announces, or the shared address of one of its
+// gateways (GroupConfig.DNSDirVIPs).  ntpdir only listens on them: it never adds or removes them and never announces them.
 
 // dnsdirMarkers are what an installed dnsdir leaves behind (a variable for the tests).  The state directory is not
 // one of them: it stays after an uninstall without --purge.
@@ -28,36 +30,76 @@ func dnsdirPresent() bool {
 	return false
 }
 
-// dnsdirOffered lists the anycast addresses dnsdir is set up to announce (the extra_vips of its gateways), sorted.
+// dnsdirOffered lists the addresses dnsdir has that a gateway may answer NTP on, sorted: the anycast addresses of its
+// gateways (extra_vips) and their shared addresses (vip4, vip6, more_vip4, more_vip6, without the prefix length).
 // Nothing when dnsdir is not installed or its configuration cannot be read.
 func dnsdirOffered() []string {
-	out := []string{}
+	any, shared := dnsdirAddrs()
+	out := append(any, shared...)
+	sort.Strings(out)
+	return out
+}
+
+// dnsdirSharedSet is the set of dnsdir's gateway shared addresses (see dnsdirAddrs).
+func dnsdirSharedSet() map[string]bool {
+	_, shared := dnsdirAddrs()
+	m := map[string]bool{}
+	for _, a := range shared {
+		m[a] = true
+	}
+	return m
+}
+
+// dnsdirAddrs reads dnsdir's configuration: its anycast addresses, and the shared addresses of its gateways.  The shared
+// ones are held by dnsdir on whichever node serves the gateway (they are not on lo everywhere), and ntpdir only listens
+// on them.
+func dnsdirAddrs() (anycast, shared []string) {
+	anycast, shared = []string{}, []string{}
 	if !dnsdirPresent() {
-		return out
+		return
 	}
 	b, err := os.ReadFile(dnsdirConfPath)
 	if err != nil {
-		return out
+		return
 	}
 	var c struct {
 		Groups []struct {
 			ExtraVIPs []string `json:"extra_vips"`
+			VIP4      string   `json:"vip4"`
+			VIP6      string   `json:"vip6"`
+			MoreVIP4  []string `json:"more_vip4"`
+			MoreVIP6  []string `json:"more_vip6"`
 		} `json:"groups"`
 	}
 	if json.Unmarshal(b, &c) != nil {
-		return out
+		return
 	}
 	seen := map[string]bool{}
+	add := func(dst *[]string, a string) {
+		a = strings.TrimSpace(a)
+		if ip, _, err := net.ParseCIDR(a); err == nil {
+			a = ip.String()
+		}
+		if n, err := normalizeAnycast(a); err == nil && !seen[n] {
+			seen[n] = true
+			*dst = append(*dst, n)
+		}
+	}
 	for _, g := range c.Groups {
 		for _, a := range g.ExtraVIPs {
-			if n, err := normalizeAnycast(a); err == nil && !seen[n] {
-				seen[n] = true
-				out = append(out, n)
+			add(&anycast, a)
+		}
+	}
+	for _, g := range c.Groups {
+		for _, a := range append(append([]string{g.VIP4, g.VIP6}, g.MoreVIP4...), g.MoreVIP6...) {
+			if a != "" {
+				add(&shared, a)
 			}
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(anycast)
+	sort.Strings(shared)
+	return
 }
 
 // DNSDirInfo is what the GUI needs to offer dnsdir's addresses.

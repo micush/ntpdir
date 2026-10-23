@@ -1,5 +1,19 @@
 # Changelog
 
+## [v167] - 2026-10-23 — Installed next to dnsdir, AnyTime answers on dnsdir's gateway and anycast addresses
+
+### Added
+- When dnsdir is installed on the same host, ntpdir piggybacks on it: a gateway named "dnsdir" is made and kept current automatically with every gateway VIP and anycast address dnsdir has (read from its configuration every few seconds). It has one NTP server list for all of them. ntpdir only listens on those addresses; it never adds, removes or announces them and never touches FRR.
+- Gateways ntpdir had of its own stay in the configuration but do not run while dnsdir is present, and show grey with the reason; removing dnsdir restarts them and stops the "dnsdir" gateway. Standalone behaviour is unchanged.
+- New gateway, Edit, Add anycast address, Add dnsdir address and Delete are refused on the "dnsdir" gateway, and a new gateway is refused while dnsdir is present (GUI, CLI, API). The flag is part of the cluster's shared settings.
+- `piggyback_test.go` covers reading dnsdir's addresses, creating and following the gateway, validation, shared round-trip, held-back gateways, canvas status and the refusals.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+### Not verified
+- Not run against a real dnsdir install with live anycast addresses; the address handling is covered by tests with a fake dnsdir configuration.
+
 ## [v166] - 2026-10-23 — LDAP sign-in: an account whose UPN differs from name@domain can sign in by account name
 
 ### Fixed

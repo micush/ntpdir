@@ -162,7 +162,8 @@ type anycastSet struct {
 	// them, and never touches lo for them (see stepExternal)
 	ext map[string]bool
 	// extOK: dnsdir is installed and announces this dnsdir address (set by stepExternal)
-	extOK map[string]bool
+	extOK     map[string]bool
+	extShared map[string]bool // dnsdir address that is a gateway's shared address, not an anycast one
 
 	mu     sync.Mutex
 	reason map[string]string
@@ -172,7 +173,7 @@ type anycastSet struct {
 }
 
 func newAnycastSet(gid int, addrs []string, pool func() *Pool) *anycastSet {
-	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), pool: pool, reason: map[string]string{}, ext: map[string]bool{}, extOK: map[string]bool{}}
+	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), pool: pool, reason: map[string]string{}, ext: map[string]bool{}, extOK: map[string]bool{}, extShared: map[string]bool{}}
 }
 
 // addExternal adds dnsdir's addresses to the set.
@@ -181,6 +182,21 @@ func (a *anycastSet) addExternal(addrs []string) {
 		a.addrs = append(a.addrs, x)
 		a.ext[x] = true
 	}
+}
+
+// addrOnHostFn says whether an address is on any interface of this node now (replaceable in tests): where dnsdir puts
+// the shared address of a gateway it serves here.
+var addrOnHostFn = func(addr string) bool {
+	as, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, x := range as {
+		if ip, _, err := net.ParseCIDR(x.String()); err == nil && ip.String() == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // addrOnLoFn says whether an address is on the loopback interface now (replaceable in tests).
@@ -203,7 +219,7 @@ var addrOnLoFn = func(addr string) bool {
 
 // stepExternal serves one of dnsdir's addresses: a listener while dnsdir is installed and announces the address, and
 // nothing on lo, which is dnsdir's.  It runs with the registry locked.
-func (a *anycastSet) stepExternal(addr string, healthy bool, offered map[string]bool) {
+func (a *anycastSet) stepExternal(addr string, healthy bool, offered, shared map[string]bool) {
 	why := ""
 	switch {
 	case !dnsdirPresent():
@@ -221,11 +237,14 @@ func (a *anycastSet) stepExternal(addr string, healthy bool, offered map[string]
 	cl[a.gid].pool = a.pool
 	cl[a.gid].want = false // never makes ntpdir put it on lo
 	a.extOK[addr] = why == ""
+	a.extShared[addr] = shared[addr]
 	switch {
 	case why != "":
 	case !healthy:
 		why = a.unhealthyWhy()
-	case !addrOnLoFn(addr):
+	case shared[addr] && !addrOnHostFn(addr):
+		why = "dnsdir does not serve this gateway address on this node right now"
+	case !shared[addr] && !addrOnLoFn(addr):
 		why = "dnsdir is not announcing it right now"
 	}
 	a.reason[addr] = why
@@ -294,7 +313,7 @@ func (a *anycastSet) step() {
 	}
 	anycastReg.Lock()
 	defer anycastReg.Unlock()
-	var offered map[string]bool
+	var offered, shared map[string]bool
 	for _, addr := range a.addrs {
 		if a.ext[addr] {
 			if offered == nil {
@@ -302,8 +321,9 @@ func (a *anycastSet) step() {
 				for _, o := range dnsdirOffered() {
 					offered[o] = true
 				}
+				shared = dnsdirSharedSet()
 			}
-			a.stepExternal(addr, healthy, offered)
+			a.stepExternal(addr, healthy, offered, shared)
 			continue
 		}
 		why := ""
@@ -371,7 +391,7 @@ func (a *anycastSet) state() []AnycastState {
 		st := AnycastState{Addr: addr, Up: anycastReg.onLo[addr], Reason: a.reason[addr]}
 		if a.ext[addr] {
 			st.External = true
-			st.Up = a.extOK[addr] && addrOnLoFn(addr)
+			st.Up = a.extOK[addr] && ((a.extShared[addr] && addrOnHostFn(addr)) || (!a.extShared[addr] && addrOnLoFn(addr)))
 			out = append(out, st)
 			continue
 		}

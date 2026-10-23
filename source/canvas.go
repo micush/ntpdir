@@ -45,10 +45,12 @@ type CanvasFamily struct {
 }
 
 type CanvasGateway struct {
-	Name      string         `json:"name"`
-	GroupID   int            `json:"group_id"`
-	Interface string         `json:"interface"`
-	WeakKey   bool           `json:"weak_key,omitempty"` // the gateway's HMAC key is well known or short (gkey.go)
+	Name      string `json:"name"`
+	GroupID   int    `json:"group_id"`
+	Interface string `json:"interface"`
+	WeakKey   bool   `json:"weak_key,omitempty"` // the gateway's HMAC key is well known or short (gkey.go)
+	// Piggyback marks the gateway that answers on dnsdir's addresses (piggyback.go); it has no address or interface of its own.
+	Piggyback bool           `json:"piggyback,omitempty"`
 	VIP4      string         `json:"vip4"`
 	VIP6      string         `json:"vip6"`
 	Anycast   []AnycastState `json:"anycast,omitempty"`
@@ -193,7 +195,7 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 	chronyNow := chrony.State()
 	for i := range dc.Groups {
 		g := &dc.Groups[i]
-		cg := CanvasGateway{Name: g.Name, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
+		cg := CanvasGateway{Name: g.Name, Piggyback: g.Piggyback, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
 			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.NodePaused, ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
 
 		stats := map[string]ServerStat{}
@@ -399,6 +401,7 @@ func (s *StatusServer) canvasGroups() []CanvasGateway {
 	mergeFamilyMembers(groups, s.ipNames())
 	markWarming(groups, s.sup.warmingGroups())
 	markOffnet(groups, s.sup.offnetGroups())
+	markInactive(groups, s.sup.inactiveGroups())
 	cfg := s.sup.config()
 	real := map[int]bool{}
 	for _, g := range cfg.Groups {
@@ -406,6 +409,7 @@ func (s *StatusServer) canvasGroups() []CanvasGateway {
 	}
 	markVmac(groups, real)
 	s.markAnycast(groups)
+	markPiggyback(groups)
 	s.markNodes(groups)
 	s.up.annotate(groups, time.Now())
 	storeAnycastLocal(groups)
@@ -487,6 +491,69 @@ func markWarming(groups []CanvasGateway, warming map[int]bool) {
 		groups[i].Status, groups[i].Detail = "warn", why
 		for j := range groups[i].Families {
 			groups[i].Families[j].Status, groups[i].Families[j].Detail = "warn", why
+		}
+	}
+}
+
+// markInactive shows the gateways that do not run on this host because of dnsdir (or, for the piggyback gateway, because dnsdir
+// is not installed): grey, with the reason.
+func markInactive(groups []CanvasGateway, off map[int]string) {
+	for i := range groups {
+		why, ok := off[groups[i].GroupID]
+		if !ok {
+			continue
+		}
+		groups[i].Status, groups[i].Detail = "idle", "not running here — "+why
+		for j := range groups[i].Families {
+			groups[i].Families[j].Status, groups[i].Families[j].Detail = "idle", "not running here — "+why
+		}
+	}
+}
+
+// markPiggyback works out the state of the gateway that answers on dnsdir's addresses from its NTP servers and from which of
+// dnsdir's addresses this node holds: it has no election of its own.  Run after the anycast pills are filled in.
+func markPiggyback(groups []CanvasGateway) {
+	for i := range groups {
+		g := &groups[i]
+		if !g.Piggyback || g.Status == "idle" && strings.HasPrefix(g.Detail, "not running here") {
+			continue
+		}
+		held, total := 0, len(g.Anycast)
+		for _, a := range g.Anycast {
+			if a.Up {
+				held++
+			}
+		}
+		healthy, down, paused := 0, 0, 0
+		for _, s := range g.Servers {
+			switch s.Status {
+			case "ok", "warn":
+				healthy++
+			case "bad":
+				down++
+			case "paused":
+				paused++
+			}
+		}
+		switch {
+		case total == 0:
+			g.Status, g.Detail = "idle", "dnsdir has no addresses yet"
+		case g.Paused:
+			g.Status, g.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
+		case held == 0:
+			g.Status, g.Detail = "idle", "this node holds none of dnsdir's addresses right now; the nodes that do answer"
+		case len(g.Servers) == 0:
+			g.Status, g.Detail = "warn", "answering on dnsdir's addresses, but no NTP server is configured yet, so clients cannot be answered"
+		case healthy == 0 && !g.UsingFallback:
+			g.Status, g.Detail = "bad", "no NTP server is healthy, so clients cannot be answered"
+		case g.UsingFallback:
+			g.Status, g.Detail = "warn", "every NTP server is down or paused — answering from the fallback servers"
+		case down > 0:
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses, but some NTP servers are down"
+		case held < total:
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses here (dnsdir holds the others on other nodes)"
+		default:
+			g.Status, g.Detail = "ok", "answering on all "+strconv.Itoa(total)+" of dnsdir's addresses"
 		}
 	}
 }
@@ -696,6 +763,9 @@ func findGroup(dc *DaemonConfig, id int) (*GroupConfig, error) {
 
 // applyCanvasEdit changes dc as asked.  The caller validates and saves.
 func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
+	if err := piggybackRefusal(dc, e); err != nil {
+		return "", err
+	}
 	switch e.Kind {
 	case "gateway":
 		switch e.Action {
