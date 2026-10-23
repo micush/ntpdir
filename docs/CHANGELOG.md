@@ -1,5 +1,10 @@
 # Changelog
 
+## [v161] - 2026-10-23 — Configure ▸ Users tabs: Local, LDAP, SSO
+
+### Changed
+- The tabs on **Configure ▸ Users** are now in the order **Local**, **LDAP**, **SSO** (they were Local, SSO, LDAP). Nothing else changes; the help panel still follows the tab.
+
 ## [v160] - 2026-10-23 — Operate ▸ Anycast and Monitor ▸ Anycast get BGP and OSPF tabs
 
 ### Changed

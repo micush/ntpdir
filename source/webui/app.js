@@ -484,7 +484,7 @@
       case "cfg_snmp": return "config_snmp";
       case "cfg_cluster": return "config_cluster";
       case "cfg_ntp": return "config_ntp" + (state.ntpTab >= 0 ? state.ntpTab : 0);
-      case "users": return state.usersTab === 2 ? "users_ldap" : state.usersTab === 1 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
+      case "users": return state.usersTab === 1 ? "users_ldap" : state.usersTab === 2 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
       default: return state.tab;
       }
     })();
@@ -5026,7 +5026,7 @@
   VIEWS.users = (() => {
     return {
       mount(main) {
-        const TABS = [["Local", VIEWS.usersLocal], ["SSO", VIEWS.cfg_sso], ["LDAP", VIEWS.cfg_ldap]];
+        const TABS = [["Local", VIEWS.usersLocal], ["LDAP", VIEWS.cfg_ldap], ["SSO", VIEWS.cfg_sso]];
         const panes = TABS.map(([, v]) => { const p = h("div", { role: "tabpanel" }); v.mount(p); return p; });
         const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
         function show(i, focus) {
