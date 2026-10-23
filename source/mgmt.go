@@ -120,6 +120,7 @@ func (m *Mgmt) OnConfigLoaded(dc *DaemonConfig) {
 	w := dc.Web
 	m.webPolicy.Store(&w)
 	m.bgp.Apply(dc)
+	sysSink.Apply(dc.Syslog)
 	m.sched.SetTasks(dc.NTP.Schedule)
 	m.certs.Refresh()
 	if _, raw, err := m.LiveConfig(); err == nil {

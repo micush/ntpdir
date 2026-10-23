@@ -1,5 +1,20 @@
 # Changelog
 
+## [v163] - 2026-10-23 — Configure ▸ Settings with Logs and Upgrades tabs; syslog forwarding; Gateways
+
+### Changed
+- **Configure ▸ General is now Configure ▸ Settings**, with two tabs: **Logs** (the *Log level* and the new syslog settings) and **Upgrades** (automatic updates, online repository). There is no General tab: nothing was left for it.
+- **Configure ▸ Gateway groups is now Configure ▸ Gateways.**
+
+### Added
+- **Syslog forwarding (Configure ▸ Settings ▸ Logs, `--syslog*`).** Every line of the log can also go to a syslog server over **TCP, UDP or TLS** (RFC 5424, or RFC 3164), with the facility you pick. Per node, not replicated. A queue of 2000 messages keeps a slow or dead server from holding anything up (the oldest are dropped and counted); the connection is retried with a growing pause. TLS checks the server's certificate against a CA file or the system's authorities unless told not to. The tab shows connected / not connected with the sent and dropped counts, and has a **Send test message** button. CLI: `--syslog`, `--syslog-server`, `--syslog-protocol`, `--syslog-facility`, `--syslog-format`, `--syslog-ca`, `--syslog-tls-insecure`, `--syslog-disable`, `--syslog-enable`, `--syslog-test`. The troubleshooting bundle gets `ntpdir/syslog.json`.
+- **Help:** new panels for the Logs and Upgrades tabs; the Gateways panel is renamed.
+
+## [v162] - 2026-10-23 — Log file rotates at 100 MB
+
+### Changed
+- The daemon's log file (`ntpdir.log` in the state directory) now rotates at **100 MB** instead of 2 MB; the two previous files are still kept, so up to about 300 MB of history is on disk. README and the Log help panel say so.
+
 ## [v161] - 2026-10-23 — Configure ▸ Users tabs: Local, LDAP, SSO
 
 ### Changed
