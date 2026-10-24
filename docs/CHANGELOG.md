@@ -1,5 +1,10 @@
 # Changelog
 
+## [v179] - 2026-10-24 — Topology: copy a server and paste it on a gateway
+
+### Added
+- Right-click a server ▸ **Copy server**, then right-click a gateway (the circle, or the empty drawing) ▸ **Paste server**: the server and its name are added to that gateway, which can be another one. If that gateway already has the server's address, the *Add NTP server* form opens so the copy can be given its own address. *Paste server* is greyed out until something is copied. A pause is not copied.
+
 ## [v178] - 2026-10-24 — Topology: an NTP server's tooltip is one fact per line
 
 ### Changed

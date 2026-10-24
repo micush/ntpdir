@@ -1417,8 +1417,26 @@
       else items.push(["Pause" + (noun ? " " + noun : ""), null, "", subs(true), whyNot || ""]);
       return items;
     };
-    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)],
-      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
+    // Copy a server (right-click it) and paste it on a gateway (right-click the circle or the empty drawing), this one or another.  An address
+    // that is not on that gateway yet is added as it is, with its name; one that is already there needs its own, so the Add NTP server form
+    // opens.  A pause is not copied.
+    let srvClip = null;
+    const copyServer = (g, addr) => { srvClip = { addr, label: srvName(g, addr) }; };
+    const pasteServerWhy = () => (srvClip ? "" : "Nothing copied yet: right-click a server ▸ Copy server");
+    function pasteServer(g) {
+      if (pasteServerWhy()) return;
+      const c = srvClip;
+      ensureNTP(g);
+      if (g.ntp.servers.includes(c.addr)) { serverForm(g, null, true); return; }
+      quick(() => {
+        g.ntp.servers.push(c.addr);
+        if (c.label) { g.ntp.server_names = g.ntp.server_names || {}; g.ntp.server_names[c.addr] = c.label; }
+        cv.sel = { kind: "srv", addr: c.addr };
+      });
+    }
+    const pasteItem = (g) => ["Paste server", () => pasteServer(g), "", null, pasteServerWhy()];
+    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)], pasteItem(g),
+      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], pasteItem(g), ["Add anycast address", () => anycastForm(g)],
       ...(cv.dnsdir && cv.dnsdir.present ? [["Add AnyName address", () => dnsdirForm(g)]] : []),
       ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
@@ -1445,7 +1463,7 @@
     };
     // Monitor ▸ Log searched for this server
     const goLog = (addr) => { state.prefill.log = srvTarget(addr).host; selectTab("log"); };
-    const srvItems = (g, addr) => [["Statistics", () => serverStats(g, addr)], ["Capture", () => goCapture(addr)], ["Logs", () => goLog(addr)], "-", ["Edit", () => serverForm(g, addr)],
+    const srvItems = (g, addr) => [["Statistics", () => serverStats(g, addr)], ["Capture", () => goCapture(addr)], ["Logs", () => goLog(addr)], "-", ["Edit", () => serverForm(g, addr)], ["Copy server", () => copyServer(g, addr)],
       ...pauseItems("", (sc) => ((sc === "all" ? (g.ntp || cv.cfg.ntp || {}).paused_servers : cv.cfg.paused_servers_here) || []).includes(addr), (sc, p) => pauseServer(g, addr, sc, p), lastServerWhy(g, addr)), "-", ["Delete", delSel, "danger"]];
     // Pause / resume announcing one anycast address: on this node only (kept in this node's own settings) or on every node (shared)
     const anyPauseList = (g, scope) => (scope === "all" ? "paused_vips" : "paused_vips_here");
@@ -1767,10 +1785,10 @@
         },
       };
     }
-    function serverForm(g, edit) {
+    function serverForm(g, edit, pasted) {   // pasted: a copied server whose address this gateway already has: the copy needs its own
       const lk = lookupHooks();
-      form(edit ? "Edit NTP server" : "Add NTP server", [
-        { k: "addr", l: "IP address or host name", v: edit ? shortAddr(edit) : "", ph: "10.0.0.123", hint: "Add :port for a port other than 123.", on: lk.addr },
+      form(edit ? "Edit NTP server" : pasted ? "Paste server" : "Add NTP server", [
+        { k: "addr", l: "IP address or host name", v: edit ? shortAddr(edit) : "", ph: "10.0.0.123", hint: pasted ? "That server is already on this gateway: give the copy its own address." : "Add :port for a port other than 123.", on: lk.addr },
         { k: "label", l: "Name (optional)", v: edit ? srvName(g, edit) : "", ph: "e.g. ntp-a", hint: "Shown under the address on the diagram. Fill in the address and its name is looked up; fill in a host name here and its address is.", on: lk.label },
       ], (v) => {
         if (!v.addr) return "Enter an IP address or host name.";
@@ -1935,7 +1953,7 @@
           onmouseout: (e) => { if (cv.stale && !cv.drag && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".shape"))) draw(); },
           // right-click on empty canvas (shapes and tabs handle their own menus)
           oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
-            openMenu(e, (cv.dnsdir && cv.dnsdir.present ? [] : [["New gateway", () => gatewayForm(null)]]).concat(g ? [["Add NTP server…", () => serverForm(g)]] : [])); } });
+            openMenu(e, (cv.dnsdir && cv.dnsdir.present ? [] : [["New gateway", () => gatewayForm(null)]]).concat(g ? [["Add NTP server…", () => serverForm(g)], pasteItem(g)] : [])); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
           h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
         main.append(svgHost, legend);
