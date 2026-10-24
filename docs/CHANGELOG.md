@@ -1,5 +1,18 @@
 # Changelog
 
+## [v173] - 2026-10-23 — The "imported from dnsdir" note no longer runs into the circle
+
+### Changed
+- The note above a gateway imported from dnsdir is now just "Imported from dnsdir"; the rest (the dnsdir gateway number, and that its name, addresses and nodes are managed there) is in its tooltip and the gateway's tooltip.
+
+## [v172] - 2026-10-23 — Saving a setting no longer fails with "group 100: at least one of vip4 or vip6 must be set"
+
+### Fixed
+- The settings pages (Users ▸ LDAP, Settings, Web GUI and the others) send the whole configuration, and the page rebuilt each gateway from a fixed list of fields that did not include the ones that mark a gateway imported from dnsdir (`piggyback`, `piggyback_of`, `dnsdir_shared`). The server then saw a gateway with no address and refused the save. The page now sends them back unchanged.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race`; in Chromium against a fake dnsdir, changing the log level on Settings saved and both imported gateways were still in the file afterwards.
+
 ## [v171] - 2026-10-23 — Gateways imported from dnsdir say so, and lose the menu items that are dnsdir's
 
 ### Changed

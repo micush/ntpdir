@@ -988,7 +988,7 @@
         window.addEventListener("keydown", key, true);
       };
       const reorder = (list, from, to) => { const [it] = list.splice(from, 1); list.splice(to, 0, it); };
-      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, "Imported from dnsdir (gateway " + g.piggyback_of + ") — its name, addresses and nodes are managed there"));
+      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, sv("title", {}, "Imported from dnsdir (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there"), "Imported from dnsdir"));
       shapes.push(sv("g", { class: "shape st-" + st.circle + (sel("gw") ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "Gateway " + gwLabel(g), onclick: pick("gw"), oncontextmenu: rightClick("gw"),
         onkeydown: (e) => { if (e.key === "Enter") pick("gw")(e); } },
         sv("title", {}, gwTip(g, st, dual)),
@@ -2643,7 +2643,7 @@
       collect = () => ({
         ...logs.get(),
         // keep what this form has no fields for (a gateway's own NTP pool)
-        groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...g.fs.get() })),
+        groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...(g.orig.piggyback ? { piggyback: true, piggyback_of: g.orig.piggyback_of, dnsdir_shared: g.orig.dnsdir_shared } : {}), ...g.fs.get() })),
         ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
         web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get(), ...ldap.get() },
