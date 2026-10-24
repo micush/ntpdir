@@ -16,9 +16,7 @@ func fakeDNSDir(t *testing.T, offered ...string) (uninstall func(), setOffered f
 	bin := filepath.Join(dir, "dnsdir")
 	os.WriteFile(bin, []byte("x"), 0o755)
 	conf := filepath.Join(dir, "dnsdir.conf")
-	om, oc := dnsdirMarkers, dnsdirConfPath
-	dnsdirMarkers, dnsdirConfPath = []string{bin}, conf
-	t.Cleanup(func() { dnsdirMarkers, dnsdirConfPath = om, oc })
+	t.Cleanup(setDnsdir([]string{bin}, conf))
 	set := func(a ...string) {
 		q := make([]string, len(a))
 		for i, x := range a {
@@ -114,12 +112,11 @@ func TestDNSDirVIPCheckOnAdd(t *testing.T) {
 	g.DNSDirVIPs = []string{"203.0.113.53"}
 	next.Groups = []GroupConfig{g}
 
-	om := dnsdirMarkers
-	dnsdirMarkers = []string{filepath.Join(t.TempDir(), "absent")}
+	restore := setDnsdir([]string{filepath.Join(t.TempDir(), "absent")}, "")
 	if err := checkDNSDirAdded(cur, next); err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("added without dnsdir: %v", err)
 	}
-	dnsdirMarkers = om
+	restore()
 
 	_, set := fakeDNSDir(t, "198.51.100.7")
 	if err := checkDNSDirAdded(cur, next); err == nil || !strings.Contains(err.Error(), "not an anycast address of AnyName") {

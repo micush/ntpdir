@@ -16,9 +16,7 @@ func dnsdirWith(t *testing.T, conf string) string {
 	if err := os.WriteFile(p, []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := dnsdirConfPath
-	dnsdirConfPath = p
-	t.Cleanup(func() { dnsdirConfPath = old })
+	t.Cleanup(setDnsdirConf(p))
 	return p
 }
 
@@ -48,12 +46,11 @@ func TestWantPiggyback(t *testing.T) {
 	own := defaultGroup()
 	dc.Groups = []GroupConfig{own}
 	// no dnsdir: nothing is added
-	old := dnsdirMarkers
-	dnsdirMarkers = []string{filepath.Join(t.TempDir(), "absent")}
+	restore := setDnsdir([]string{filepath.Join(t.TempDir(), "absent")}, "")
 	if wantPiggyback(dc) || len(dc.Groups) != 1 {
 		t.Fatal("changed without dnsdir")
 	}
-	dnsdirMarkers = old
+	restore()
 	conf := dnsdirWith(t, dnsdirConf)
 	if !wantPiggyback(dc) || len(dc.Groups) != 3 {
 		t.Fatalf("one gateway for each of dnsdir's was not made: %+v", dc.Groups)
@@ -85,6 +82,11 @@ func TestWantPiggyback(t *testing.T) {
 	syncPiggybackNTP(dc, phx.GroupID)
 	if dc.Groups[2].NTP == nil || !strings.Contains(strings.Join(dc.Groups[2].NTP.Servers, " "), "198.51.100.1") {
 		t.Fatalf("the list was not shared: %+v", dc.Groups[2].NTP)
+	}
+	// a gateway that was paused before (an earlier version allowed it) is running again: a pause here stops nothing
+	dc.Groups[1].Paused, dc.Groups[1].PausedAll = true, true
+	if !wantPiggyback(dc) || dc.Groups[1].Paused || dc.Groups[1].PausedAll {
+		t.Fatalf("a pause was kept: %+v", dc.Groups[1])
 	}
 	// a new dnsdir gateway gets the same list; one that is gone takes its gateway with it; a rename follows
 	if err := os.WriteFile(conf, []byte(`{"groups":[{"group_id":1,"name":"PHX2","vip4":"10.0.0.53/24","extra_vips":["203.0.113.99"]},{"group_id":3,"name":"LAX","vip4":"10.0.3.53/24"}]}`), 0o644); err != nil {
@@ -153,12 +155,11 @@ func TestPiggybackValidate(t *testing.T) {
 func TestInactiveReason(t *testing.T) {
 	own, pig := defaultGroup(), defaultGroup()
 	pig.Piggyback = true
-	old := dnsdirMarkers
-	dnsdirMarkers = []string{filepath.Join(t.TempDir(), "absent")}
+	restore := setDnsdir([]string{filepath.Join(t.TempDir(), "absent")}, "")
 	if inactiveReason(own) != "" || inactiveReason(pig) == "" {
 		t.Error("without dnsdir the own gateway runs and the piggyback one does not")
 	}
-	dnsdirMarkers = old
+	restore()
 	withDnsdir(t)
 	if inactiveReason(own) == "" || inactiveReason(pig) != "" {
 		t.Error("with dnsdir the own gateway does not run and the piggyback one does")
@@ -254,6 +255,7 @@ func TestPiggybackRefusal(t *testing.T) {
 		{Action: "del", Kind: "gateway", Group: 101},
 		{Action: "set", Kind: "gateway", Group: 101, VIP: "10.9.0.1/24"},
 		{Action: "set", Kind: "gateway", Group: 101, Label: "NTP"},
+		{Action: "pause", Kind: "gateway", Group: 101},
 	} {
 		if err := piggybackRefusal(dc, e); err == nil {
 			t.Errorf("%+v was accepted", e)

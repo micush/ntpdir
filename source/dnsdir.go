@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // The Anyname DNS Director (dnsdir) can live on the same host.  The two products cannot share BGP (each owns
@@ -20,9 +21,20 @@ var dnsdirMarkers = []string{"/usr/local/sbin/dnsdir", "/usr/local/share/dnsdir"
 // dnsdirConfPath is dnsdir's configuration, where its anycast addresses are listed (a variable for the tests).
 var dnsdirConfPath = "/var/lib/dnsdir/dnsdir.conf"
 
+// dnsdirMu guards dnsdirMarkers and dnsdirConfPath: they are only ever changed by the tests, but a goroutine left over from
+// an earlier test may still be reading them.
+var dnsdirMu sync.RWMutex
+
+func dnsdirPaths() (markers []string, conf string) {
+	dnsdirMu.RLock()
+	defer dnsdirMu.RUnlock()
+	return dnsdirMarkers, dnsdirConfPath
+}
+
 // dnsdirPresent says whether dnsdir is installed on this host.
 func dnsdirPresent() bool {
-	for _, p := range dnsdirMarkers {
+	markers, _ := dnsdirPaths()
+	for _, p := range markers {
 		if _, err := os.Stat(p); err == nil {
 			return true
 		}
@@ -67,7 +79,8 @@ func dnsdirGateways() []dnsdirGateway {
 	if !dnsdirPresent() {
 		return nil
 	}
-	b, err := os.ReadFile(dnsdirConfPath)
+	_, confPath := dnsdirPaths()
+	b, err := os.ReadFile(confPath)
 	if err != nil {
 		return nil
 	}

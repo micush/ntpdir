@@ -207,3 +207,20 @@ func TestPausedNodeCannotBePromoted(t *testing.T) {
 		t.Fatalf("a paused node must refuse to become the primary: %v", err)
 	}
 }
+
+// With AnyName on the host the gateway addresses are its to hold, and chrony answers on them whatever ntpdir says, so a node
+// pause would stop nothing and is refused; resuming still works.
+func TestNodePauseRefusedWithAnyName(t *testing.T) {
+	withDnsdir(t)
+	mg := newPowerMgmt(t)
+	if err := newDaemonConfig().save(mg.confPath); err != nil {
+		t.Fatal(err)
+	}
+	mg.othersFn = func() int { return 2 }
+	if _, err := mg.NodePause(true, "test"); err == nil || !strings.Contains(err.Error(), "AnyName") {
+		t.Fatalf("pause with AnyName installed: %v", err)
+	}
+	if st, _ := mg.NodePauseStatus(); st.Paused {
+		t.Fatal("the node was paused")
+	}
+}

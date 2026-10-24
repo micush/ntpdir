@@ -127,6 +127,9 @@ func wantPiggyback(dc *DaemonConfig) (changed bool) {
 			}
 		}
 		g := &dc.Groups[idx]
+		if g.Paused || g.PausedAll { // ntpdir cannot stop answering on AnyName's addresses, so a pause here would only mislead
+			g.Paused, g.PausedAll, changed = false, false, true
+		}
 		if label := piggybackLabel(gw); g.Name != label {
 			g.Name, changed = label, true
 		}
@@ -282,6 +285,8 @@ func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 		return errors.New("this gateway answers on AnyName's addresses, all of them; they come from AnyName and cannot be chosen here")
 	case e.Kind == "gateway" && e.Action == "del":
 		return errors.New("this gateway mirrors a gateway of AnyName; it goes when AnyName's gateway does")
+	case e.Kind == "gateway" && e.Action == "pause":
+		return errors.New("AnyName decides where these addresses answer, and chrony answers on them either way: pausing here would stop nothing. Pause the gateway in AnyName")
 	case e.Kind == "gateway" && e.Action == "set" && e.Label != "":
 		return errors.New("this gateway has AnyName's name for its gateway; rename it in AnyName")
 	case e.Kind == "gateway" && e.Action == "set" && (e.VIP != "" || e.VIP6 != "" || e.Interface != "" || e.Anycast != "" || e.RealMACs != ""):

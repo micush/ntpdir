@@ -34,6 +34,9 @@ func (m *Mgmt) NodePause(pause bool, actor string) (string, error) {
 		}
 		return "this node is already running", nil
 	}
+	if pause && dnsdirPresent() {
+		return "", errors.New("AnyName is installed on this host and decides where the gateway addresses answer; pausing the node here would stop nothing, because chrony keeps answering on them. Drain the node in AnyName instead")
+	}
 	if pause && m.othersInService() == 0 {
 		return "", errors.New("this is the only node in service (the others are paused or not answering), so pausing it would stop every gateway — resume or repair another node first; to stop a gateway everywhere, pause the gateway instead")
 	}

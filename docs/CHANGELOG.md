@@ -1,5 +1,14 @@
 # Changelog
 
+## [v176] - 2026-10-23 — No pause of an imported gateway or of a node while AnyName is installed
+
+### Fixed
+- A gateway imported from AnyName could be paused, and went grey, but NTP kept answering on its addresses: AnyName holds them and chrony answers on every address of the node, so ntpdir cannot stop it. *Pause* is no longer offered on these gateways or on their nodes' menu, and `--canvas-pause gateway` and `--node-pause` are refused while AnyName is installed (resuming still works). A pause left from an earlier version is cleared. Drain the node or gateway in AnyName to stop its addresses.
+- Two test-only data races are gone: `TestLogServerFlips` shared an unlocked log buffer with a goroutine left by another test, and the tests that point the AnyName markers elsewhere raced with a leftover goroutine reading them (the markers are now behind a lock). Four full `-race` runs in a row passed.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
 ## [v175] - 2026-10-23 — AnyName instead of dnsdir in the text; imported gateways are read-only on Configure ▸ Gateways
 
 ### Changed

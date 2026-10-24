@@ -1414,7 +1414,7 @@
       return items;
     };
     const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)],
-      ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p))] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
+      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
       ...(cv.dnsdir && cv.dnsdir.present ? [["Add AnyName address", () => dnsdirForm(g)]] : []),
       ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
@@ -1614,9 +1614,10 @@
     }
     const nodeMenu = (n) => (e) => {
       const pause = [n.node_paused ? "Resume" : "Pause", () => pauseNode(n), "", null, n.node_paused ? "" : lastNodeWhy(n)];
+      const noPause = !n.node_paused && ((curGroup() && curGroup().piggyback) || (cv.dnsdir && cv.dnsdir.present));   // AnyName decides where the addresses answer: a pause here would stop nothing
       const rm = memberItem(n).map(([, f]) => ["Remove", f]);
       openMenu(e, n.self || n.reachable
-        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename…", () => renameNode(n)], "-", ...(curGroup() && curGroup().piggyback ? [] : [["Controller", () => makeController(n), "", null, controllerWhy(n)]]), ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), pause, ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
+        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename…", () => renameNode(n)], "-", ...(curGroup() && curGroup().piggyback ? [] : [["Controller", () => makeController(n), "", null, controllerWhy(n)]]), ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), ...(noPause ? [] : [pause]), ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
         : [["Cluster page", () => selectTab("cluster")], ...rm]);
     };
     // right-click on a shape: select it, then show what can be done with it

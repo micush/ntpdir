@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -310,8 +311,22 @@ func TestSnapshotCarriesWhatTheServerSaid(t *testing.T) {
 	}
 }
 
+// lockedBuf is a log sink that other tests' goroutines may still be writing to while this test reads and resets it.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+func (l *lockedBuf) Reset()         { l.mu.Lock(); defer l.mu.Unlock(); l.b.Reset() }
+
 func TestLogServerFlips(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuf
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(old)

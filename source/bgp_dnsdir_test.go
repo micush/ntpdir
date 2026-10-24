@@ -14,16 +14,12 @@ func withDnsdir(t *testing.T) string {
 	if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	old := dnsdirMarkers
-	dnsdirMarkers = []string{p}
-	t.Cleanup(func() { dnsdirMarkers = old })
+	t.Cleanup(setDnsdir([]string{p}, ""))
 	return p
 }
 
 func TestBGPBlockedFollowsDnsdir(t *testing.T) {
-	old := dnsdirMarkers
-	dnsdirMarkers = []string{filepath.Join(t.TempDir(), "absent")}
-	defer func() { dnsdirMarkers = old }()
+	defer setDnsdir([]string{filepath.Join(t.TempDir(), "absent")}, "")()
 	if bgpBlocked() != "" {
 		t.Fatal("blocked without dnsdir")
 	}
@@ -103,5 +99,33 @@ func TestBGPCannotBeSetOrEnabledWithDnsdir(t *testing.T) {
 	// the settings can still be cleared
 	if r := e.do("PUT", "/api/bgp", BGPConfig{}, withAuth(e, true)); r.code != 200 {
 		t.Fatalf("clearing refused: %d %s", r.code, r.raw)
+	}
+}
+
+// setDnsdir points the dnsdir markers (and, when conf is not "", its configuration) somewhere else and returns what puts them back.
+func setDnsdir(markers []string, conf string) func() {
+	dnsdirMu.Lock()
+	om, oc := dnsdirMarkers, dnsdirConfPath
+	dnsdirMarkers = markers
+	if conf != "" {
+		dnsdirConfPath = conf
+	}
+	dnsdirMu.Unlock()
+	return func() {
+		dnsdirMu.Lock()
+		dnsdirMarkers, dnsdirConfPath = om, oc
+		dnsdirMu.Unlock()
+	}
+}
+
+func setDnsdirConf(conf string) func() {
+	dnsdirMu.Lock()
+	oc := dnsdirConfPath
+	dnsdirConfPath = conf
+	dnsdirMu.Unlock()
+	return func() {
+		dnsdirMu.Lock()
+		dnsdirConfPath = oc
+		dnsdirMu.Unlock()
 	}
 }
