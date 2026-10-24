@@ -65,6 +65,9 @@ func TestWantPiggyback(t *testing.T) {
 	if strings.Join(phx.DNSDirVIPs, " ") != "10.0.0.53 10.0.0.54 2001:db8::53 203.0.113.53" {
 		t.Errorf("PHX addresses: %v", phx.DNSDirVIPs)
 	}
+	if strings.Join(phx.DNSDirShared, " ") != "10.0.0.53 10.0.0.54 2001:db8::53" || strings.Join(ptx.DNSDirShared, " ") != "10.0.1.53" {
+		t.Errorf("shared addresses: %v %v", phx.DNSDirShared, ptx.DNSDirShared)
+	}
 	if ptx.Name != "PTX" || ptx.PiggybackOf != 2 || strings.Join(ptx.DNSDirVIPs, " ") != "10.0.1.53 203.0.113.53 203.0.113.54" {
 		t.Errorf("PTX: %+v", ptx)
 	}
@@ -225,7 +228,7 @@ func TestMarkPiggyback(t *testing.T) {
 		{"all down", CanvasGateway{Servers: srv("bad", "bad"), Anycast: up(2, 2)}, "bad", "no NTP server is healthy"},
 		{"some down", CanvasGateway{Servers: srv("ok", "bad"), Anycast: up(2, 2)}, "warn", "some NTP servers are down"},
 		{"some held", CanvasGateway{Servers: srv("ok"), Anycast: up(1, 2)}, "warn", "1 of dnsdir's 2"},
-		{"shared held elsewhere", CanvasGateway{Servers: srv("ok"), Anycast: []AnycastState{{Addr: "10.0.0.53", External: true}, {Addr: "203.0.113.53", External: true, Up: true}}}, "ok", "answering on 1"},
+		{"shared held elsewhere", CanvasGateway{PiggybackShared: []string{"10.0.0.53"}, Servers: srv("ok"), Anycast: []AnycastState{{Addr: "10.0.0.53", External: true}, {Addr: "203.0.113.53", External: true, Up: true}}}, "ok", "answering on 1"},
 		{"fine", CanvasGateway{Servers: srv("ok", "ok"), Anycast: up(2, 2)}, "ok", "answering on 2 of this"},
 		{"paused", CanvasGateway{Servers: srv("ok"), Anycast: up(2, 2), Paused: true}, "paused", "Paused"},
 	} {

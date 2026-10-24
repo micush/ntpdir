@@ -1,5 +1,16 @@
 # Changelog
 
+## [v169] - 2026-10-23 — dnsdir's gateway VIPs are drawn in the circle, not as anycast pills
+
+### Fixed
+- In v168 the gateways that mirror dnsdir's showed the gateway's own VIPs as pills labelled like anycast addresses and left the circle without an address. The circle now shows the gateway's shared addresses (IPv4 and IPv6) the way dnsdir's does, and only addresses in dnsdir's `extra_vips` are pills. The shared addresses are kept with the gateway (`dnsdir_shared`, replicated), so every node draws the same thing, and the status no longer depends on reading dnsdir's file on the node that draws it.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite; a live run of the daemon against a fake dnsdir (two gateways, one anycast address) and a look at both gateways in Chromium.
+
+### Not verified
+- Not run against a real dnsdir install with live addresses and a cluster.
+
 ## [v168] - 2026-10-23 — Installed next to dnsdir, AnyTime shows one gateway for each gateway of dnsdir
 
 ### Changed

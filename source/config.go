@@ -128,6 +128,9 @@ type GroupConfig struct {
 	// PiggybackOf is the group id of the dnsdir gateway this gateway mirrors (0: none, or one made by v167, adopted on the
 	// next sync).  Shared.
 	PiggybackOf int `json:"piggyback_of,omitempty"`
+	// DNSDirShared are those of DNSDirVIPs that are shared addresses of the dnsdir gateway (the others are its anycast
+	// addresses).  Kept with the gateway so every node draws the same circle.  Shared.
+	DNSDirShared []string `json:"dnsdir_shared,omitempty"`
 	// DNSDirVIPs are anycast addresses of the Anyname DNS Director (dnsdir) on the same host that this gateway also
 	// answers NTP on (dnsdir.go).  ntpdir only listens on them: dnsdir holds and announces them.  Shared.
 	DNSDirVIPs []string `json:"dnsdir_vips,omitempty"`
@@ -414,7 +417,7 @@ func (g *GroupConfig) Validate() error {
 
 // restartDiffers reports whether a change between a and b needs an engine restart.
 func restartDiffers(a, b *GroupConfig) bool {
-	return a.Paused != b.Paused || a.Piggyback != b.Piggyback || a.PiggybackOf != b.PiggybackOf || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
+	return a.Paused != b.Paused || a.Piggyback != b.Piggyback || a.PiggybackOf != b.PiggybackOf || !sameList(a.DNSDirShared, b.DNSDirShared) || a.Interface != b.Interface || a.VIP4 != b.VIP4 || a.VIP6 != b.VIP6 ||
 		!sameList(a.MoreVIP4, b.MoreVIP4) || !sameList(a.MoreVIP6, b.MoreVIP6) ||
 		a.Key != b.Key || a.RealMACs != b.RealMACs || // the MAC mode changes what the node sets up: restart the gateway
 		!reflect.DeepEqual(a.Neighbors, b.Neighbors)

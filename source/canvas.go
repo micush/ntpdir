@@ -52,14 +52,15 @@ type CanvasGateway struct {
 	// Piggyback marks the gateway that answers on dnsdir's addresses (piggyback.go); it has no address or interface of its own.
 	Piggyback bool `json:"piggyback,omitempty"`
 	// PiggybackVIP4 and PiggybackVIP6 are the shared addresses of the dnsdir gateway this one mirrors: what the circle shows.
-	PiggybackVIP4 string         `json:"piggyback_vip4,omitempty"`
-	PiggybackVIP6 string         `json:"piggyback_vip6,omitempty"`
-	VIP4          string         `json:"vip4"`
-	VIP6          string         `json:"vip6"`
-	Anycast       []AnycastState `json:"anycast,omitempty"`
-	Status        string         `json:"status"`
-	Detail        string         `json:"detail"`
-	Families      []CanvasFamily `json:"families"`
+	PiggybackVIP4   string         `json:"piggyback_vip4,omitempty"`
+	PiggybackVIP6   string         `json:"piggyback_vip6,omitempty"`
+	PiggybackShared []string       `json:"piggyback_shared,omitempty"`
+	VIP4            string         `json:"vip4"`
+	VIP6            string         `json:"vip6"`
+	Anycast         []AnycastState `json:"anycast,omitempty"`
+	Status          string         `json:"status"`
+	Detail          string         `json:"detail"`
+	Families        []CanvasFamily `json:"families"`
 	// Vmac is the last virtual-MAC test on this node (see vmactest.go); absent until one has run.
 	Vmac *VmacResult `json:"vmac,omitempty"`
 	// LB is the load-balancing settings this gateway runs with; LBOwn says they are its own rather than Settings'.
@@ -202,9 +203,12 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.NodePaused, ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
 
 		if g.Piggyback {
-			for _, d := range dnsdirGateways() {
-				if d.ID == g.PiggybackOf {
-					cg.PiggybackVIP4, cg.PiggybackVIP6 = d.VIP4, d.VIP6
+			cg.PiggybackShared = append([]string(nil), g.DNSDirShared...)
+			for _, a := range g.DNSDirShared {
+				if ip, err := netip.ParseAddr(a); err == nil && ip.Is4() && cg.PiggybackVIP4 == "" {
+					cg.PiggybackVIP4 = a
+				} else if err == nil && !ip.Is4() && cg.PiggybackVIP6 == "" {
+					cg.PiggybackVIP6 = a
 				}
 			}
 		}
@@ -531,7 +535,10 @@ func markPiggyback(groups []CanvasGateway) {
 		}
 		// An address of the gateway itself is held on one node of dnsdir's gateway at a time, so a node that does not hold it
 		// is not short of anything; an anycast address is held on every node that serves.
-		shared := dnsdirSharedSet()
+		shared := map[string]bool{}
+		for _, a := range g.PiggybackShared {
+			shared[a] = true
+		}
 		held, total := 0, 0
 		for _, a := range g.Anycast {
 			if a.Up {

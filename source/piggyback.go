@@ -130,6 +130,9 @@ func wantPiggyback(dc *DaemonConfig) (changed bool) {
 		if label := piggybackLabel(gw); g.Name != label {
 			g.Name, changed = label, true
 		}
+		if !sameList(g.DNSDirShared, gw.Shared) {
+			g.DNSDirShared, changed = append([]string(nil), gw.Shared...), true
+		}
 		if !sameList(g.DNSDirVIPs, addrs) {
 			g.DNSDirVIPs, changed = addrs, true
 		}

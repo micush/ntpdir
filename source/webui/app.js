@@ -858,11 +858,12 @@
       const COLW = 190, SW = 156;
       // The circle shows bare addresses (no /prefix) and grows until the longest one fits,
       // up to a full 39-character IPv6 address (monospace 12px ≈ 7.3px per character).
-      const ip4 = g.piggyback ? (g.piggyback_vip4 || "") : (g.vip4 || "").split("/")[0], ip6 = g.piggyback ? (g.piggyback_vip6 || "") : (g.vip6 || "").split("/")[0];
+      const pigShared = g.piggyback ? (g.dnsdir_shared || []) : [];   // the dnsdir gateway's own addresses: the circle shows them as dnsdir's does
+      const ip4 = g.piggyback ? (pigShared.find((x) => !x.includes(":")) || "") : (g.vip4 || "").split("/")[0], ip6 = g.piggyback ? (pigShared.find((x) => x.includes(":")) || "") : (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
       const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);   // wide enough for the clock line too
       const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
-      const own = g.extra_vips || [], dds = (g.dnsdir_vips || []).filter((a) => !g.piggyback || (a !== g.piggyback_vip4 && a !== g.piggyback_vip6)), anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
+      const own = g.extra_vips || [], dds = (g.dnsdir_vips || []).filter((a) => !g.piggyback || !pigShared.includes(a)), anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
       const AW = Math.max(170, Math.ceil(Math.max(0, ...anys.map((a) => a.length)) * 7.3 + 28));  // wide enough for the longest address in full (monospace 12px)
       const waiting = cv.nodeWait || {};
       // a node removed from the gateway is not drawn (right-click the gateway ▸ Add node brings it back); the saved list decides, so it goes at once
