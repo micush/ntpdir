@@ -719,6 +719,10 @@
     const shortAddr = (a) => a.replace(/:123$/, "").replace(/^\[(.*)\]$/, "$1");
     // the optional name of a server (ntp.server_names), shown under its address
     const srvName = (g, addr) => ((g.ntp || cv.cfg.ntp || {}).server_names || {})[addr] || "";
+    // A server's state for its tooltip, one fact to a line: "stratum 1, offset +4.47 ms, round trip 62.48 ms — chrony takes the time
+    // from it" reads "Stratum 1, offset +4.47 ms" and "Time is taken from it" (the round trip is in the server's statistics).
+    const srvWhyLines = (why) => String(why).split(" — ").map((p) => p.replace(/, round trip [\d.]+ ms/, "").replace(/^chrony takes the time from it/, "Time is taken from it"))
+      .filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("\n");
     const srvTitle = (g, addr) => (srvName(g, addr) ? srvName(g, addr) + " (" + shortAddr(addr) + ")" : shortAddr(addr));
     const trunc = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
     // cut a text to a pixel width (measured in the font the drawing uses), ending in … when it had to be cut
@@ -1062,7 +1066,7 @@
             ghost: (k) => sv("rect", { class: "dropslot", x: rowX + (COLW - SW) / 2 + k * COLW, y: SY, width: SW, height: SH, rx: 4 }),
             drop: (k) => { ensureNTP(g); reorder(g.ntp.servers, i, k); cv.sel = { kind: "srv", addr }; commit(); } }),
           onkeydown: (e) => { if (e.key === "Enter") pick("srv", addr)(e); } },
-          sv("title", {}, srvTitle(g, addr) + " — " + ss.why + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
+          sv("title", {}, srvTitle(g, addr) + "\n" + srvWhyLines(ss.why) + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
           sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
           label(mx, SY + (srvName(g, addr) ? 19 : 20), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") + (info.chrony === "*" ? " *" : "") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t1 strong"),   // the offset first, in bold; the star: the source chrony has selected
           ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),

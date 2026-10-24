@@ -1,5 +1,13 @@
 # Changelog
 
+## [v178] - 2026-10-24 — Topology: an NTP server's tooltip is one fact per line
+
+### Changed
+- The tooltip of an NTP server reads: its name and address; "Stratum 1, offset +4.47 ms"; "Time is taken from it" (with "(the selected source)" for the one chrony follows); then how long it has been online. The round trip is no longer in the tooltip (it is on the server's statistics page and square). The text of `--canvas` and the other commands is unchanged.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race` on the full suite.
+
 ## [v177] - 2026-10-23 — Configure ▸ Users ▸ LDAP: the fields are laid out on two lines
 
 ### Changed
