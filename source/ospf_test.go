@@ -350,7 +350,7 @@ func TestOSPFBlockedWithDnsdir(t *testing.T) {
 	if o.Active() {
 		t.Error("OSPF active with dnsdir installed")
 	}
-	if err := e.mg.OSPFSet(*o, "t"); err == nil || !strings.Contains(err.Error(), "dnsdir") {
+	if err := e.mg.OSPFSet(*o, "t"); err == nil || !strings.Contains(err.Error(), "AnyName") {
 		t.Errorf("OSPF settings accepted with dnsdir installed: %v", err)
 	}
 	if st, _ := e.mg.OSPFStatus(); st.Blocked == "" {
@@ -362,7 +362,7 @@ func TestOSPFBlockedWithDnsdir(t *testing.T) {
 	m := NewBGPManager(t.TempDir())
 	n := len(*calls)
 	dc := ospfDC(true)
-	if r := m.applyNow(dc); !r.OK || !strings.Contains(r.Detail, "dnsdir") || len(*calls) != n {
+	if r := m.applyNow(dc); !r.OK || !strings.Contains(r.Detail, "AnyName") || len(*calls) != n {
 		t.Errorf("FRR was touched: %+v %v", r, *calls)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "daemons")); strings.Contains(string(b), "ospfd=yes") {

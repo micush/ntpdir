@@ -337,7 +337,7 @@ func (g *GroupConfig) Validate() error {
 		return fmt.Errorf("%s: %v", pre, err)
 	}
 	if g.Piggyback && (g.VIP4 != "" || g.VIP6 != "" || len(g.MoreVIP4)+len(g.MoreVIP6)+len(g.ExtraVIPs) > 0) {
-		return fmt.Errorf("%s: a gateway that answers on dnsdir's addresses has no addresses of its own", pre)
+		return fmt.Errorf("%s: a gateway that answers on AnyName's addresses has no addresses of its own", pre)
 	}
 	if !g.Piggyback && g.VIP4 == "" && g.VIP6 == "" {
 		return fmt.Errorf("%s: at least one of vip4 or vip6 must be set", pre)
@@ -969,7 +969,7 @@ func (dc *DaemonConfig) Validate() error {
 	for _, g := range dc.Groups {
 		if g.Piggyback && g.PiggybackOf != 0 {
 			if other, dup := pigOf[g.PiggybackOf]; dup {
-				return fmt.Errorf("groups %d and %d both mirror dnsdir's gateway %d", other, g.GroupID, g.PiggybackOf)
+				return fmt.Errorf("groups %d and %d both mirror AnyName's gateway %d", other, g.GroupID, g.PiggybackOf)
 			}
 			pigOf[g.PiggybackOf] = g.GroupID
 		}
@@ -1001,18 +1001,18 @@ func (dc *DaemonConfig) Validate() error {
 		for _, v := range g.DNSDirVIPs {
 			a := norm(v)
 			if other, dup := vips[a]; dup {
-				return fmt.Errorf("group %d: dnsdir address %s is the shared address of group %d", g.GroupID, a, other)
+				return fmt.Errorf("group %d: AnyName address %s is the shared address of group %d", g.GroupID, a, other)
 			}
 			if seen[a] {
-				return fmt.Errorf("group %d lists the dnsdir address %s twice", g.GroupID, a)
+				return fmt.Errorf("group %d lists the AnyName address %s twice", g.GroupID, a)
 			}
 			if other, dup := dnsdirOwner[a]; dup && !(g.Piggyback && piggybackGroup(dc, other)) {
-				return fmt.Errorf("groups %d and %d both answer on the dnsdir address %s", other, g.GroupID, a)
+				return fmt.Errorf("groups %d and %d both answer on the AnyName address %s", other, g.GroupID, a)
 			}
 			for _, o := range dc.Groups {
 				for _, x := range o.ExtraVIPs {
 					if norm(x) == a {
-						return fmt.Errorf("group %d: %s is also an anycast address of group %d: an address is either ntpdir's own or dnsdir's", g.GroupID, a, o.GroupID)
+						return fmt.Errorf("group %d: %s is also an anycast address of group %d: an address is either ntpdir's own or AnyName's", g.GroupID, a, o.GroupID)
 					}
 				}
 			}

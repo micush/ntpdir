@@ -52,7 +52,7 @@ func TestBGPApplyLeavesFRRAloneWithDnsdir(t *testing.T) {
 
 	withDnsdir(t)
 	for _, enabled := range []bool{true, false} {
-		if r := m.applyNow(bgpDC(enabled)); !r.OK || !strings.Contains(r.Detail, "dnsdir") {
+		if r := m.applyNow(bgpDC(enabled)); !r.OK || !strings.Contains(r.Detail, "AnyName") {
 			t.Fatalf("enabled=%v: %+v", enabled, r)
 		}
 	}
@@ -83,7 +83,7 @@ func TestBGPCannotBeSetOrEnabledWithDnsdir(t *testing.T) {
 	}
 	withDnsdir(t)
 
-	if r := e.do("PUT", "/api/bgp", set, withAuth(e, true)); r.code == 200 || !strings.Contains(string(r.raw), "dnsdir") {
+	if r := e.do("PUT", "/api/bgp", set, withAuth(e, true)); r.code == 200 || !strings.Contains(string(r.raw), "AnyName") {
 		t.Fatalf("settings accepted with dnsdir installed: %d %s", r.code, r.raw)
 	}
 	if r := e.do("PUT", "/api/bgp", BGPConfig{ASN: 64513}, withAuth(e, true)); r.code == 200 {
@@ -93,7 +93,7 @@ func TestBGPCannotBeSetOrEnabledWithDnsdir(t *testing.T) {
 	if r := e.do("POST", "/api/bgp/operate", BGPOperateArgs{Enabled: false}, withAuth(e, true)); r.code != 200 {
 		t.Fatalf("disable: %d %s", r.code, r.raw)
 	}
-	if r := e.do("POST", "/api/bgp/operate", BGPOperateArgs{Enabled: true}, withAuth(e, true)); r.code == 200 || !strings.Contains(string(r.raw), "dnsdir") {
+	if r := e.do("POST", "/api/bgp/operate", BGPOperateArgs{Enabled: true}, withAuth(e, true)); r.code == 200 || !strings.Contains(string(r.raw), "AnyName") {
 		t.Fatalf("enable accepted: %d %s", r.code, r.raw)
 	}
 	r := e.do("GET", "/api/bgp", nil, withAuth(e, false))

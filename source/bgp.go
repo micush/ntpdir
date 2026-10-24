@@ -95,7 +95,7 @@ func (b *BGPConfig) Active() bool { return b.Configured() && !b.Disabled && bgpB
 // is off, it cannot be set up or enabled, and settings already in the config are kept but have no effect.  The
 // anycast addresses themselves still work (they are only addresses on lo without BGP).  The check is made each time,
 // so removing dnsdir lifts the block without a restart.
-const bgpBlockedMsg = "the Anyname DNS Director (dnsdir) is installed on this host and manages FRR; BGP is not available in ntpdir"
+const bgpBlockedMsg = "the AnyName DNS Director is installed on this host and manages FRR; BGP is not available in ntpdir"
 
 // bgpBlocked returns why BGP is unavailable on this host, or "" when it is not.
 func bgpBlocked() string {
@@ -421,7 +421,7 @@ func (b *BGPManager) applyNow(dc *DaemonConfig) *BGPApplied {
 	}
 	if why := bgpBlocked(); why != "" {
 		// frr.conf, daemons and the marker are not touched: they may belong to dnsdir now
-		return res(true, "BGP and OSPF are off: dnsdir is installed on this host")
+		return res(true, "BGP and OSPF are off: AnyName is installed on this host")
 	}
 	bgpOn, ospfOn := dc.BGP.Active(), dc.OSPF.Active()
 	enabled := bgpOn || ospfOn

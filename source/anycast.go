@@ -223,9 +223,9 @@ func (a *anycastSet) stepExternal(addr string, healthy bool, offered, shared map
 	why := ""
 	switch {
 	case !dnsdirPresent():
-		why = "dnsdir is not installed"
+		why = "AnyName is not installed"
 	case !offered[addr]:
-		why = "dnsdir does not announce this address"
+		why = "AnyName does not announce this address"
 	}
 	if anycastReg.claims[addr] == nil {
 		anycastReg.claims[addr] = map[int]*anycastClaim{}
@@ -243,9 +243,9 @@ func (a *anycastSet) stepExternal(addr string, healthy bool, offered, shared map
 	case !healthy:
 		why = a.unhealthyWhy()
 	case shared[addr] && !addrOnHostFn(addr):
-		why = "dnsdir does not serve this gateway address on this node right now"
+		why = "AnyName does not serve this gateway address on this node right now"
 	case !shared[addr] && !addrOnLoFn(addr):
-		why = "dnsdir is not announcing it right now"
+		why = "AnyName is not announcing it right now"
 	}
 	a.reason[addr] = why
 }

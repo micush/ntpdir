@@ -88,7 +88,7 @@ Both nodes now answer on the shared address and one of them is the controller (s
 
 ## 7. Worth knowing
 
-- **dnsdir on the same host:** AnyTime then shows dnsdir's gateways (same names) and answers NTP on their addresses by itself. You only choose the NTP servers, one list for all of them; there is no gateway to draw.
+- **AnyName on the same host:** AnyTime then shows AnyName's gateways (same names) and answers NTP on their addresses by itself. You only choose the NTP servers, one list for all of them; there is no gateway to draw.
 
 - **Settings (with its Logs, Upgrades and Cluster tabs), Gateways, NTP and Web GUI** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
 - **History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.

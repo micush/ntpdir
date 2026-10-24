@@ -284,13 +284,13 @@
     const box = root.querySelector('.nav-group[data-group="' + TOPO + '"] .nav-items');
     if (!box) return;
     const here = state.tab === "topology";
-    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title + (g.piggyback ? " — imported from dnsdir" : ""), "data-gw": g.id,
+    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title + (g.piggyback ? " — imported from AnyName" : ""), "data-gw": g.id,
         "aria-current": here && g.id === state.topo.gid ? "page" : null,
         onclick: () => { state.topo.gid = g.id; selectTab("topology"); },
         oncontextmenu: g.piggyback ? null : rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
           ["Delete", () => { state.topo.gid = g.id; state.topo.action = "delete"; selectTab("topology"); }, "danger"]]) },
       h("span", { class: "dot st-" + g.status }), g.label)),
-      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host: these are dnsdir's gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Imported from dnsdir")
+      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "AnyName is installed on this host: these are its gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Imported from AnyName")
         : h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
   }
 
@@ -752,7 +752,7 @@
     const gwTip = (g, st, dual) => {
       const fam = (af) => (st.fams[af] ? st.fams[af].detail : "not running");
       const together = dual ? "IPv4: " + fam("v4") + "; IPv6: " + fam("v6") : null;
-      return ["Gateway " + gwLabel(g), g.piggyback ? "Imported from dnsdir (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there" : "", st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
+      return ["Gateway " + gwLabel(g), g.piggyback ? "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there" : "", st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
         ...(dual ? [["IPv4", "v4"], ["IPv6", "v6"]].map(([n, af]) => n + " — " + fam(af)) : []),
         (g.more_vip4 || []).length + (g.more_vip6 || []).length ? "Also answers on " + [...(g.more_vip4 || []), ...(g.more_vip6 || [])].join(", ") : "",
         membersText(st.members), st.vmac && st.vmac.verdict !== "off" && !(st.why || "").startsWith("Virtual MACs:") ? vmacLine(st.vmac) : ""].filter(Boolean).join("\n");
@@ -988,7 +988,7 @@
         window.addEventListener("keydown", key, true);
       };
       const reorder = (list, from, to) => { const [it] = list.splice(from, 1); list.splice(to, 0, it); };
-      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, sv("title", {}, "Imported from dnsdir (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there"), "Imported from dnsdir"));
+      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, sv("title", {}, "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there"), "Imported from AnyName"));
       shapes.push(sv("g", { class: "shape st-" + st.circle + (sel("gw") ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "Gateway " + gwLabel(g), onclick: pick("gw"), oncontextmenu: rightClick("gw"),
         onkeydown: (e) => { if (e.key === "Enter") pick("gw")(e); } },
         sv("title", {}, gwTip(g, st, dual)),
@@ -1001,14 +1001,14 @@
         const a = st.anycast.find((z) => z.addr === addr);
         if (i >= own.length) {   // an address of dnsdir on this host: ntpdir only answers NTP on it, dnsdir holds and announces it
           const c = a && a.up ? (a.reason ? "warn" : "ok") : "idle";
-          const dwhy = !a ? "Applying…" : a.up ? "Answering NTP; dnsdir announces it (on lo)" + (a.reason ? " — " + a.reason : "") : "Not answering: " + (a.reason || "dnsdir does not have it on lo");
+          const dwhy = !a ? "Applying…" : a.up ? "Answering NTP; AnyName announces it (on lo)" + (a.reason ? " — " + a.reason : "") : "Not answering: " + (a.reason || "AnyName does not have it on lo");
           lines.push(sv("line", { x1: cx + R, y1: CY, x2: x, y2: y + AH / 2, class: "edge" }));
-          shapes.push(sv("g", { class: "shape st-" + c + (sel("dd", addr) ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "dnsdir address " + addr, onclick: pick("dd", addr), oncontextmenu: rightClick("dd", addr),
+          shapes.push(sv("g", { class: "shape st-" + c + (sel("dd", addr) ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "AnyName address " + addr, onclick: pick("dd", addr), oncontextmenu: rightClick("dd", addr),
             onkeydown: (e) => { if (e.key === "Enter") pick("dd", addr)(e); } },
-            sv("title", {}, "dnsdir address " + addr + " — " + dwhy),
+            sv("title", {}, "AnyName address " + addr + " — " + dwhy),
             sv("rect", { x, y, width: AW, height: AH, rx: 18 }),
             label(x + AW / 2, y + 17, addr, "ip"),
-            label(x + AW / 2, y + 32, a && a.up ? (a.reason ? "dnsdir · " + a.reason : "dnsdir · answering") : "dnsdir · not announced", "t2")));
+            label(x + AW / 2, y + 32, a && a.up ? (a.reason ? "AnyName · " + a.reason : "AnyName · answering") : "AnyName · not announced", "t2")));
           return;
         }
         const noSrv = !(g.ntp && (g.ntp.servers || []).length);
@@ -1415,7 +1415,7 @@
     };
     const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)],
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p))] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
-      ...(cv.dnsdir && cv.dnsdir.present ? [["Add dnsdir address", () => dnsdirForm(g)]] : []),
+      ...(cv.dnsdir && cv.dnsdir.present ? [["Add AnyName address", () => dnsdirForm(g)]] : []),
       ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
     // a server's address as the packet filter and the log search want it: the host, and the port its queries go to
@@ -1798,11 +1798,11 @@
     function dnsdirForm(g) {
       const have = new Set(groups().flatMap((x) => [...(x.dnsdir_vips || []), ...(x.extra_vips || [])]));
       const choices = ((cv.dnsdir && cv.dnsdir.offered) || []).filter((a) => !have.has(a));
-      form("Add dnsdir address", [
-        choices.length ? { k: "addr", l: "dnsdir anycast address", options: choices, v: choices[0], hint: "Answered here only while dnsdir holds it." }
-          : { k: "addr", l: "dnsdir anycast address", v: "", disabled: true, hint: "None left: dnsdir announces no other address." },
+      form("Add AnyName address", [
+        choices.length ? { k: "addr", l: "AnyName anycast address", options: choices, v: choices[0], hint: "Answered here only while AnyName holds it." }
+          : { k: "addr", l: "AnyName anycast address", v: "", disabled: true, hint: "None left: AnyName announces no other address." },
       ], (v) => {
-        if (!v.addr) return "dnsdir announces no address that is free.";
+        if (!v.addr) return "AnyName announces no address that is free.";
         g.dnsdir_vips = g.dnsdir_vips || [];
         g.dnsdir_vips.push(v.addr);
         cv.sel = { kind: "dd", addr: v.addr };
@@ -2623,6 +2623,13 @@
       const groupsEl = h("div", {});
       const groups = []; // {el, get}
       const addGroup = (g) => {
+        if (g.piggyback) {   // imported from AnyName: nothing here is ntpdir's to edit; kept as it is when the page saves
+          const card = h("div", { class: "card" }, h("header", {}, h("h3", {}, "Group " + g.group_id + (g.name ? " — " + g.name : ""))),
+            h("div", { class: "body" }, h("p", { class: "hint" }, "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there. Its NTP servers are edited on the Topology page.")));
+          groups.push({ fs: { get: () => ({ ...g }) }, orig: g, card });
+          groupsEl.append(card);
+          return;
+        }
         const fs = fieldset(GROUP_FIELDS, g);
         const entry = { fs, orig: g };
         const title = h("h3", {}, "Group");
@@ -4283,7 +4290,7 @@
     show(state[key] >= 0 && state[key] < NAMES.length ? state[key] : 0);
     return strip;
   }
-  const BOTH_BLOCKED = "BGP and OSPF are unavailable: dnsdir is installed on this host.";
+  const BOTH_BLOCKED = "BGP and OSPF are unavailable: AnyName is installed on this host.";
 
   // ── Anycast, Monitor  (CLI: --bgp, --ospf) ──────────────────────────────────────────────
   VIEWS.anycaststatus = (() => {
@@ -4509,7 +4516,7 @@
       cfg = st.config;
       if (st.blocked) {
         clear(nbrs);
-        clear(settings).append(section("BGP", h("div", { class: "muted" }, "BGP is unavailable: dnsdir is installed on this host.")));
+        clear(settings).append(section("BGP", h("div", { class: "muted" }, "BGP is unavailable: AnyName is installed on this host.")));
         return;
       }
       drawSettings(); drawNeighbors();

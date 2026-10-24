@@ -561,23 +561,23 @@ func markPiggyback(groups []CanvasGateway) {
 		}
 		switch {
 		case len(g.Anycast) == 0:
-			g.Status, g.Detail = "idle", "dnsdir has no addresses yet"
+			g.Status, g.Detail = "idle", "AnyName has no addresses yet"
 		case g.Paused:
 			g.Status, g.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
 		case held == 0:
-			g.Status, g.Detail = "idle", "this node holds none of this dnsdir gateway's addresses right now; the nodes that do answer"
+			g.Status, g.Detail = "idle", "this node holds none of this AnyName gateway's addresses right now; the nodes that do answer"
 		case len(g.Servers) == 0:
-			g.Status, g.Detail = "warn", "answering on dnsdir's addresses, but no NTP server is configured yet, so clients cannot be answered"
+			g.Status, g.Detail = "warn", "answering on AnyName's addresses, but no NTP server is configured yet, so clients cannot be answered"
 		case healthy == 0 && !g.UsingFallback:
 			g.Status, g.Detail = "bad", "no NTP server is healthy, so clients cannot be answered"
 		case g.UsingFallback:
 			g.Status, g.Detail = "warn", "every NTP server is down or paused — answering from the fallback servers"
 		case down > 0:
-			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses, but some NTP servers are down"
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of AnyName's "+strconv.Itoa(total)+" addresses, but some NTP servers are down"
 		case held < total:
-			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of dnsdir's "+strconv.Itoa(total)+" addresses here"
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of AnyName's "+strconv.Itoa(total)+" addresses here"
 		default:
-			g.Status, g.Detail = "ok", "answering on "+strconv.Itoa(held)+" of this dnsdir gateway's addresses"
+			g.Status, g.Detail = "ok", "answering on "+strconv.Itoa(held)+" of this AnyName gateway's addresses"
 		}
 	}
 }
@@ -1125,16 +1125,16 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 		switch e.Action {
 		case "add":
 			if idx >= 0 {
-				return "", fmt.Errorf("gateway %d already answers on the dnsdir address %s", e.Group, addr)
+				return "", fmt.Errorf("gateway %d already answers on the AnyName address %s", e.Group, addr)
 			}
 			g.DNSDirVIPs = append(g.DNSDirVIPs, addr)
-			return fmt.Sprintf("gateway %d now answers NTP on the dnsdir address %s", e.Group, addr), nil
+			return fmt.Sprintf("gateway %d now answers NTP on the AnyName address %s", e.Group, addr), nil
 		case "del":
 			if idx < 0 {
-				return "", fmt.Errorf("gateway %d does not answer on the dnsdir address %s", e.Group, addr)
+				return "", fmt.Errorf("gateway %d does not answer on the AnyName address %s", e.Group, addr)
 			}
 			g.DNSDirVIPs = append(g.DNSDirVIPs[:idx], g.DNSDirVIPs[idx+1:]...)
-			return fmt.Sprintf("gateway %d no longer answers on the dnsdir address %s", e.Group, addr), nil
+			return fmt.Sprintf("gateway %d no longer answers on the AnyName address %s", e.Group, addr), nil
 		}
 	case "anycast":
 		g, err := findGroup(dc, e.Group)

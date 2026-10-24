@@ -816,13 +816,13 @@ func showCanvas(sock string) {
 		}
 		for _, a := range g.Anycast {
 			if a.External {
-				state := "answering NTP; dnsdir announces it (on lo now)"
+				state := "answering NTP; AnyName announces it (on lo now)"
 				if !a.Up {
-					state = "not answering: " + orDefault(a.Reason, "dnsdir does not have it on lo")
+					state = "not answering: " + orDefault(a.Reason, "AnyName does not have it on lo")
 				} else if a.Reason != "" {
 					state += " (" + a.Reason + ")"
 				}
-				fmt.Printf("      dnsdir address %s — %s\n", a.Addr, state)
+				fmt.Printf("      AnyName address %s — %s\n", a.Addr, state)
 				continue
 			}
 			state := "announced from this node (on lo)"

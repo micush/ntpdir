@@ -169,7 +169,7 @@ func checkDNSDirAdded(cur, next *DaemonConfig) error {
 				continue
 			}
 			if !dnsdirPresent() {
-				return errDNSDir("the Anyname DNS Director (dnsdir) is not installed on this host")
+				return errDNSDir("the AnyName DNS Director is not installed on this host")
 			}
 			if offered == nil {
 				offered = map[string]bool{}
@@ -178,7 +178,7 @@ func checkDNSDirAdded(cur, next *DaemonConfig) error {
 				}
 			}
 			if !offered[a] {
-				return errDNSDir(a + " is not an anycast address of dnsdir")
+				return errDNSDir(a + " is not an anycast address of AnyName")
 			}
 		}
 	}
@@ -187,4 +187,4 @@ func checkDNSDirAdded(cur, next *DaemonConfig) error {
 
 type errDNSDir string
 
-func (e errDNSDir) Error() string { return "dnsdir address: " + string(e) }
+func (e errDNSDir) Error() string { return "AnyName address: " + string(e) }

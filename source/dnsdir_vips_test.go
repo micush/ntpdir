@@ -122,7 +122,7 @@ func TestDNSDirVIPCheckOnAdd(t *testing.T) {
 	dnsdirMarkers = om
 
 	_, set := fakeDNSDir(t, "198.51.100.7")
-	if err := checkDNSDirAdded(cur, next); err == nil || !strings.Contains(err.Error(), "not an anycast address of dnsdir") {
+	if err := checkDNSDirAdded(cur, next); err == nil || !strings.Contains(err.Error(), "not an anycast address of AnyName") {
 		t.Fatalf("added an address dnsdir does not announce: %v", err)
 	}
 	set("203.0.113.53")

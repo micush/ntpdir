@@ -1,5 +1,19 @@
 # Changelog
 
+## [v175] - 2026-10-23 — AnyName instead of dnsdir in the text; imported gateways are read-only on Configure ▸ Gateways
+
+### Changed
+- Messages, the GUI, `--help`, the help pages, the README and the quick start now say "AnyName" (the AnyName DNS Director) where they said "dnsdir". Commands, flags (`--canvas-add dnsdirvip`), file paths, config keys (`dnsdir_vips`) and JSON field names are unchanged.
+- Configure ▸ Gateways shows a gateway imported from AnyName as a read-only card (it said so, with its group number and name) instead of the editable form; saving the page keeps it as it was.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite; in Chromium against a fake AnyName, the Gateways page and a save from Settings.
+
+## [v174] - 2026-10-23 — "Imported from AnyName"
+
+### Changed
+- The note and tooltips on a gateway imported from dnsdir say "Imported from AnyName" (the product's name) instead of "dnsdir".
+
 ## [v173] - 2026-10-23 — The "imported from dnsdir" note no longer runs into the circle
 
 ### Changed

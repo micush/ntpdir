@@ -223,11 +223,11 @@ func TestMarkPiggyback(t *testing.T) {
 		contain string
 	}{
 		{"no addresses", CanvasGateway{Servers: srv("ok")}, "idle", "no addresses"},
-		{"none held here", CanvasGateway{Servers: srv("ok"), Anycast: up(0, 2)}, "idle", "none of this dnsdir"},
+		{"none held here", CanvasGateway{Servers: srv("ok"), Anycast: up(0, 2)}, "idle", "none of this AnyName"},
 		{"no servers", CanvasGateway{Anycast: up(2, 2)}, "warn", "no NTP server is configured"},
 		{"all down", CanvasGateway{Servers: srv("bad", "bad"), Anycast: up(2, 2)}, "bad", "no NTP server is healthy"},
 		{"some down", CanvasGateway{Servers: srv("ok", "bad"), Anycast: up(2, 2)}, "warn", "some NTP servers are down"},
-		{"some held", CanvasGateway{Servers: srv("ok"), Anycast: up(1, 2)}, "warn", "1 of dnsdir's 2"},
+		{"some held", CanvasGateway{Servers: srv("ok"), Anycast: up(1, 2)}, "warn", "1 of AnyName's 2"},
 		{"shared held elsewhere", CanvasGateway{PiggybackShared: []string{"10.0.0.53"}, Servers: srv("ok"), Anycast: []AnycastState{{Addr: "10.0.0.53", External: true}, {Addr: "203.0.113.53", External: true, Up: true}}}, "ok", "answering on 1"},
 		{"fine", CanvasGateway{Servers: srv("ok", "ok"), Anycast: up(2, 2)}, "ok", "answering on 2 of this"},
 		{"paused", CanvasGateway{Servers: srv("ok"), Anycast: up(2, 2), Paused: true}, "paused", "Paused"},

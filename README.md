@@ -145,7 +145,7 @@ chrony answers on `listen_port` (default 123; chrony's `port`). Server addresses
 
 - A node that is **alone**, or the last one serving a gateway, cannot be paused (nobody could take over), so it restarts chrony anyway and has the gap. A node that was already paused stays paused.
 - If chrony is not synchronised within 3 minutes, the node is resumed anyway, shows **failed**, and the other nodes **wait**; it tries again after 10 minutes. Fix the cause (usually no server passes the health checks) and the roll continues by itself.
-- Addresses announced by dnsdir cannot be withdrawn by AnyTime, so clients that use one still reach the node while chrony restarts.
+- Addresses announced by AnyName cannot be withdrawn by AnyTime, so clients that use one still reach the node while chrony restarts.
 - If the daemon stops while a roll has the node paused, it resumes the node when chrony is synchronised after the daemon starts again (`chrony-roll.json` in the state directory).
 - A paused node keeps its probe pools, so chrony keeps its sources while the node is paused.
 
@@ -299,7 +299,7 @@ ntpdir --canvas-set gateway --group 100 --max-stratum 6     # this gateway's own
                                                            #   --max-offset, --fail-threshold); --lb settings goes back to following Settings
 ntpdir --canvas-set server --group 100 --server 10.0.0.124 --label ntp-a   # a server's name (also on --canvas-add server; - clears)
 ntpdir --canvas-add anycast --group 100 --address 203.0.113.123   # an anycast address (--canvas-del anycast removes one)
-ntpdir --canvas-add dnsdirvip --group 100 --address 203.0.113.53  # answer NTP on an anycast address dnsdir announces (--canvas-del dnsdirvip stops)
+ntpdir --canvas-add dnsdirvip --group 100 --address 203.0.113.53  # answer NTP on an anycast address AnyName announces (--canvas-del dnsdirvip stops)
 ntpdir --canvas-set gateway --group 100 --anycast A,B           # or replace the whole list (--anycast - clears)
 ntpdir --canvas-del gateway --group 100 --yes
 ```
@@ -324,26 +324,26 @@ An address is held only while this node can answer on it: the gateway is running
 
 The drawing and `--canvas` show whether each address is announced from the node you are looking at. When the node manages BGP, the pill is **green** when every neighbor of its family has an established session (IPv4 address → IPv4 neighbors, IPv6 → IPv6), **amber** when some do and some do not, and **red** when none does, when it has no neighbor of that family, or when BGP is disabled on the node (Operate ▸ Anycast). A neighbor that is disabled or still connecting counts as not established. With OSPF (below) the same colours count the enabled interfaces that have a neighbor in state Full, and with both protocols the better picture is shown.
 
-### Installed next to dnsdir: AnyTime mirrors dnsdir's gateways
+### Installed next to AnyName: AnyTime mirrors AnyName's gateways
 
-When the Anyname DNS Director (`dnsdir`) is installed on the same host, ntpdir does not use a gateway VIP or anycast addresses of its own. It **piggybacks on dnsdir**: the Topology shows **one gateway for each gateway of dnsdir**, with dnsdir's name, and ntpdir answers NTP on that gateway's shared addresses and anycast addresses. They are read from `/var/lib/dnsdir/dnsdir.conf` (`name`, `extra_vips`, `vip4`, `vip6`, `more_vip4`, `more_vip6`) every few seconds, so a gateway or address dnsdir gains or loses is followed without a restart.
+When the AnyName DNS Director is installed on the same host, ntpdir does not use a gateway VIP or anycast addresses of its own. It **piggybacks on AnyName**: the Topology shows **one gateway for each gateway of AnyName**, with AnyName's name, and ntpdir answers NTP on that gateway's shared addresses and anycast addresses. They are read from `/var/lib/dnsdir/dnsdir.conf` (`name`, `extra_vips`, `vip4`, `vip6`, `more_vip4`, `more_vip6`) every few seconds, so a gateway or address AnyName gains or loses is followed without a restart.
 
-- The gateways are made, renamed and removed by ntpdir itself to match dnsdir. All of them use **one list of NTP servers**: add a server to any of them (right-click ▸ *Add NTP server*, or `--canvas-add server --group N`) and the others get it. There is no per-address choice. *New gateway*, *Edit*, *Add anycast address*, *Add dnsdir address*, renaming and *Delete* are refused on them (GUI, CLI and API), and no other gateway can be added while dnsdir is present. Pausing works as usual.
-- Gateways ntpdir had of its own stay in the configuration but do not run (no engine, no VIP, no anycast) and show grey with the reason. When dnsdir is removed they run again and the mirrored ones stop. Standalone, nothing changes. A gateway made by v167 is adopted for the first dnsdir gateway.
-- ntpdir only **listens**. dnsdir adds, removes and announces the addresses; ntpdir never adds, removes or announces them and never touches FRR. The circle shows the gateway's shared addresses as dnsdir's does, with its anycast addresses as pills. It is green when this node holds the gateway's anycast addresses (or its shared address) and a server answers, amber when only some are held or some servers are down, grey when this node holds none (the nodes that do answer). A node that does not hold the shared address is not short of anything: dnsdir holds it on one node of the gateway at a time.
-- The mirrored gateways are shared by the cluster like any other. Run them on every node that runs dnsdir.
+- The gateways are made, renamed and removed by ntpdir itself to match AnyName. All of them use **one list of NTP servers**: add a server to any of them (right-click ▸ *Add NTP server*, or `--canvas-add server --group N`) and the others get it. There is no per-address choice. *New gateway*, *Edit*, *Add anycast address*, *Add AnyName address*, renaming and *Delete* are refused on them (GUI, CLI and API), and no other gateway can be added while AnyName is present. Pausing works as usual.
+- Gateways ntpdir had of its own stay in the configuration but do not run (no engine, no VIP, no anycast) and show grey with the reason. When AnyName is removed they run again and the mirrored ones stop. Standalone, nothing changes. A gateway made by v167 is adopted for the first AnyName gateway.
+- ntpdir only **listens**. AnyName adds, removes and announces the addresses; ntpdir never adds, removes or announces them and never touches FRR. The circle shows the gateway's shared addresses as AnyName's does, with its anycast addresses as pills. It is green when this node holds the gateway's anycast addresses (or its shared address) and a server answers, amber when only some are held or some servers are down, grey when this node holds none (the nodes that do answer). A node that does not hold the shared address is not short of anything: AnyName holds it on one node of the gateway at a time.
+- The mirrored gateways are shared by the cluster like any other. Run them on every node that runs AnyName.
 
-### NTP on dnsdir's anycast addresses
+### NTP on AnyName's anycast addresses
 
-Only when the Anyname DNS Director (`dnsdir`) is installed on the same host. BGP is then dnsdir's (see below), so ntpdir cannot announce anything itself, but a gateway can **also answer NTP on anycast addresses that dnsdir announces** (`dnsdir_vips`). In the GUI, right-click the gateway circle ▸ *Add dnsdir address* lists what dnsdir announces (read from `/var/lib/dnsdir/dnsdir.conf`, the `extra_vips` of its gateways); on the command line use `--canvas-add dnsdirvip --group 100 --address 203.0.113.53` and `--canvas-del dnsdirvip ...`. The pill sits under the anycast pills.
+Only when the AnyName DNS Director is installed on the same host. BGP is then AnyName's (see below), so ntpdir cannot announce anything itself, but a gateway can **also answer NTP on anycast addresses that AnyName announces** (`dnsdir_vips`). In the GUI, right-click the gateway circle ▸ *Add AnyName address* lists what AnyName announces (read from `/var/lib/dnsdir/dnsdir.conf`, the `extra_vips` of its gateways); on the command line use `--canvas-add dnsdirvip --group 100 --address 203.0.113.53` and `--canvas-del dnsdirvip ...`. The pill sits under the anycast pills.
 
-ntpdir only **listens** on the address. dnsdir holds it on `lo` and announces it; ntpdir never adds it, removes it or withdraws it, and never touches FRR. chrony answers on the address once dnsdir has it on `lo`, on the NTP port. The pill is green while dnsdir has the address on `lo` and a server answers, amber when dnsdir holds it but no NTP server answers (dnsdir still announces it, so clients get no answer), and grey while dnsdir does not hold it, no longer announces it, or is gone; ntpdir looks again every few seconds, so installing or removing dnsdir needs no restart. An address dnsdir does not announce is refused (GUI, CLI and API); one already saved stays when dnsdir goes away and is answered again when it returns. The list is shared by the cluster. An address is either ntpdir's own anycast address or dnsdir's, and only one gateway may answer on a dnsdir address.
+ntpdir only **listens** on the address. AnyName holds it on `lo` and announces it; ntpdir never adds it, removes it or withdraws it, and never touches FRR. chrony answers on the address once AnyName has it on `lo`, on the NTP port. The pill is green while AnyName has the address on `lo` and a server answers, amber when AnyName holds it but no NTP server answers (AnyName still announces it, so clients get no answer), and grey while AnyName does not hold it, no longer announces it, or is gone; ntpdir looks again every few seconds, so installing or removing AnyName needs no restart. An address AnyName does not announce is refused (GUI, CLI and API); one already saved stays when AnyName goes away and is answered again when it returns. The list is shared by the cluster. An address is either ntpdir's own anycast address or AnyName's, and only one gateway may answer on a AnyName address.
 
-**Because dnsdir decides when the address is announced, it knows nothing about NTP health.** If dnsdir's DNS is up and every NTP upstream is down, the route stays and NTP clients get no answer.
+**Because AnyName decides when the address is announced, it knows nothing about NTP health.** If AnyName's DNS is up and every NTP upstream is down, the route stays and NTP clients get no answer.
 
 ### BGP through FRR
 
-**Not with dnsdir on the same host.** The Anyname DNS Director manages `/etc/frr/frr.conf` too, and two products rewriting one file would wipe each other's BGP setup. When ntpdir finds dnsdir installed (`/usr/local/sbin/dnsdir`, `/usr/local/share/dnsdir` or `/etc/systemd/system/dnsdir.service`) it logs that at start-up, leaves FRR, `frr.conf`, the `daemons` file and its own marker alone, treats BGP as off, and refuses to set up or enable BGP (GUI, CLI and API); clearing the settings and disabling still work. BGP settings already in the config are kept but have no effect, and the Anycast pages say BGP is unavailable. The check is made each time, so removing dnsdir lifts the block without a restart. Anycast addresses themselves still work as plain addresses on `lo`.
+**Not with AnyName on the same host.** The AnyName DNS Director manages `/etc/frr/frr.conf` too, and two products rewriting one file would wipe each other's BGP setup. When ntpdir finds AnyName installed (`/usr/local/sbin/dnsdir`, `/usr/local/share/dnsdir` or `/etc/systemd/system/dnsdir.service`) it logs that at start-up, leaves FRR, `frr.conf`, the `daemons` file and its own marker alone, treats BGP as off, and refuses to set up or enable BGP (GUI, CLI and API); clearing the settings and disabling still work. BGP settings already in the config are kept but have no effect, and the Anycast pages say BGP is unavailable. The check is made each time, so removing AnyName lifts the block without a restart. Anycast addresses themselves still work as plain addresses on `lo`.
 
 AnyTime can drive FRR on a node so the anycast addresses are announced without any hand-written routing config. In the GUI that is **Configure ▸ Anycast**; the command line is below. It is **per node**: the AS, router ID and neighbors are never replicated, because a node usually peers with its own upstream router. Only the anycast addresses are shared.
 
@@ -416,7 +416,7 @@ Instead of BGP, or together with it, AnyTime can announce the anycast addresses 
 
 **Turning it off.** Remove all the interfaces: the OSPF part leaves `frr.conf`, `ospfd` and `ospf6d` go back to `no`, and the router ID is cleared with them. **Operate ▸ Anycast** (*Disable OSPF*) does the same without forgetting any setting, and the **Enabled** box of an interface (or right-click ▸ Disable) makes just that interface passive: no hellos, no neighbors, still configured.
 
-**Not with dnsdir on the same host.** The same rule as for BGP: when dnsdir is installed, ntpdir leaves FRR alone, treats OSPF as off and refuses to set it up or enable it (clearing the settings still works); the Anycast pages say OSPF is unavailable.
+**Not with AnyName on the same host.** The same rule as for BGP: when AnyName is installed, ntpdir leaves FRR alone, treats OSPF as off and refuses to set it up or enable it (clearing the settings still works); the Anycast pages say OSPF is unavailable.
 
 ```
 ntpdir --ospf                                                    # settings, neighbor state, announced addresses
@@ -568,7 +568,7 @@ The **Login groups** setting (Configure ▸ Web, or `web.group` in `ntpdir.conf`
 ad_gpo_map_interactive = +ntpdir
 ```
 
-dnsdir and ntpdir on the same host each add their own item to the same line. A domain that is defined only in a `conf.d` snippet is not edited; the log says what to add. A domain with `ad_gpo_access_control` set to `permissive` or `disabled`, or one that is not Active Directory, needs nothing.
+AnyName and ntpdir on the same host each add their own item to the same line. A domain that is defined only in a `conf.d` snippet is not edited; the log says what to add. A domain with `ad_gpo_access_control` set to `permissive` or `disabled`, or one that is not Active Directory, needs nothing.
 
 **In a container (LXC, Proxmox).** An unprivileged container has only the user IDs of its `uid_map` (usually 0–65535; see `/proc/self/uid_map`), and sssd makes the IDs of AD users from 200000 up, which do not exist there: the password is accepted and the sign-in fails anyway. When the daemon starts in such a container, and an AD domain in `sssd.conf` has no `ldap_idmap_range_*` of its own, it adds these lines to the domain's section, stops sssd, deletes its cache (`/var/lib/sss/db`, `/var/lib/sss/mc`, which hold the IDs it made), and starts it again:
 
@@ -731,7 +731,7 @@ Clustering is for **management only**. It keeps the settings of several AnyTime 
 
 `self` is the address the other nodes use to reach this node. Open TCP **12381** between the nodes.
 
-The gateway protocol (election, heartbeats) uses UDP **12382** and the multicast groups `224.1.3.123` and `ff02::1:123`; open UDP 12382 between the nodes. These differ from the Anyname DNS Director's (4729, `224.1.3.7`, `ff02::1:307`), so both products can run on one host, provided their gateway ids differ. BGP is not available in ntpdir while dnsdir is installed (see below), so only dnsdir can announce anycast addresses.
+The gateway protocol (election, heartbeats) uses UDP **12382** and the multicast groups `224.1.3.123` and `ff02::1:123`; open UDP 12382 between the nodes. These differ from the AnyName DNS Director's (4729, `224.1.3.7`, `ff02::1:307`), so both products can run on one host, provided their gateway ids differ. BGP is not available in ntpdir while AnyName is installed (see below), so only AnyName can announce anycast addresses.
 
 ![Monitor ▸ Cluster: the members, their role, address, version and whether they have caught up](snaps/cluster.png)
 

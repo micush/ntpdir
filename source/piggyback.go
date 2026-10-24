@@ -21,9 +21,9 @@ func inactiveReason(g GroupConfig) string {
 	present := dnsdirPresent()
 	switch {
 	case present && !g.Piggyback:
-		return "dnsdir is installed here, so NTP answers on dnsdir's gateway addresses and this gateway does not run"
+		return "AnyName is installed here, so NTP answers on AnyName's gateway addresses and this gateway does not run"
 	case !present && g.Piggyback:
-		return "dnsdir is not installed here"
+		return "AnyName is not installed here"
 	}
 	return ""
 }
@@ -48,7 +48,7 @@ func piggybackLabel(gw dnsdirGateway) string {
 		n = gw.VIP6
 	}
 	if n == "" {
-		n = "dnsdir gateway " + strconv.Itoa(gw.ID)
+		n = "AnyName gateway " + strconv.Itoa(gw.ID)
 	}
 	if r := []rune(n); len(r) > maxGatewayName {
 		n = string(r[:maxGatewayName])
@@ -189,10 +189,10 @@ func (m *Mgmt) syncPiggyback() error {
 	if !wantPiggyback(dc) {
 		return nil
 	}
-	if err := m.PutConfig(dc, "dnsdir", "dnsdir addresses"); err != nil {
-		return fmt.Errorf("could not follow dnsdir's addresses: %w", err)
+	if err := m.PutConfig(dc, "AnyName", "AnyName addresses"); err != nil {
+		return fmt.Errorf("could not follow AnyName's addresses: %w", err)
 	}
-	infof("piggyback: answering NTP on the addresses of dnsdir's %d gateway(s)", len(dnsdirGateways()))
+	infof("piggyback: answering NTP on the addresses of AnyName's %d gateway(s)", len(dnsdirGateways()))
 	return nil
 }
 
@@ -271,7 +271,7 @@ func (s *Supervisor) RunReevaluate(ctx context.Context) {
 // the gateway that follows dnsdir's addresses except its name, its NTP servers and pausing it.
 func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 	if e.Kind == "gateway" && e.Action == "add" && dnsdirPresent() {
-		return errors.New("dnsdir is installed on this host, so ntpdir has no gateways of its own: it answers NTP on the addresses of dnsdir's gateways (add NTP servers to one of them)")
+		return errors.New("AnyName is installed on this host, so ntpdir has no gateways of its own: it answers NTP on the addresses of AnyName's gateways (add NTP servers to one of them)")
 	}
 	g, err := findGroup(dc, e.Group)
 	if err != nil || !g.Piggyback {
@@ -279,13 +279,13 @@ func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 	}
 	switch {
 	case e.Kind == "anycast" || e.Kind == "dnsdirvip":
-		return errors.New("this gateway answers on dnsdir's addresses, all of them; they come from dnsdir and cannot be chosen here")
+		return errors.New("this gateway answers on AnyName's addresses, all of them; they come from AnyName and cannot be chosen here")
 	case e.Kind == "gateway" && e.Action == "del":
-		return errors.New("this gateway mirrors a gateway of dnsdir; it goes when dnsdir's gateway does")
+		return errors.New("this gateway mirrors a gateway of AnyName; it goes when AnyName's gateway does")
 	case e.Kind == "gateway" && e.Action == "set" && e.Label != "":
-		return errors.New("this gateway has dnsdir's name for its gateway; rename it in dnsdir")
+		return errors.New("this gateway has AnyName's name for its gateway; rename it in AnyName")
 	case e.Kind == "gateway" && e.Action == "set" && (e.VIP != "" || e.VIP6 != "" || e.Interface != "" || e.Anycast != "" || e.RealMACs != ""):
-		return errors.New("this gateway has no address, interface or virtual MACs of its own: it answers on dnsdir's addresses")
+		return errors.New("this gateway has no address, interface or virtual MACs of its own: it answers on AnyName's addresses")
 	}
 	return nil
 }
