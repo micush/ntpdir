@@ -289,3 +289,15 @@ func piggybackRefusal(dc *DaemonConfig, e canvasEdit) error {
 	}
 	return nil
 }
+
+// piggybackServing says whether this node answers for a gateway that mirrors one of dnsdir's: it holds at least one of its
+// addresses, is not paused, and has an NTP server that answers (or a fallback in use).  g has had markPiggyback applied.
+func piggybackServing(g CanvasGateway) bool {
+	switch g.Status {
+	case "ok":
+		return true
+	case "warn":
+		return len(g.Servers) > 0
+	}
+	return false
+}

@@ -1,5 +1,16 @@
 # Changelog
 
+## [v170] - 2026-10-23 — The sidebar dot of a gateway that mirrors dnsdir's follows the circle
+
+### Fixed
+- The dot beside PHX.SITEDNS / PTX.SITEDNS in the sidebar was red ("No node is serving this gateway") while the circle was green. The cluster counted nodes that serve a gateway from the election, and these gateways have none. A node now counts as serving one when it holds one of its addresses, is not paused and has an NTP server to answer from, and the colour it shares with the other nodes is the circle's.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+### Not verified
+- Not run in a real cluster with dnsdir; the dot's colour in a cluster is covered by the unit test of the serving rule only.
+
 ## [v169] - 2026-10-23 — dnsdir's gateway VIPs are drawn in the circle, not as anycast pills
 
 ### Fixed

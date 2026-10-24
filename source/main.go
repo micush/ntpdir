@@ -474,6 +474,26 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 				}
 			}
 		}
+		// A gateway that mirrors one of dnsdir's has no election, so it is "serving" when this node holds one of its addresses,
+		// is not paused and has an NTP server to answer from; its health is the circle's.
+		var pig []CanvasGateway
+		for _, g := range groups {
+			if g.Piggyback {
+				pig = append(pig, g)
+			}
+		}
+		if len(pig) > 0 {
+			st.markAnycast(pig)
+			markPiggyback(pig)
+			for i := range gs {
+				for _, g := range pig {
+					if g.GroupID == gs[i].GroupID {
+						gs[i].Health, gs[i].HealthWhy = g.Status, g.Detail
+						gs[i].Serving = piggybackServing(g)
+					}
+				}
+			}
+		}
 		return gs
 	}
 	mg.pausedFn = func() bool { return sup.config().NodePaused }

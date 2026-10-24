@@ -268,3 +268,22 @@ func TestPiggybackRefusal(t *testing.T) {
 		}
 	}
 }
+
+func TestPiggybackServing(t *testing.T) {
+	srv := []CanvasServer{{Status: "ok"}}
+	for _, c := range []struct {
+		g    CanvasGateway
+		want bool
+	}{
+		{CanvasGateway{Status: "ok", Servers: srv}, true},
+		{CanvasGateway{Status: "warn", Servers: srv}, true},
+		{CanvasGateway{Status: "warn"}, false},   // no NTP server to answer from
+		{CanvasGateway{Status: "idle"}, false},   // holds none of the addresses
+		{CanvasGateway{Status: "paused"}, false}, // paused here
+		{CanvasGateway{Status: "bad", Servers: srv}, false},
+	} {
+		if got := piggybackServing(c.g); got != c.want {
+			t.Errorf("%s: %v, want %v", c.g.Status, got, c.want)
+		}
+	}
+}
