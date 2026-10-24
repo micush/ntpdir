@@ -1,5 +1,14 @@
 # Changelog
 
+## [v171] - 2026-10-23 — Gateways imported from dnsdir say so, and lose the menu items that are dnsdir's
+
+### Changed
+- A gateway that mirrors one of dnsdir's now says "Imported from dnsdir (gateway N) — its name, addresses and nodes are managed there" above its circle and in its tooltip; the sidebar note reads "Imported from dnsdir" and each gateway's tooltip says so.
+- Its nodes' menu no longer offers *Controller* or *Remove from this gateway*, and the circle's menu no longer offers *Add node*: which node serves a gateway is dnsdir's decision.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race`; looked at the drawing and a node's menu in Chromium against a fake dnsdir.
+
 ## [v170] - 2026-10-23 — The sidebar dot of a gateway that mirrors dnsdir's follows the circle
 
 ### Fixed

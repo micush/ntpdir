@@ -284,13 +284,13 @@
     const box = root.querySelector('.nav-group[data-group="' + TOPO + '"] .nav-items');
     if (!box) return;
     const here = state.tab === "topology";
-    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title, "data-gw": g.id,
+    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title + (g.piggyback ? " — imported from dnsdir" : ""), "data-gw": g.id,
         "aria-current": here && g.id === state.topo.gid ? "page" : null,
         onclick: () => { state.topo.gid = g.id; selectTab("topology"); },
         oncontextmenu: g.piggyback ? null : rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
           ["Delete", () => { state.topo.gid = g.id; state.topo.action = "delete"; selectTab("topology"); }, "danger"]]) },
       h("span", { class: "dot st-" + g.status }), g.label)),
-      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host: these are dnsdir's gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Gateways of dnsdir")
+      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "dnsdir is installed on this host: these are dnsdir's gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Imported from dnsdir")
         : h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
   }
 
@@ -752,7 +752,7 @@
     const gwTip = (g, st, dual) => {
       const fam = (af) => (st.fams[af] ? st.fams[af].detail : "not running");
       const together = dual ? "IPv4: " + fam("v4") + "; IPv6: " + fam("v6") : null;
-      return ["Gateway " + gwLabel(g), st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
+      return ["Gateway " + gwLabel(g), g.piggyback ? "Imported from dnsdir (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there" : "", st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
         ...(dual ? [["IPv4", "v4"], ["IPv6", "v6"]].map(([n, af]) => n + " — " + fam(af)) : []),
         (g.more_vip4 || []).length + (g.more_vip6 || []).length ? "Also answers on " + [...(g.more_vip4 || []), ...(g.more_vip6 || [])].join(", ") : "",
         membersText(st.members), st.vmac && st.vmac.verdict !== "off" && !(st.why || "").startsWith("Virtual MACs:") ? vmacLine(st.vmac) : ""].filter(Boolean).join("\n");
@@ -988,6 +988,7 @@
         window.addEventListener("keydown", key, true);
       };
       const reorder = (list, from, to) => { const [it] = list.splice(from, 1); list.splice(to, 0, it); };
+      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, "Imported from dnsdir (gateway " + g.piggyback_of + ") — its name, addresses and nodes are managed there"));
       shapes.push(sv("g", { class: "shape st-" + st.circle + (sel("gw") ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "Gateway " + gwLabel(g), onclick: pick("gw"), oncontextmenu: rightClick("gw"),
         onkeydown: (e) => { if (e.key === "Enter") pick("gw")(e); } },
         sv("title", {}, gwTip(g, st, dual)),
@@ -1412,7 +1413,7 @@
       else items.push(["Pause" + (noun ? " " + noun : ""), null, "", subs(true), whyNot || ""]);
       return items;
     };
-    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)], ...addNodeItems(g),
+    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)],
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p))] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], ["Add anycast address", () => anycastForm(g)],
       ...(cv.dnsdir && cv.dnsdir.present ? [["Add dnsdir address", () => dnsdirForm(g)]] : []),
       ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
@@ -1549,7 +1550,7 @@
         "It stops serving the gateway — it gives up the address and stops answering NTP — and the other nodes carry on. Other gateways are not affected. Add it back from the same menu.",
         "Remove node", () => quick(() => toggleIn(g, "excluded_nodes", n.node_id, true)), "btn primary");
     }
-    const memberItem = (n) => (curGroup() && n.node_id ? [["Remove from this gateway…", () => nodeMember(n)]] : []);
+    const memberItem = (n) => (curGroup() && !curGroup().piggyback && n.node_id ? [["Remove from this gateway…", () => nodeMember(n)]] : []);
     // the nodes removed from a gateway, by name (an entry for a node that has left the cluster can still be cleared)
     const removedNodes = (g) => {
       const nodes = statusOf(g).nodes || [];
@@ -1615,7 +1616,7 @@
       const pause = [n.node_paused ? "Resume" : "Pause", () => pauseNode(n), "", null, n.node_paused ? "" : lastNodeWhy(n)];
       const rm = memberItem(n).map(([, f]) => ["Remove", f]);
       openMenu(e, n.self || n.reachable
-        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename…", () => renameNode(n)], "-", ["Controller", () => makeController(n), "", null, controllerWhy(n)], ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), pause, ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
+        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename…", () => renameNode(n)], "-", ...(curGroup() && curGroup().piggyback ? [] : [["Controller", () => makeController(n), "", null, controllerWhy(n)]]), ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), pause, ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
         : [["Cluster page", () => selectTab("cluster")], ...rm]);
     };
     // right-click on a shape: select it, then show what can be done with it
