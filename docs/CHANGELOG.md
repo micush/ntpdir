@@ -1,5 +1,11 @@
 # Changelog
 
+## [v182] - 2026-10-25 — Example Grafana dashboard and Prometheus alert rules
+
+### Added
+- Under the **Allowed sources** list of Configure ▸ Monitoring ▸ Metrics: two links, **Grafana dashboard example** and **Prometheus alert rules example**. The dashboard (import it in Grafana) shows the clock offset and stratum, chrony sources, requests, upstream servers, gateways and the host; the rules file (list it under `rule_files:` in `prometheus.yml`; the job is expected to be called `ntpdir`) alerts on a node that cannot be scraped, chrony stopped or not synchronised, a clock offset over 100 ms, a high stratum, no reachable source, no active gateway, a listener down, upstream servers down or false, CPU, memory and full filesystems.
+- When the certificates run out is a metric: `ntpdir_certificate_expires_in_seconds` and `ntpdir_certificate_not_after_timestamp_seconds`, for the web certificate. The dashboard shows the days left and the rules warn at 14 days and 3 days.
+
 ## [v181] - 2026-10-25 — SNMP fields in a better order, short lists without filter and paging
 
 ### Changed

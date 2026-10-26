@@ -2732,7 +2732,9 @@
       const monitoringTabs = () => {
         const TABS = [
           ["SNMP", (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })()],
-          ["Metrics", section("Metrics", prom.el)],
+          ["Metrics", section("Metrics", prom.el, h("p", { class: "muted small" },
+            h("a", { href: "/api/metrics/dashboard.json", download: "ntpdir-grafana-dashboard.json" }, "Grafana dashboard example"), "\u00a0\u00a0-\u00a0\u00a0",
+            h("a", { href: "/api/metrics/alerts.yml", download: "ntpdir-prometheus-alerts.yml" }, "Prometheus alert rules example")))],
         ];
         const panes = TABS.map(([, el]) => h("div", { role: "tabpanel" }, el));
         const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
