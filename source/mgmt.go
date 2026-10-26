@@ -36,7 +36,14 @@ type Mgmt struct {
 	croll    chronyRoll // this node's part in the rolling chrony restart
 	sched    *Scheduler // the scheduled tasks of this node (Operate ▸ Scheduler)
 
-	cfgMu     sync.Mutex // serialises writes of the config file
+	cfgMu sync.Mutex // serialises writes of the config file
+	// pendShared: a replica that has had a change to the shared settings accepted by the primary waits for the primary's
+	// state at that revision (or newer) before it takes any shared settings from the primary: an older state still on its
+	// way would put the old values back for a few seconds (under cfgMu).
+	pendShared struct {
+		rev   uint64
+		until time.Time
+	}
 	webPolicy atomic.Pointer[WebConfig]
 
 	// endSessions signs a user out of the web GUI sessions of this node (set by the web server)
@@ -166,9 +173,16 @@ func (m *Mgmt) PutConfig(dc *DaemonConfig, actor, note string) error {
 	}
 	if m.cl.Enabled() && m.cl.Snapshot().Role == RoleReplica && sharedOf(dc).hash() != sharedOf(cur).hash() {
 		payload := adminSharedConfig{Shared: sharedOf(dc), Seeds: seedsOf(dc)}
-		if _, err := m.cl.forwardAdmin("shared-config", actor, payload); err != nil {
+		out, err := m.cl.forwardAdmin("shared-config", actor, payload)
+		if err != nil {
 			return fmt.Errorf("this node is a replica: the change to the shared settings must be accepted by the primary (%s), and that failed: %w",
 				m.cl.Snapshot().PrimaryAddr, err)
+		}
+		var ans struct {
+			Rev uint64 `json:"rev"`
+		}
+		if json.Unmarshal(out, &ans) == nil && ans.Rev > 0 {
+			m.pendShared.rev, m.pendShared.until = ans.Rev, time.Now().Add(pendSharedWait)
 		}
 	}
 	m.versions.Expect(actor, note)
@@ -183,6 +197,9 @@ func (m *Mgmt) PutConfig(dc *DaemonConfig, actor, note string) error {
 	return nil
 }
 
+// pendSharedWait is the longest a replica waits for the primary to report the revision its own change made.
+const pendSharedWait = time.Minute
+
 // applyClusterShared writes the primary's shared settings into the local file.
 func (m *Mgmt) applyClusterShared(sh SharedConfig, seeds []GroupSeed, rev uint64, from string) {
 	m.cfgMu.Lock()
@@ -191,6 +208,14 @@ func (m *Mgmt) applyClusterShared(sh SharedConfig, seeds []GroupSeed, rev uint64
 	if err != nil {
 		warnf("cluster: cannot read local config: %v", err)
 		return
+	}
+	if m.pendShared.rev != 0 {
+		if time.Now().After(m.pendShared.until) || rev >= m.pendShared.rev {
+			m.pendShared.rev = 0
+		} else {
+			debugf("cluster: not applying shared settings rev %d from %s: a newer one (rev %d) is on its way", rev, from, m.pendShared.rev)
+			return
+		}
 	}
 	hash := sh.hash()
 	changed, err := mergeShared(cur, sh, seeds)
