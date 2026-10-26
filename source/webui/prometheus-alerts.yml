@@ -73,6 +73,13 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }}: upstream server {{ $labels.server }} disagrees with the others"
+      - alert: NtpdirCriticalAlertOpen
+        expr: ntpdir_alerts_active{severity="critical"} > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }}: a critical alert has been open for 10 minutes (see Monitor ▸ Alerts)"
       - alert: NtpdirCertificateExpiresSoon
         expr: ntpdir_certificate_expires_in_seconds < 14 * 86400
         for: 1h

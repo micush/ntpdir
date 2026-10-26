@@ -259,9 +259,9 @@
   // Topology comes first; its items are the gateways themselves (filled in from the daemon).
   const TOPO = "Topology";
   const NAV_GROUPS = [
-    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_monitoring", "Monitoring"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
+    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_monitoring", "Monitoring"], ["cfg_alerts", "Alerts"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
     ["Operate", [["node", "Node"], ["cluster", "Cluster"], ["anycastop", "Anycast"], ["scheduler", "Scheduler"], ["updates", "Upgrade"]]],
-    ["Monitor", [["stats", "Statistics"], ["host", "Host"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["ntp", "NTP"], ["anycaststatus", "Anycast"], ["capture", "Capture"], ["log", "Log"]]],
+    ["Monitor", [["stats", "Statistics"], ["host", "Host"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["ntp", "NTP"], ["anycaststatus", "Anycast"], ["alerts", "Alerts"], ["capture", "Capture"], ["log", "Log"]]],
   ];
   const TABS = [["topology", TOPO]].concat(NAV_GROUPS.flatMap(([, items]) => items));
   const groupOf = (id) => (id === "topology" ? TOPO : (NAV_GROUPS.find(([, items]) => items.some(([i]) => i === id)) || [null])[0]);
@@ -279,6 +279,27 @@
     state.topo.list.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }) || a.id - b.id);   // alphabetical (10.0.0.2 before 10.0.0.10)
     if (!state.topo.list.some((g) => g.id === state.topo.gid)) state.topo.gid = state.topo.list.length ? state.topo.list[0].id : null;
     renderTopoNav();
+  }
+  // A red warning triangle on Monitor ▸ Alerts (and on the Monitor heading, which may be folded) while the node picked in the top bar has an alert
+  // that is open, not acknowledged and not silenced.
+  const alertMark = () => {
+    const m = h("span", { class: "alert-mark", role: "img", title: "There is an alert that needs attention", "aria-label": "alert" });
+    m.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.4 15 14H1z" fill="#fff" stroke="#d32f2f" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 5.9v3.9M8 11.3v1" stroke="#d32f2f" stroke-width="1.7" stroke-linecap="round"/></svg>';
+    return m;
+  };
+  async function refreshAlertMark() {
+    let on = false;
+    try {
+      const v = (await api("GET", "/api/alerts")).data;
+      on = (v.alerts || []).some((a) => !a.closed && !a.acked && !a.silenced_until);
+    } catch (_) { return; }
+    const marks = [root.querySelector('.nav-item[data-tab="alerts"]'), root.querySelector('.nav-group[data-group="Monitor"] .nav-group-label')];
+    for (const el of marks) {
+      if (!el) continue;
+      const old = el.querySelector(".alert-mark");
+      if (on && !old) el.append(alertMark());
+      else if (!on && old) old.remove();
+    }
   }
   function renderTopoNav() {
     const box = root.querySelector('.nav-group[data-group="' + TOPO + '"] .nav-items');
@@ -335,6 +356,8 @@
     refreshNodes();
     state.topoTimer = setInterval(() => { if (!document.hidden) refreshTopoNav(); }, 4000);
     state.nodesTimer = setInterval(() => { if (!document.hidden) refreshNodes(); }, 6000);
+    refreshAlertMark();
+    state.alertTimer = setInterval(() => { if (!document.hidden) refreshAlertMark(); }, 5000);
     loadClock();
     state.clockTimer = setInterval(tickClock, 1000);
     let wanted = location.hash.slice(1);
@@ -484,6 +507,7 @@
       case "anycast": return "anycast_" + (state.anycastTab === 1 ? "ospf" : "bgp");
       case "anycaststatus": return "anycaststatus_" + (state.anycastMonTab === 1 ? "ospf" : "bgp");
       case "anycastop": return "anycastop_" + (state.anycastOpTab === 1 ? "ospf" : "bgp");
+      case "cfg_alerts": return "config_alerts";
       case "cfg_monitoring": return state.monTab === 1 ? "config_metrics" : "config_snmp";
       case "cfg_ntp": return "config_ntp" + (state.ntpTab >= 0 ? state.ntpTab : 0);
       case "users": return state.usersTab === 1 ? "users_ldap" : state.usersTab === 2 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
@@ -658,7 +682,8 @@
     if (state.topoTimer) clearInterval(state.topoTimer);
     if (state.nodesTimer) clearInterval(state.nodesTimer);
     if (state.clockTimer) clearInterval(state.clockTimer);
-    state.topoTimer = state.nodesTimer = state.clockTimer = null;
+    if (state.alertTimer) clearInterval(state.alertTimer);
+    state.topoTimer = state.nodesTimer = state.clockTimer = state.alertTimer = null;
   }
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.timer && VIEWS[state.tab].poll) VIEWS[state.tab].poll().catch(() => {});
@@ -2591,6 +2616,80 @@
 
   // Configure ▸ General, Gateway groups, NTP relay, Web GUI and Cluster: one page each, all made from the one form
   // (every page shows its own panel and saves through the same call).
+  // Configure ▸ Alerts: where alerts are sent, and the rules.  The rules come from the node (its catalog), the settings go back
+  // in the ntp.alerts block; only a rule that was touched is written out in full, so the others keep following the defaults.
+  const ALERT_FIX = { recheck: "Check the upstream servers now", restart_chrony: "Restart chrony" };
+  const alertsForm = (acfg) => {
+    acfg = acfg || {};
+    const saved = acfg.rules || {}, dirty = new Set(), rows = {};
+    const webhook = h("input", { type: "text", value: acfg.webhook || "", placeholder: "https://hooks.example.com/…", spellcheck: "false", autocomplete: "off", "aria-label": "Webhook address" });
+    const repeat = h("input", { type: "number", min: "0", max: "720", value: String(acfg.repeat_hours || 0), "aria-label": "Repeat every (hours)" });
+    const testOut = h("span", { class: "hint" });
+    const test = h("button", { type: "button", class: "btn", onclick: async () => {
+      testOut.textContent = "Sending…";
+      try { await api("POST", "/api/alerts/test", {}); testOut.textContent = "The webhook took the message."; } catch (e) { testOut.textContent = "Not sent: " + e.message; }
+    } }, "Send test");
+    const rulesBox = h("div", {});
+    const num = (v, max) => h("input", { type: "number", min: "0", max: String(max || 100000), step: "any", value: String(v), class: "arule-n" });
+    const sel = (opts, v) => h("select", {}, opts.map(([k, l]) => h("option", { value: k, selected: k === v }, l)));
+    async function fill() {
+      let rules;
+      try { rules = (await api("GET", "/api/alerts")).data.rules; } catch (e) { clear(rulesBox).append(h("div", { class: "hint" }, "The rules could not be read from this node: " + e.message)); return; }
+      const tbody = h("tbody", {});
+      for (const r of rules) {
+        const c = { en: h("input", { type: "checkbox", checked: r.enabled, "aria-label": "On" }), sev: sel([["info", "Info"], ["warning", "Warning"], ["critical", "Critical"]], r.severity_now),
+          clearMode: sel([["checks", "good checks in a row"], ["minutes", "minutes good"]], r.clear_mode), clear: num(r.clear) };
+        let when;
+        if (r.kind === "updown") {
+          c.mode = sel([["in_a_row", "failed checks in a row"], ["minutes", "minutes down"], ["m_of_n", "failed checks of the last"]], r.mode);
+          c.after = num(r.after); c.of = num(r.of, 100);
+          const ofBox = h("span", {}, c.of, " checks");
+          const sync = () => { ofBox.hidden = c.mode.value !== "m_of_n"; };
+          c.mode.addEventListener("change", sync); sync();
+          when = h("span", { class: "arule-when" }, "After ", c.after, " ", c.mode, " ", ofBox);
+        } else {
+          c.thr = num(r.threshold_now); c.forMin = num(r.for_minutes_now, 10080);
+          when = h("span", { class: "arule-when" }, r.below ? "When below " : "When above ", c.thr, " " + r.unit + ", for ", c.forMin, " minutes");
+        }
+        const tr = h("tr", { "data-rule": r.id }, h("td", {}, c.en), h("td", {}, h("div", {}, r.title), h("div", { class: "muted small" }, r.subject ? "One alert per " + r.subject : "")),
+          h("td", {}, c.sev), h("td", {}, when), h("td", {}, h("span", { class: "arule-when" }, "Clear after ", c.clear, c.clearMode)));
+        tr.addEventListener("change", () => dirty.add(r.id));
+        rows[r.id] = { r, c };
+        tbody.append(tr);
+      }
+      clear(rulesBox).append(h("div", { class: "scroll" }, h("table", { class: "tight arules" },
+        h("thead", {}, h("tr", {}, ["On", "Rule", "Severity", "Alert when", "Clear"].map((x) => h("th", {}, x)))), tbody)));
+      if (state.alertRule && rows[state.alertRule]) {
+        const tr = rulesBox.querySelector('tr[data-rule="' + state.alertRule + '"]');
+        if (tr) { tr.classList.add("flash"); tr.scrollIntoView({ block: "center" }); }
+      }
+      state.alertRule = null;
+    }
+    fill();
+    const ruleOf = (id) => {
+      const { r, c } = rows[id];
+      const o = { enabled: c.en.checked, severity: c.sev.value, clear_mode: c.clearMode.value, clear: Number(c.clear.value) };
+      if (r.kind === "updown") { o.mode = c.mode.value; o.after = Number(c.after.value); if (o.mode === "m_of_n") o.of = Number(c.of.value); }
+      else { o.threshold = Number(c.thr.value); o.for_minutes = Number(c.forMin.value); }
+      return o;
+    };
+    return {
+      el: h("div", {},
+        h("div", { class: "grid" }, h("label", { class: "f wide" }, "Webhook address", webhook), h("label", { class: "f" }, "Repeat every (hours)", repeat)),
+        h("div", { class: "toolbar" }, test, testOut), rulesBox),
+      get() {
+        const rules = {};
+        for (const [id, old] of Object.entries(saved)) if (!dirty.has(id)) rules[id] = old;
+        for (const id of dirty) if (rows[id]) rules[id] = ruleOf(id);
+        const a = {};
+        if (webhook.value.trim()) a.webhook = webhook.value.trim();
+        if (Number(repeat.value) > 0) a.repeat_hours = Number(repeat.value);
+        if (Object.keys(rules).length) a.rules = rules;
+        return Object.keys(a).length ? a : undefined;
+      },
+    };
+  };
+
   const makeConfigView = (only) => {
     let holder, status, collect = null, refreshSNMP = () => {}, refreshSyslog = () => {};
     const tab = only;
@@ -2608,6 +2707,8 @@
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
       const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_acl: cfg.ntp.snmp_acl, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
       const prom = fieldset(PROM_FIELDS, { metrics_acl: cfg.ntp.metrics_acl });
+      const alerts = alertsForm(cfg.ntp.alerts);
+      const alertsShared = () => { const a = alerts.get(); return a ? { alerts: a } : {}; };
       // what snmpd is doing, under the form (refreshed after every save)
       const snmpShared = () => { const v = snmp.get(), m = prom.get(); return { snmp_communities: v.snmp_communities, snmp_acl: v.snmp_acl, snmp_contact: v.snmp_contact, metrics_acl: m.metrics_acl }; };
       const snmpLocal = () => { const v = snmp.get(); return { location: v.location }; };
@@ -2684,7 +2785,7 @@
         ...logs.get(),
         // keep what this form has no fields for (a gateway's own NTP pool)
         groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...(g.orig.piggyback ? { piggyback: true, piggyback_of: g.orig.piggyback_of, dnsdir_shared: g.orig.dnsdir_shared } : {}), ...g.fs.get() })),
-        ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared() },
+        ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared(), ...alertsShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
         web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get(), ...ldap.get() },
         cluster: cluster.get(),
@@ -2816,6 +2917,7 @@
           sso.el)],
         ["ldap", "LDAP", section("LDAP sign-in", ldap.el)],
         ["monitoring", "Monitoring", monitoringTabs()],
+        ["alerts", "Alerts", section("Alerts", alerts.el)],
       ];
       for (const [pid, , el] of panels) el.hidden = pid !== tab;
       const form = h("div", {}, ...panels.map((p) => p[2]));
@@ -2878,7 +2980,7 @@
       },
     };
   };
-  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "monitoring"]) VIEWS["cfg_" + id] = makeConfigView(id);
+  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "monitoring", "alerts"]) VIEWS["cfg_" + id] = makeConfigView(id);
 
   // ── shared helpers for the management pages ───────────────────────────────
   // Nothing is said when every node answered (the Node menu says "Cluster"); when one could not, which and why, since the
@@ -4817,6 +4919,84 @@
   })();
 
   // ── Scheduler  (CLI: --schedule, --schedule-history, --schedule-set, --schedule-del, --schedule-run) ──
+  // ── Monitor ▸ Alerts  (CLI: none yet) ───────────────────────────────────────
+  VIEWS.alerts = (() => {
+    let status, box, note, last = "", showClosed = false;
+    const SEV = { critical: "bad", warning: "warn", info: "info" };
+    const at = (u) => (u ? new Date(u * 1000).toLocaleString() : "–");
+    const dur = (s) => { s = Math.max(0, Math.round(s)); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+      return d ? d + "d " + hh + "h" : hh ? hh + "h " + m + "m" : m ? m + "m" : s + "s"; };
+    const say2 = (t) => { note.textContent = t; setTimeout(() => { if (note.textContent === t) note.textContent = ""; }, 6000); };
+    async function call(path, body, done) {
+      try { const r = await api("POST", "/api/alerts/" + path, body); if (r.data && r.data.message) say2(r.data.message); clear(status); await VIEWS.alerts.poll(true); refreshAlertMark(); if (done) done(); } catch (e) { fail(status)(e); }
+    }
+    const copy = async (text) => { try { await navigator.clipboard.writeText(text); } catch (_) { /* no permission */ } };
+    function draw(v) {
+      const sig = JSON.stringify([v, showClosed]);
+      if (sig === last) return;
+      last = sig;
+      const rules = Object.fromEntries(v.rules.map((r) => [r.id, r]));
+      const real = box; box = h("div", {});
+      try {
+        const list = v.alerts.filter((a) => showClosed || !a.closed);
+        const open = v.alerts.filter((a) => !a.closed);
+        const text = (a) => "[" + a.severity + "] " + a.title + (a.subject ? " (" + a.subject + ")" : "") + ": " + a.message;
+        const menu = (a) => {
+          const d = rules[a.rule] || {};
+          const more = [];
+          if (!a.closed) for (const f of d.fix || []) more.push([ALERT_FIX[f] || f, () => call("fix", { id: a.id, action: f })]);
+          if (d.go) more.push(["Go to " + (TABS.find((t) => t[0] === d.go) || [0, d.go])[1], () => selectTab(d.go)]);
+          more.push(["Edit rule…", () => { state.alertRule = a.rule; selectTab("cfg_alerts"); }]);
+          const items = a.closed ? [["Copy", () => copy(text(a))], "-", ["More", more]] : [
+            a.acked ? ["Unacknowledge", () => call("ack", { id: a.id, ack: false })] : ["Acknowledge", () => call("ack", { id: a.id, ack: true })],
+            ["Silence…", [["15 minutes", 15], ["1 hour", 60], ["4 hours", 240], ["1 day", 1440], ["7 days", 10080]].map(([l, m]) => [l, () => call("silence", { id: a.id, minutes: m })])],
+            a.silenced_until ? ["Unsilence", () => call("silence", { id: a.id, minutes: 0 })] : null,
+            ["Mark resolved", () => call("resolve", { id: a.id })],
+            ["Copy", () => copy(text(a))], "-", ["More", more]].filter(Boolean);
+          return rowMenu(items);
+        };
+        const stateCell = (a) => {
+          if (a.closed) return [pill("closed", "ok"), " ", h("span", { class: "small muted" }, ({ cleared: "cleared by itself", manual: "marked resolved" + (a.resolved_by ? " by " + a.resolved_by : ""), "rule off": "rule turned off" })[a.resolution] || a.resolution)];
+          const out = [];
+          if (a.silenced_until) out.push(pill("silenced", ""), " ", h("span", { class: "small muted" }, "until " + at(a.silenced_until)));
+          else if (a.acked) out.push(pill("acknowledged", "info"), " ", h("span", { class: "small muted" }, a.acked_by ? "by " + a.acked_by : ""));
+          else if (a.recovering) out.push(pill("recovering", "warn"));
+          else out.push(pill("open", SEV[a.severity] || ""));
+          return out;
+        };
+        const row = (a) => h("tr", { tabindex: "0", class: a.closed ? "paused" : "", oncontextmenu: menu(a) },
+          h("td", {}, pill(a.severity, SEV[a.severity] || "")),
+          h("td", {}, a.title, a.subject ? h("div", { class: "mono small muted" }, a.subject) : null),
+          h("td", { class: "wrap" }, a.message),
+          h("td", { title: a.closed ? "closed " + at(a.closed) : "" }, at(a.opened), h("div", { class: "small muted" }, a.closed ? "lasted " + dur(a.closed - a.opened) : "for " + dur(v.now - a.opened))),
+          h("td", {}, stateCell(a)),
+          h("td", { class: "num" }, a.count > 1 ? "×" + a.count : ""));
+        const closedBox = h("input", { type: "checkbox", checked: showClosed });
+        closedBox.addEventListener("change", () => { showClosed = closedBox.checked; draw(v); });
+        const crit = open.filter((a) => a.severity === "critical" && !a.silenced_until && !a.acked).length;
+        box.append(section("Alerts of " + v.node,
+          h("div", { class: "toolbar" }, h("label", { class: "nt-opt" }, closedBox, " Show closed"),
+            h("span", { class: "muted small" }, open.length ? open.length + " open" + (crit ? ", " + crit + " critical" : "") : "Nothing is open.")),
+          h("div", { class: "scroll" }, h("table", { class: "tight alerts" },
+            h("thead", {}, h("tr", {}, ["Severity", "Alert", "What is wrong", "Since", "State", ""].map((x) => h("th", {}, x)))),
+            h("tbody", {}, list.length ? list.map(row) : h("tr", {}, h("td", { colspan: 6, class: "empty" }, showClosed ? "No alerts yet." : "No open alerts.")))))));
+        if (v.silences.length) box.append(section("Silences",
+          h("div", { class: "scroll" }, h("table", { class: "tight" },
+            h("thead", {}, h("tr", {}, ["Alert", "Subject", "Until", "By"].map((x) => h("th", {}, x)))),
+            h("tbody", {}, v.silences.map((s) => h("tr", {}, h("td", {}, (rules[s.rule] || { title: s.rule || "any" }).title), h("td", { class: "mono" }, s.subject || "any"), h("td", {}, at(s.until)), h("td", {}, s.by || ""))))))));
+      } finally { morph(real, box); box = real; }
+    }
+    return {
+      async mount(main) {
+        status = h("div", { "aria-live": "polite" }); note = h("div", { class: "hint", "aria-live": "polite" }); box = h("div", {}); last = "";
+        main.append(status, note, box);
+        try { draw((await api("GET", "/api/alerts")).data); } catch (e) { fail(status)(e); }
+      },
+      async poll(force) { if (force) last = ""; draw((await api("GET", "/api/alerts")).data); },
+      poll_ms: 5000,
+    };
+  })();
+
   VIEWS.scheduler = (() => {
     let status, box, last = "", clip = null;
     try { clip = JSON.parse(localStorage.getItem("ntpdir_sched_clip") || "null"); } catch (_) { clip = null; }

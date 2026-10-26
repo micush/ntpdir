@@ -503,6 +503,11 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	mg.tshootFn = func() map[string]any {
 		return map[string]any{"canvas": st.canvasGroups(), "ntp-pools": st.ntpStatus(), "gateway-snapshot": st.snapshot()}
 	}
+	host, _ := os.Hostname()
+	ae := NewAlertEngine(stateDir, host, func() *AlertsConfig { return sup.config().NTP.Alerts })
+	ae.st, ae.mg, ae.sample = st, mg, ae.sampleNode
+	mg.alerts, st.alerts = ae, ae
+	go ae.Run(ctx)
 	if err := st.Start(); err != nil {
 		warnf("status socket unavailable (%s): %v — --show-* commands will not work", sockPath, err)
 	}

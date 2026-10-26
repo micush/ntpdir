@@ -790,6 +790,12 @@ A hand edit of the config file on a *replica* is not a shared edit and is overwr
 
 The Monitor section of the GUI has pages for statistics, the host, packet capture and the log. Each has a command-line equivalent, and in a cluster each follows the node picked in the Node menu at the top right.
 
+### Alerts
+
+**Monitor ▸ Alerts** shows the alerts of the node picked in the top bar; **Configure ▸ Alerts** (`alerts` in the shared `ntp` block: `webhook`, `repeat_hours`, `rules`) holds the rules. The engine looks at the node every 15 seconds. A rule opens an alert when its condition has held long enough: *N failed checks in a row*, *N minutes*, or *M of the last N checks* for up/down rules (chrony not running, clock not synchronised, no time source answers, upstream server down or a falseticker, only fallback servers in use, NTP listener down, no active gateway), and *past a threshold for N minutes* for value rules (clock offset, stratum, certificate days left, CPU, memory, disk; stratum is off by default). It closes by itself after *N good checks in a row* or *N minutes* good (**Clear**). Only rules that are changed are written to the configuration; the others follow the defaults. An alert has a severity (info, warning, critical).
+
+States: open, recovering (good again, clear time not over), acknowledged (ends with the alert), silenced (a silence covers a rule and subject for 15 minutes to 7 days and outlives the alert) and closed (cleared, marked resolved, or rule switched off). An alert that closes and reopens within an hour is the same alert with its count raised. Right-click: Acknowledge, Silence…, Mark resolved, Copy, and More (Fix actions that are safe for the rule - check upstream servers now, restart chrony -, Go to, Edit rule…). Opened and resolved alerts are posted to the webhook as JSON and written to the log; with a repeat time the webhook is told again while the alert stays unacknowledged. Alerts and silences are kept per node in `alerts.json` in the state directory (30 days, 1000 alerts) and are not replicated. `/metrics` carries only counts: `ntpdir_alerts_active{severity}`, `ntpdir_alerts_acknowledged{severity}`, `ntpdir_alerts_opened_total`. API: `GET /api/alerts`, `POST /api/alerts/{ack,silence,resolve,fix,test}`.
+
 ### Statistics
 
 Monitor ▸ Statistics (or `ntpdir --stats`) shows what chrony has done (read from chrony every 10 seconds, so the figures have that granularity):

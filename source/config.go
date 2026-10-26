@@ -506,6 +506,8 @@ type NTPConfig struct {
 	// list means nobody.  Shared by the cluster.  See snmp.go and metrics.go.
 	SNMPACL    []string `json:"snmp_acl,omitempty"`
 	MetricsACL []string `json:"metrics_acl,omitempty"`
+	// Alerts are the rules, thresholds and the webhook of Configure ▸ Alerts (alerts.go).  Shared by the cluster.
+	Alerts *AlertsConfig `json:"alerts,omitempty"`
 	// Schedule is the scheduler's task list (Operate ▸ Scheduler), replicated with the rest; see scheduler.go.
 	Schedule []SchedTask `json:"schedule,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
@@ -1096,6 +1098,14 @@ func (dc *DaemonConfig) Validate() error {
 			return err
 		}
 		dc.NTP.MetricsACL = acl
+		if dc.NTP.Alerts != nil {
+			if err := dc.NTP.Alerts.Validate(); err != nil {
+				return err
+			}
+			if dc.NTP.Alerts.Webhook == "" && dc.NTP.Alerts.RepeatHours == 0 && len(dc.NTP.Alerts.Rules) == 0 {
+				dc.NTP.Alerts = nil
+			}
+		}
 	}
 	if dc.SNMP != nil {
 		// v49 kept communities and contact on the node; they are cluster settings now, so move them over once
@@ -1577,7 +1587,7 @@ func (dc *DaemonConfig) snmpSettings() SNMPConfig {
 // clearNodeWide drops the settings that belong to the node as a whole (SNMP, keys, NTS, leap seconds): a gateway's own pool and
 // the probe pool have no use for them, and a copy of them would only go stale.
 func (d *NTPConfig) clearNodeWide() {
-	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL = nil, "", nil, nil
+	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL, d.Alerts = nil, "", nil, nil, nil
 	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
 	d.Schedule = nil
 }
