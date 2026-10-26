@@ -85,3 +85,12 @@ func parseClientLimits(list []string) ([]limOverride, error) {
 	}
 	return out, nil
 }
+
+func inNets(nets []netip.Prefix, a netip.Addr) bool {
+	for _, p := range nets {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}

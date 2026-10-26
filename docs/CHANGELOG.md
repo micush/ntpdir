@@ -1,5 +1,19 @@
 # Changelog
 
+## [v181] - 2026-10-25 — SNMP fields in a better order, short lists without filter and paging
+
+### Changed
+- Configure ▸ Monitoring ▸ SNMP: **Location** and **Contact** come first, above **Community strings** and **Allowed sources**.
+- The SNMP and Metrics lists no longer have the filter box and the page controls (they are short lists).
+
+## [v180] - 2026-10-25 — Configure ▸ Monitoring: SNMP access list and Metrics
+
+### Added
+- **Configure ▸ SNMP is now Configure ▸ Monitoring**, with two tabs: SNMP and Metrics.
+- SNMP **Allowed sources** (`snmp_acl`): the addresses, networks and host names snmpd answers to. **Empty means nobody**, so a community string answers no one until a source is listed. **After updating, add your monitoring system under Configure ▸ Monitoring ▸ SNMP ▸ Allowed sources, or SNMP stops answering.**
+- **Metrics** tab with **Allowed sources** (`metrics_acl`): who may read `GET /metrics` on the web GUI port, which returns this node's numbers in the Prometheus text format: the clock (synchronised, stratum, offset, chrony's sources, requests received and dropped), each upstream server (health, answer time, stratum, offset, falseticker), the gateways, and the host (CPU, load, memory, swap, disk I/O, filesystems, network interfaces). The page is always there; with the list empty nobody can read it, and everyone not listed gets 403. There is no login, and no client addresses are in it.
+- Both lists take an address (`10.1.1.1`), a network (`10.1.1.0/24`, `2620::/64`; host bits are dropped) or a host name; a name is looked up (SNMP: when snmpd.conf is written and every 5 minutes; metrics: every minute).
+
 ## [v179] - 2026-10-24 — Topology: copy a server and paste it on a gateway
 
 ### Added

@@ -47,8 +47,8 @@ func expectedHelpTopics(sidebar []string) []string {
 			want = append(want, "config_logs", "config_upgrades", "config_cluster")
 		case "cfg_groups":
 			want = append(want, "config_groups")
-		case "cfg_snmp":
-			want = append(want, "config_snmp")
+		case "cfg_monitoring":
+			want = append(want, "config_snmp", "config_metrics")
 		case "cfg_ntp":
 			want = append(want, "config_ntp0", "config_ntp1", "config_ntp2", "config_ntp3", "config_ntp4")
 		case "cfg_web":
@@ -106,7 +106,7 @@ func TestEveryPageHasHelp(t *testing.T) {
 		t.Fatal("app.js does not choose the help panel by tab")
 	}
 	fn := app[at : at+strings.Index(app[at:], "function refreshHelp()")]
-	for _, frag := range []string{"config_logs", "config_upgrades", "config_groups", "config_web", "config_snmp", "config_cluster", "config_ntp", "anycast_", "users_local", "users_sso", "users_ldap"} {
+	for _, frag := range []string{"config_logs", "config_upgrades", "config_groups", "config_web", "config_snmp", "config_metrics", "config_cluster", "config_ntp", "anycast_", "users_local", "users_sso", "users_ldap"} {
 		if !strings.Contains(fn, frag) {
 			t.Errorf("helpTopicKey does not choose %s panels", frag)
 		}

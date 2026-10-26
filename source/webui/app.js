@@ -259,7 +259,7 @@
   // Topology comes first; its items are the gateways themselves (filled in from the daemon).
   const TOPO = "Topology";
   const NAV_GROUPS = [
-    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_snmp", "SNMP"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
+    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_monitoring", "Monitoring"], ["anycast", "Anycast"], ["users", "Users"], ["history", "History"]]],
     ["Operate", [["node", "Node"], ["cluster", "Cluster"], ["anycastop", "Anycast"], ["scheduler", "Scheduler"], ["updates", "Upgrade"]]],
     ["Monitor", [["stats", "Statistics"], ["host", "Host"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["ntp", "NTP"], ["anycaststatus", "Anycast"], ["capture", "Capture"], ["log", "Log"]]],
   ];
@@ -484,7 +484,7 @@
       case "anycast": return "anycast_" + (state.anycastTab === 1 ? "ospf" : "bgp");
       case "anycaststatus": return "anycaststatus_" + (state.anycastMonTab === 1 ? "ospf" : "bgp");
       case "anycastop": return "anycastop_" + (state.anycastOpTab === 1 ? "ospf" : "bgp");
-      case "cfg_snmp": return "config_snmp";
+      case "cfg_monitoring": return state.monTab === 1 ? "config_metrics" : "config_snmp";
       case "cfg_ntp": return "config_ntp" + (state.ntpTab >= 0 ? state.ntpTab : 0);
       case "users": return state.usersTab === 1 ? "users_ldap" : state.usersTab === 2 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
       default: return state.tab;
@@ -2247,9 +2247,13 @@
     { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", min: 0, max: 128, hint: "0 = 8" },
   ];
   const SNMP_FIELDS = [
-    { shared: true, k: "snmp_communities", l: "Community strings", t: "rows", rows: "community", wide: true },
     { k: "location", l: "Location", t: "text" },
     { shared: true, k: "snmp_contact", l: "Contact", t: "text" },
+    { shared: true, k: "snmp_communities", l: "Community strings", t: "rows", rows: "community", wide: true },
+    { shared: true, k: "snmp_acl", l: "Allowed sources", t: "rows", rows: "snmpacl", wide: true },
+  ];
+  const PROM_FIELDS = [
+    { shared: true, k: "metrics_acl", l: "Allowed sources", t: "rows", rows: "metricsacl", wide: true },
   ];
   const CLUSTER_FIELDS = [
     { k: "listen", l: "Binding address", t: "port", hint: "the port, default 12381 (all addresses); or an address with the port: 10.0.0.1:12381" },
@@ -2278,7 +2282,7 @@
   // not complete (outlined and not saved), empty: text for no rows}.
   const rowClips = {};
   // the short lists (a handful of rows) have no filter box and no paging; the long ones (clients, domains, users) do
-  const SMALL_TABLES = new Set(["ldapservers", "servers", "fallback", "neighbors", "morevip4", "morevip6", "community", "keys", "serverauth"]);
+  const SMALL_TABLES = new Set(["ldapservers", "servers", "fallback", "neighbors", "morevip4", "morevip6", "community", "snmpacl", "metricsacl", "keys", "serverauth"]);
   function rowTable(spec, lines) {
     const N = spec.cols.length;
     const small = SMALL_TABLES.has(spec.key);
@@ -2464,6 +2468,8 @@
   const ROW_TABLES = {
     servers: oneCol("servers", "Server", "10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com", "No servers."),
     fallback: oneCol("fallback", "Fallback server", "pool.ntp.org", "No fallback servers."),
+    snmpacl: oneCol("snmpacl", "Address or network", "10.1.0.0/24, 192.0.2.5, 2001:db8::/32", "Nobody may ask."),
+    metricsacl: oneCol("metricsacl", "Address or network", "10.1.0.0/24, 192.0.2.5, 2001:db8::/32", "Nobody may read /metrics."),
     allowedclients: oneCol("allowedclients", "Network", "10.0.0.0/8, 192.168.1.5, 2001:db8::/32", "No restriction: every client may ask."),
     blockedclients: oneCol("blockedclients", "Client or network", "203.0.113.7", "Nobody is blocked."),
     neighbors: oneCol("neighbors", "Neighbor IP address", "10.0.0.2", "No neighbors: multicast."),
@@ -2600,9 +2606,10 @@
       const ldap = ldapTab(cfg.web);
       const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
-      const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
+      const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_acl: cfg.ntp.snmp_acl, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
+      const prom = fieldset(PROM_FIELDS, { metrics_acl: cfg.ntp.metrics_acl });
       // what snmpd is doing, under the form (refreshed after every save)
-      const snmpShared = () => { const v = snmp.get(); return { snmp_communities: v.snmp_communities, snmp_contact: v.snmp_contact }; };
+      const snmpShared = () => { const v = snmp.get(), m = prom.get(); return { snmp_communities: v.snmp_communities, snmp_acl: v.snmp_acl, snmp_contact: v.snmp_contact, metrics_acl: m.metrics_acl }; };
       const snmpLocal = () => { const v = snmp.get(); return { location: v.location }; };
       const snmpPill = h("span");   // ACTIVE beside the heading while snmpd is running
       refreshSNMP = async () => {
@@ -2721,6 +2728,31 @@
       const certBox = h("div", {});
       certBox.addEventListener("change", (e) => e.stopPropagation());
       VIEWS.certificate.mount(certBox);
+      // the Monitoring page is two tabs: SNMP and Metrics (every card stays in the page, so a save reads both)
+      const monitoringTabs = () => {
+        const TABS = [
+          ["SNMP", (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })()],
+          ["Metrics", section("Metrics", prom.el)],
+        ];
+        const panes = TABS.map(([, el]) => h("div", { role: "tabpanel" }, el));
+        const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
+        function show(i, focus) {
+          state.monTab = i;
+          refreshHelp();
+          panes.forEach((p, j) => { p.hidden = j !== i; });
+          buttons.forEach((b, j) => { b.setAttribute("aria-selected", j === i ? "true" : "false"); b.tabIndex = j === i ? 0 : -1; b.classList.toggle("on", j === i); });
+          if (focus) buttons[i].focus();
+        }
+        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "Monitoring settings" }, buttons);
+        strip.addEventListener("keydown", (e) => {
+          const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+          if (!d) return;
+          e.preventDefault();
+          show((state.monTab + d + TABS.length) % TABS.length, true);
+        });
+        show(state.monTab >= 0 && state.monTab < TABS.length ? state.monTab : 0);
+        return h("div", {}, strip, ...panes);
+      };
       // Syslog: the state of the connection is shown under the settings, with a button that sends a test message
       const syslogState = h("div", { class: "hint" });
       const syslogMsg = h("span", { class: "hint" });
@@ -2781,7 +2813,7 @@
         ["sso", "SSO", section("Single sign-on",
           sso.el)],
         ["ldap", "LDAP", section("LDAP sign-in", ldap.el)],
-        ["snmp", "SNMP", h("div", {}, (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })())],
+        ["monitoring", "Monitoring", monitoringTabs()],
       ];
       for (const [pid, , el] of panels) el.hidden = pid !== tab;
       const form = h("div", {}, ...panels.map((p) => p[2]));
@@ -2844,7 +2876,7 @@
       },
     };
   };
-  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "snmp"]) VIEWS["cfg_" + id] = makeConfigView(id);
+  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "monitoring"]) VIEWS["cfg_" + id] = makeConfigView(id);
 
   // ── shared helpers for the management pages ───────────────────────────────
   // Nothing is said when every node answered (the Node menu says "Cluster"); when one could not, which and why, since the

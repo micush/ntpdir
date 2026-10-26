@@ -501,6 +501,11 @@ type NTPConfig struct {
 	LeapMode    string   `json:"leap_mode,omitempty"`
 	LeapSmear   bool     `json:"leap_smear,omitempty"`
 	SNMPContact string   `json:"snmp_contact,omitempty"`
+	// SNMPACL is the sources snmpd answers to ("10.1.1.50", "10.1.0.0/24", "nms.example.com"); empty = nobody.  MetricsACL is
+	// who may read /metrics on the web GUI port (Configure ▸ Monitoring ▸ Metrics); the page is always there, and an empty
+	// list means nobody.  Shared by the cluster.  See snmp.go and metrics.go.
+	SNMPACL    []string `json:"snmp_acl,omitempty"`
+	MetricsACL []string `json:"metrics_acl,omitempty"`
 	// Schedule is the scheduler's task list (Operate ▸ Scheduler), replicated with the rest; see scheduler.go.
 	Schedule []SchedTask `json:"schedule,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
@@ -1081,18 +1086,23 @@ func (dc *DaemonConfig) Validate() error {
 		dc.NTP.Schedule = nil
 	}
 	{
-		sc := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact}
+		sc := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact, ACL: dc.NTP.SNMPACL}
 		if err := sc.Validate(); err != nil {
 			return err
 		}
-		dc.NTP.SNMPCommunities, dc.NTP.SNMPContact = sc.Communities, sc.Contact
+		dc.NTP.SNMPCommunities, dc.NTP.SNMPContact, dc.NTP.SNMPACL = sc.Communities, sc.Contact, sc.ACL
+		acl, err := normACL("metrics", dc.NTP.MetricsACL)
+		if err != nil {
+			return err
+		}
+		dc.NTP.MetricsACL = acl
 	}
 	if dc.SNMP != nil {
 		// v49 kept communities and contact on the node; they are cluster settings now, so move them over once
 		if len(dc.NTP.SNMPCommunities) == 0 && dc.NTP.SNMPContact == "" && (len(dc.SNMP.Communities) > 0 || dc.SNMP.Contact != "") {
 			dc.NTP.SNMPCommunities, dc.NTP.SNMPContact = dc.SNMP.Communities, dc.SNMP.Contact
 		}
-		dc.SNMP.Communities, dc.SNMP.Contact = nil, ""
+		dc.SNMP.Communities, dc.SNMP.Contact, dc.SNMP.ACL = nil, "", nil
 		if err := dc.SNMP.Validate(); err != nil {
 			return err
 		}
@@ -1557,7 +1567,7 @@ func (g GroupConfig) pausedAnycast() map[string]string {
 
 // snmpSettings is the whole SNMP configuration of this node: the cluster's communities and contact, this node's location.
 func (dc *DaemonConfig) snmpSettings() SNMPConfig {
-	c := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact}
+	c := SNMPConfig{Communities: dc.NTP.SNMPCommunities, Contact: dc.NTP.SNMPContact, ACL: dc.NTP.SNMPACL}
 	if dc.SNMP != nil {
 		c.Location = dc.SNMP.Location
 	}
@@ -1567,7 +1577,7 @@ func (dc *DaemonConfig) snmpSettings() SNMPConfig {
 // clearNodeWide drops the settings that belong to the node as a whole (SNMP, keys, NTS, leap seconds): a gateway's own pool and
 // the probe pool have no use for them, and a copy of them would only go stale.
 func (d *NTPConfig) clearNodeWide() {
-	d.SNMPCommunities, d.SNMPContact = nil, ""
+	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL = nil, "", nil, nil
 	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
 	d.Schedule = nil
 }

@@ -33,7 +33,12 @@ type Supervisor struct {
 	ospfAC   *OSPFConfig               // OSPF settings, likewise (guarded by pausedMu)
 	pausedAC map[int]map[string]string // gateway -> anycast address -> where it is paused; read by the anycast loops without s.mu
 	dc       *DaemonConfig
-	engines  map[engineKey]*Engine
+
+	metricsMu    sync.Mutex // the /metrics access list as networks (metrics.go)
+	metricsKey   string
+	metricsAt    time.Time
+	metricsCache []netip.Prefix
+	engines      map[engineKey]*Engine
 
 	// Upstream pools.  Key 0 is the shared pool built from the top-level "ntp"
 	// block; any other key is a group id whose group has its own "ntp" block.

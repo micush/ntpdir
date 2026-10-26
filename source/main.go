@@ -434,6 +434,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	sup.StartAll()
 	qstats.SetNames(dc.NTP.ClientNames)
 	go applySNMP(dc.snmpSettings())
+	go snmpRefresh(ctx, sup)
 	go memguard.Run(ctx.Done())
 	go mg.sched.Run(ctx)
 	go sup.RunReevaluate(ctx)
