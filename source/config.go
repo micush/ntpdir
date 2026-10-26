@@ -508,6 +508,8 @@ type NTPConfig struct {
 	MetricsACL []string `json:"metrics_acl,omitempty"`
 	// Alerts are the rules, thresholds and the webhook of Configure ▸ Alerts (alerts.go).  Shared by the cluster.
 	Alerts *AlertsConfig `json:"alerts,omitempty"`
+	// Backup is the automatic off-host backup of Configure ▸ Backup (backup.go).  Shared by the cluster.
+	Backup *BackupConfig `json:"backup,omitempty"`
 	// Schedule is the scheduler's task list (Operate ▸ Scheduler), replicated with the rest; see scheduler.go.
 	Schedule []SchedTask `json:"schedule,omitempty"`
 	// ClientRate limits each client (an IPv4 address or an IPv6 /64) to this many requests a second; 0 (the default)
@@ -1098,6 +1100,14 @@ func (dc *DaemonConfig) Validate() error {
 			return err
 		}
 		dc.NTP.MetricsACL = acl
+		if dc.NTP.Backup != nil {
+			if err := dc.NTP.Backup.Validate(); err != nil {
+				return err
+			}
+			if dc.NTP.Backup.empty() {
+				dc.NTP.Backup = nil
+			}
+		}
 		if dc.NTP.Alerts != nil {
 			if err := dc.NTP.Alerts.Validate(); err != nil {
 				return err
@@ -1587,7 +1597,7 @@ func (dc *DaemonConfig) snmpSettings() SNMPConfig {
 // clearNodeWide drops the settings that belong to the node as a whole (SNMP, keys, NTS, leap seconds): a gateway's own pool and
 // the probe pool have no use for them, and a copy of them would only go stale.
 func (d *NTPConfig) clearNodeWide() {
-	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL, d.Alerts = nil, "", nil, nil, nil
+	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL, d.Alerts, d.Backup = nil, "", nil, nil, nil, nil
 	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
 	d.Schedule = nil
 }

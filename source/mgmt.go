@@ -22,7 +22,8 @@ import (
 type Mgmt struct {
 	confPath string
 	stateDir string
-	alerts   *AlertEngine // this node's alerts (alerts.go)
+	alerts   *AlertEngine  // this node's alerts (alerts.go)
+	backup   *BackupEngine // this node's backups (backup.go)
 
 	capture captureState // this node's Capture page
 	capjobs capJobs      // the cluster-wide capture

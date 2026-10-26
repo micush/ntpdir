@@ -275,6 +275,7 @@ func cloneNTP(d NTPConfig) NTPConfig {
 		d.SNMPCommunities = nil
 	}
 	d.Alerts = d.Alerts.clone()
+	d.Backup = d.Backup.clone()
 	d.SNMPACL = append([]string(nil), d.SNMPACL...)
 	if len(d.SNMPACL) == 0 {
 		d.SNMPACL = nil

@@ -132,6 +132,7 @@ the web GUI):
                    --cluster-delete ADDR  --cluster-unremove ADDR  --cluster-leave  --cluster-sync
                    (GUI: the Node menu, top right, configures any member)
   Upgrade          --update-status  --update-history  --update-upload FILE
+  Backup           --backup-status  --backup-now  --restore FILE [--restore-password-file F]
                    --update-apply  --update-push all|ADDR,...
                    --update-cancel all|ADDR,...  --update-auto on|off
                    --update-repo URL|default   (where "fetch online" downloads from;
@@ -286,6 +287,10 @@ func main() {
 		sock         = fs.String("status-socket", statusSocket, "")
 		level        = fs.String("log-level", "", "")
 		stateDir     = fs.String("state-dir", defaultStateDir, "")
+		restoreFile  = fs.String("restore", "", "")
+		restorePwF   = fs.String("restore-password-file", "", "")
+		backupNow    = fs.Bool("backup-now", false, "")
+		backupStat   = fs.Bool("backup-status", false, "")
 		cli          = registerCLIFlags(fs)
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -332,6 +337,18 @@ func main() {
 		return
 	case *showNTP:
 		showNTPTable(*sock)
+		return
+	case *restoreFile != "":
+		if err := runRestore(*restoreFile, *restorePwF, *stateDir, *conf, *sock); err != nil {
+			fatal(err)
+		}
+		return
+	case *backupNow:
+		op(*sock, "backup.run", nil)
+		fmt.Println("A backup has started on this node. See how it went with: ntpdir --backup-status")
+		return
+	case *backupStat:
+		showBackupStatus(*sock)
 		return
 	case cli.run(*sock):
 		return
@@ -508,6 +525,9 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	ae.st, ae.mg, ae.sample = st, mg, ae.sampleNode
 	mg.alerts, st.alerts = ae, ae
 	go ae.Run(ctx)
+	be := NewBackupEngine(stateDir, confFile, host, func() *BackupConfig { return sup.config().NTP.Backup })
+	mg.backup = be
+	go be.Run(ctx)
 	if err := st.Start(); err != nil {
 		warnf("status socket unavailable (%s): %v — --show-* commands will not work", sockPath, err)
 	}

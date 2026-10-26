@@ -25,6 +25,7 @@ var alertDefs = []alertDef{
 	{ID: "listener_down", Title: "NTP listener down", Subject: "gateway", Kind: "updown", Sev: "critical", On: true, Fix: []string{"restart_chrony"}, Go: "gateways"},
 	{ID: "no_active_gateway", Title: "No active gateway", Subject: "gateway", Kind: "updown", Sev: "critical", On: true, Go: "gateways"},
 	{ID: "certificate_expiring", Title: "Certificate about to expire", Subject: "certificate", Kind: "value", Sev: "warning", On: true, Unit: "days left", Below: true, Thresh: 14, ForMin: 0, Go: "cfg_web"},
+	{ID: "backup_failed", Title: "Backup failed", Subject: "", Kind: "updown", Sev: "warning", On: true, DefMode: "minutes", DefAfter: 30, Go: "cfg_backup"},
 	{ID: "cpu_high", Title: "CPU busy", Subject: "", Kind: "value", Sev: "warning", On: true, Unit: "% CPU", Thresh: 90, ForMin: 15, Go: "host"},
 	{ID: "memory_high", Title: "Memory nearly full", Subject: "", Kind: "value", Sev: "warning", On: true, Unit: "% memory", Thresh: 90, ForMin: 15, Go: "host"},
 	{ID: "disk_full", Title: "Disk nearly full", Subject: "filesystem", Kind: "value", Sev: "warning", On: true, Unit: "% full", Thresh: 90, ForMin: 10, Go: "host"},
@@ -136,6 +137,11 @@ func (e *AlertEngine) sampleNode(now time.Time) []alertSample {
 			days := time.Until(lc.info.NotAfter).Hours() / 24
 			out = append(out, alertSample{Rule: "certificate_expiring", Subject: "web", Value: days, Bad: days < e.threshold("certificate_expiring"),
 				Message: fmt.Sprintf("the web certificate runs out on %s (%.0f days)", lc.info.NotAfter.Format("2006-01-02"), days)})
+		}
+	}
+	if e.mg != nil && e.mg.backup != nil {
+		if failing, enabled, msg := e.mg.backup.Failing(); enabled {
+			out = append(out, alertSample{Rule: "backup_failed", Bad: failing, Message: "the last backup failed: " + msg})
 		}
 	}
 	if h := hoststats.lastNow(); h.At != 0 {

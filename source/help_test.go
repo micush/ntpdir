@@ -49,6 +49,8 @@ func expectedHelpTopics(sidebar []string) []string {
 			want = append(want, "config_groups")
 		case "cfg_alerts":
 			want = append(want, "config_alerts")
+		case "cfg_backup":
+			want = append(want, "config_backup")
 		case "cfg_monitoring":
 			want = append(want, "config_snmp", "config_metrics")
 		case "cfg_ntp":
