@@ -1,48 +1,19 @@
 # Changelog
 
-## [v188] - 2026-10-27 — Backup page redesigned (ported from dnsdir v590-v595)
-
-### Changed
-- **Configure ▸ Backup has three cards: Schedule, Servers and Restore.** The explanations are in the "?" help, not on the page.
-  - **Schedule**: Last backup and Next backup, with **Back up now**, **Schedule daily backups** (when there is no task) and **Open Scheduler** under them.
-  - **Servers**: one table with this node's status under each row. Click a row, then use **Add a server**, **Test**, **Install key…** or **Remove** above the table. Install key puts the keys of every node of the cluster on the server. In a cluster the card is tagged *shared*. The SSH-key text box is gone; `ntpdir --backup-status` still prints the key.
-  - **Restore**: your servers come first, and this node's backups on the picked one are listed at once. **All nodes** lists every node's backups. **Restore** asks one confirmation; for another node's backup that confirmation is an "Are you sure?" saying this node becomes that node. **Another server…** and **A file from this computer** stay for new nodes.
-- **Backups are a Scheduler task.** There is a new action `backup` ("Back up this node"). It goes to every server and waits, and the task's history names the servers that failed.
-  - **Migration.** The `enabled`, `hours` and `at` of v184-v187 become such a task when the configuration file is read (local time converted to UTC) and are then dropped, so backups that were on stay on.
-  - Between runs a failed server is retried after 15 minutes, and a new server gets its first backup at once, only while a backup task runs on the node. The alert **Backup failed** follows the same rule.
-- **No archive password.** New archives are sealed without one (the format and its tamper check are kept). Anyone who can read a file can read the private keys in it, so the help says to keep the backup directories private.
-  - A restore tries no password first, then the v184-v187 password still in the settings, which the page keeps without showing.
-  - `ntpdir --restore` asks for a password only when an older archive needs one.
+## [v188] - 2026-10-27 — Fix two CodeQL code-scanning alerts (Zip Slip, integer conversion)
 
 ### Fixed
-- **Remove** on a backup server did not save.
-- Typing in the restore fields started a configuration save.
-- The Restore card did not pick up a server added in the same visit.
-- **Errors now say what went wrong.**
-  - "Connection closed" now shows sftp's real reason, for example "the server refused this node's key; use Install key… on this server".
-  - A missing ssh-keygen or sftp says to install the OpenSSH client.
-  - Listing errors show on their own line under the Restore row.
+- **Backup restore path check (CodeQL "Zip Slip", `backup.go`).** `readBackupArchive` already refused absolute names and `..` prefixes, but by string tests CodeQL could not follow. Entry names are now checked with `filepath.IsLocal`, and the destination is built by a new `backupDest`, which joins the name onto the absolute target directory and refuses anything that is not strictly below it (prefix check plus `filepath.Rel`). Links, devices and non-regular entries are still refused as before.
+- **Chrony client counters (CodeQL "Incorrect conversion between integer types", `chronysrc.go`).** The per-poll packet/drop deltas (64-bit, parsed with `strconv.ParseUint`) were narrowed with `uint32(min(x, 1<<30))`, which CodeQL does not see as a bound. A new `clampCount` does the same cap (1<<30) with an explicit comparison before the conversion. Behaviour is unchanged.
 
 ### Verified
-- `gofmt -l .` (empty), `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, and cross-builds for linux/amd64, arm64, arm, 386 and riscv64. The PAM path was checked only on the native amd64 build.
-- The backup tests of dnsdir v590-v595 came along. They cover:
-  - restoring with no password and with the old one
-  - the Scheduler action and only retrying while scheduled
-  - the schedule migration, including through `loadConfig`
-  - sftp error lines and missing tools
-  - the password having no limits
-- Live: a scratch daemon with a v187-style backup block (`enabled`, `at` 03:15 in America/Phoenix, an old password), a real PAM user, and a fake SFTP server (`NTPDIR_SFTP` and `NTPDIR_SSHKEYGEN` scripts) with one server that answers and one that refuses the key. Checked in Chromium, light and dark:
-  - `--schedule` showed the migrated task at 10:15 to 10:20 UTC.
-  - The page had no password field.
-  - A backup reached the working server, and the refusing server's row and listing showed the refused-key message.
-  - The list showed this node's backups, and All nodes showed the other node's too.
-  - The other node's backup asked one "Are you sure?", and declining left nothing pending.
-  - This node's older, password-sealed backup restored with the password from the settings, after one confirmation. The daemon restarted into it and kept the old state in `state.before-restore-…`.
-- The README gains a Backup section (it had none) and the `backup` Scheduler action.
+- `gofmt -l .` (empty), `go build`, `go vet ./...`, `go test -race -count=1 ./...` (pass); `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` (pass); cross-compiles for linux/amd64, arm64, arm, 386, riscv64.
+- New tests: `TestBackupDestStaysInsideTheDirectory`, `TestClampCount`; `TestBackupRestoreRefusesBadPaths` extended with `./../evil`, `..`, `a/..`, `x/../../../evil`.
+- CodeQL CLI (latest bundle, `go-security-and-quality` suite) run on v187 and on this tree: both alerts are reported on v187 and gone here; no new alerts.
+- Native build is the only one verified with PAM; cross-compiles build the fail-closed stub.
 
 ### Not verified
-- A real OpenSSH server.
-- A multi-node cluster (the shared tag, Install key across nodes, and migration on replicas).
+- No live `chronyd -x` run: the change in `chronysrc.go` is limited to the counter cap in the client statistics and does not touch sources, the pool or client settings.
 
 ## [v187] - 2026-10-26 — Server form: erasing the name looks the address up again
 

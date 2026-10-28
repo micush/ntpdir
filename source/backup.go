@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"net"
@@ -35,10 +36,9 @@ import (
 // puts it on a server of the operator's, over SFTP.  The archives are named after the node, and only the newest few are
 // kept there.  The settings are shared by the cluster; the SSH key is each node's own.
 //
-// The archive is a tar.gz that is sealed in 64 KiB pieces with AES-256-GCM; the key comes from a password with
-// PBKDF2-HMAC-SHA256.  Since v188 there is no password to set: the archives are sealed with an empty one, which keeps the
-// format (and its check for a cut-off or changed file) but anyone with the file can open it.  Archives that v184-v187
-// made with a password are opened with the one still in the settings (BackupConfig.Password), or the one given.
+// The archive is a tar.gz that is sealed in 64 KiB pieces with AES-256-GCM; the key comes from the password with
+// PBKDF2-HMAC-SHA256.  The password is part of the configuration, so it is in the backup itself: keep it somewhere else
+// too, because it is the one thing a restore cannot read out of the archive.
 
 const (
 	backupProduct  = "ntpdir"
@@ -68,16 +68,12 @@ type BackupTarget struct {
 
 // BackupConfig is the "backup" block of the shared settings (Configure ▸ Backup).
 type BackupConfig struct {
-	Targets []BackupTarget `json:"targets,omitempty"`
-	// Password is what the archives of v184-v187 were sealed with.  It is no longer set or used for new archives; a restore
-	// tries it when an archive does not open without one.
-	Password string `json:"password,omitempty"`
-	// When backups run is a Scheduler task (action "backup").  Enabled, Hours and At are the schedule of v184-v187: when the
-	// configuration is read, migrateBackupSchedule turns them into such a task and clears them.
-	Enabled bool   `json:"enabled,omitempty"`
-	Hours   int    `json:"hours,omitempty"` // 0: once a day at At; N: every N hours
-	At      string `json:"at,omitempty"`    // HH:MM, the node's local time (02:30 when empty)
-	// the one server of v184, which becomes the first of Targets when the block is read
+	Enabled  bool           `json:"enabled,omitempty"`
+	Targets  []BackupTarget `json:"targets,omitempty"`
+	Hours    int            `json:"hours,omitempty"` // 0: once a day at At; N: every N hours
+	At       string         `json:"at,omitempty"`    // HH:MM, this node's local time (02:30 when empty)
+	Password string         `json:"password,omitempty"`
+	// the one server of v582, which becomes the first of Targets when the block is read
 	Host string `json:"host,omitempty"`
 	Port int    `json:"port,omitempty"`
 	User string `json:"user,omitempty"`
@@ -129,6 +125,13 @@ func (t *BackupTarget) label() string {
 	return t.Host
 }
 
+func (c *BackupConfig) at() string {
+	if c.At == "" {
+		return "02:30"
+	}
+	return c.At
+}
+
 func (t *BackupTarget) validate() error {
 	t.Name, t.Host, t.User, t.Dir = strings.TrimSpace(t.Name), strings.TrimSpace(t.Host), strings.TrimSpace(t.User), strings.TrimSpace(t.Dir)
 	if len(t.Name) > 64 || hasControl(t.Name) {
@@ -159,7 +162,7 @@ func (t BackupTarget) empty() bool { return t == BackupTarget{} }
 // Validate cleans the block up and says what is wrong with it.
 func (c *BackupConfig) Validate() error {
 	c.At = strings.TrimSpace(c.At)
-	if c.Host != "" || c.User != "" || c.Dir != "" || c.Port != 0 || c.Keep != 0 { // the single server of v184
+	if c.Host != "" || c.User != "" || c.Dir != "" || c.Port != 0 || c.Keep != 0 { // the single server of v582
 		c.Targets = append([]BackupTarget{{Host: c.Host, Port: c.Port, User: c.User, Dir: c.Dir, Keep: c.Keep}}, c.Targets...)
 		c.Host, c.Port, c.User, c.Dir, c.Keep = "", 0, "", "", 0
 	}
@@ -192,6 +195,17 @@ func (c *BackupConfig) Validate() error {
 	}
 	if c.At != "" && !backupAtRe.MatchString(c.At) {
 		return errors.New("backup: the time of day is HH:MM")
+	}
+	if len(c.Password) > 512 || hasControl(c.Password) {
+		return errors.New("backup: the password is not valid")
+	}
+	if c.Enabled {
+		switch {
+		case len(c.Targets) == 0:
+			return errors.New("backup: say which server to back up to")
+		case len(c.Password) < 8:
+			return errors.New("backup: the password that encrypts the archives needs at least 8 characters")
+		}
 	}
 	return nil
 }
@@ -507,7 +521,7 @@ func readBackupArchive(r io.Reader, password, dir string) (*backupManifest, erro
 			return nil, fmt.Errorf("the backup is damaged: %v", err)
 		}
 		name := path.Clean(h.Name)
-		if h.Typeflag != tar.TypeReg || name == "." || path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "\\") {
+		if h.Typeflag != tar.TypeReg || name == "." || strings.Contains(name, "\\") || !filepath.IsLocal(filepath.FromSlash(name)) {
 			return nil, fmt.Errorf("the backup holds an entry that is not allowed: %q", h.Name)
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, backupMaxFile+1))
@@ -525,7 +539,10 @@ func readBackupArchive(r io.Reader, password, dir string) (*backupManifest, erro
 		if man == nil {
 			return nil, errors.New("the backup has no manifest")
 		}
-		dst := filepath.Join(dir, filepath.FromSlash(name))
+		dst, err := backupDest(dir, name)
+		if err != nil {
+			return nil, fmt.Errorf("the backup holds an entry that is not allowed: %q", h.Name)
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return nil, err
 		}
@@ -541,6 +558,27 @@ func readBackupArchive(r io.Reader, password, dir string) (*backupManifest, erro
 		return nil, errors.New("the backup has no manifest")
 	}
 	return man, nil
+}
+
+// backupDest maps an archive entry name to its path under dir, and refuses any name that would land outside dir
+// (absolute, "..", or anything that does not resolve below dir after cleaning).
+func backupDest(dir, name string) (string, error) {
+	if !filepath.IsLocal(filepath.FromSlash(name)) {
+		return "", errors.New("path leaves the target directory")
+	}
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	dst := filepath.Join(base, filepath.FromSlash(name))
+	if !strings.HasPrefix(dst, base+string(filepath.Separator)) {
+		return "", errors.New("path leaves the target directory")
+	}
+	rel, err := filepath.Rel(base, dst)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", errors.New("path leaves the target directory")
+	}
+	return dst, nil
 }
 
 // restoreBackup unpacks a backup file and puts its contents in place of the state directory's own.  The daemon must not be
@@ -679,59 +717,26 @@ func runSFTP(ctx context.Context, t *BackupTarget, dir string, script, password 
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
-	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-		return "", errors.New(backupMissingTool("sftp"))
-	}
 	if err != nil {
-		return out.String(), errors.New(sftpError(out.String(), err, password != ""))
+		msg := strings.TrimSpace(out.String())
+		if i := strings.LastIndexByte(msg, '\n'); i >= 0 {
+			msg = strings.TrimSpace(msg[i+1:])
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out.String(), errors.New(msg)
 	}
 	return out.String(), nil
-}
-
-// sftpError picks the line of sftp's output that says why it failed.  sftp ends with "Connection closed", which says
-// nothing; the reason is the line before it (for example "user@host: Permission denied (publickey)").
-func sftpError(out string, err error, withPassword bool) string {
-	msg := ""
-	for _, l := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
-		l = strings.TrimSpace(l)
-		switch {
-		case l == "", strings.HasPrefix(l, "sftp>"), strings.HasPrefix(l, "Connection closed"), strings.HasPrefix(l, "Warning: Permanently added"):
-		default:
-			msg = l
-		}
-	}
-	switch {
-	case msg == "":
-		return "the connection was closed: " + err.Error()
-	case strings.Contains(msg, "Permission denied") && !withPassword:
-		return "the server refused this node's key; use Install key… on this server"
-	case strings.Contains(msg, "Permission denied"):
-		return "wrong password, or that account may not log in"
-	case strings.Contains(msg, "Host key verification failed"), strings.Contains(msg, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
-		return "the server's host key is not the one this node saw before (" + msg + ")"
-	}
-	return msg
 }
 
 // backupKeygen makes the node's SSH key (replaceable in tests).
 var backupKeygen = func(file, comment string) error {
 	out, err := exec.Command(envOr(backupEnv+"_SSHKEYGEN", "ssh-keygen"), "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", file).CombinedOutput()
-	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-		return errors.New(backupMissingTool("ssh-keygen"))
-	}
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("could not make the SSH key (ssh-keygen: %s)", msg)
+		return fmt.Errorf("ssh-keygen: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// backupMissingTool says which OpenSSH program this node lacks and what to install.
-func backupMissingTool(name string) string {
-	return name + " is not installed on this node: install the OpenSSH client (openssh-client, or openssh-clients on RHEL/Fedora)"
 }
 
 // ── the engine ───────────────────────────────────────────────────────────────
@@ -767,18 +772,16 @@ type BackupEngine struct {
 	now       func() time.Time
 	status    BackupStatus
 	running   bool
+	jitter    time.Duration
 	runCtx    context.Context
 	onRunDone func()
-	// scheduled says the Scheduler has a backup task that runs on this node: only then are failed servers tried again, and
-	// a server added later gets its first backup at once.
-	scheduled func() bool
 }
 
-func (e *BackupEngine) isScheduled() bool { return e.scheduled != nil && e.scheduled() }
-
 func NewBackupEngine(stateDir, confFile, node string, cfg func() *BackupConfig) *BackupEngine {
+	h := fnv.New32a()
+	h.Write([]byte(node))
 	e := &BackupEngine{dir: filepath.Join(stateDir, "backup"), stateDir: stateDir, confFile: confFile, node: node, cfg: cfg, now: time.Now,
-		runCtx: context.Background()}
+		jitter: time.Duration(h.Sum32()%300) * time.Second, runCtx: context.Background()}
 	if b, err := os.ReadFile(filepath.Join(e.dir, "status.json")); err == nil {
 		_ = json.Unmarshal(b, &e.status)
 	}
@@ -847,11 +850,10 @@ func (e *BackupEngine) Status() map[string]any {
 			ts = append(ts, map[string]any{"label": t.label(), "host": t.Host, "user": t.User, "status": st})
 		}
 	}
-	sched := e.isScheduled()
-	out := map[string]any{"status": e.status, "targets": ts, "running": e.running, "node": e.nodeName(), "public_key": strings.TrimSpace(string(pub)), "enabled": sched}
-	if c != nil && sched && !e.running {
-		if _, next := e.retryLocked(c); !next.IsZero() {
-			out["retry"] = next.Unix()
+	out := map[string]any{"status": e.status, "targets": ts, "running": e.running, "node": e.nodeName(), "public_key": strings.TrimSpace(string(pub)), "enabled": c != nil && c.Enabled}
+	if c != nil && c.Enabled {
+		if next := e.nextLocked(c); !next.IsZero() {
+			out["next"] = next.Unix()
 		}
 	}
 	if p := e.pendingSummary(); p != nil {
@@ -865,9 +867,8 @@ func (e *BackupEngine) Failing() (failing, enabled bool, msg string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	c := e.cfg()
-	sched := e.isScheduled()
-	if c == nil || !sched || e.running {
-		return false, c != nil && sched, ""
+	if c == nil || !c.Enabled || e.running {
+		return false, c != nil && c.Enabled, ""
 	}
 	var bad []string
 	for i := range c.Targets {
@@ -894,6 +895,29 @@ func (e *BackupEngine) ensureKey() error {
 	return backupKeygen(key, backupProduct+"-backup@"+e.nodeName())
 }
 
+// scheduleDueLocked says whether the scheduled backup to every server is due, and when the next one is.
+func (e *BackupEngine) scheduleLocked(c *BackupConfig) (due bool, next time.Time) {
+	now := e.now()
+	if e.status.LastFull == 0 {
+		return true, now
+	}
+	last := time.Unix(e.status.LastFull, 0)
+	if c.Hours > 0 {
+		t := last.Add(time.Duration(c.Hours) * time.Hour)
+		return !t.After(now), t
+	}
+	var hh, mm int
+	fmt.Sscanf(c.at(), "%d:%d", &hh, &mm)
+	t := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location()).Add(e.jitter)
+	if t.After(now) { // today's time has not come: the one that counts is yesterday's
+		t = t.AddDate(0, 0, -1)
+	}
+	if last.Before(t) {
+		return true, now // missed it: now
+	}
+	return false, t.AddDate(0, 0, 1)
+}
+
 // retryLocked is the servers that need another try now: the ones that failed (after a pause) and the ones that never had a
 // backup (at once).
 func (e *BackupEngine) retryLocked(c *BackupConfig) (ts []BackupTarget, next time.Time) {
@@ -915,19 +939,39 @@ func (e *BackupEngine) retryLocked(c *BackupConfig) (ts []BackupTarget, next tim
 	return ts, next
 }
 
-// pickLocked is the servers to back up to between the Scheduler's runs: the ones that failed (after a pause) and the
-// ones that never had a backup.
-func (e *BackupEngine) pickLocked(c *BackupConfig) []BackupTarget {
+func (e *BackupEngine) nextLocked(c *BackupConfig) time.Time {
 	if len(c.Targets) == 0 {
-		return nil
+		return time.Time{}
 	}
-	ts, _ := e.retryLocked(c)
-	return ts
+	due, next := e.scheduleLocked(c)
+	if due {
+		return e.now()
+	}
+	rt, rnext := e.retryLocked(c)
+	if len(rt) > 0 {
+		return e.now()
+	}
+	if !rnext.IsZero() && rnext.Before(next) {
+		return rnext
+	}
+	return next
+}
+
+// pick says what to back up now: everything when the schedule says so, else the servers that need a retry.
+func (e *BackupEngine) pickLocked(c *BackupConfig) (ts []BackupTarget, full bool) {
+	if len(c.Targets) == 0 {
+		return nil, false
+	}
+	if due, _ := e.scheduleLocked(c); due {
+		return c.Targets, true
+	}
+	ts, _ = e.retryLocked(c)
+	return ts, false
 }
 
 func (e *BackupEngine) due() bool {
 	c := e.cfg()
-	if c == nil || !e.isScheduled() || c.Validate() != nil {
+	if c == nil || !c.Enabled || c.Validate() != nil {
 		return false
 	}
 	e.mu.Lock()
@@ -935,10 +979,11 @@ func (e *BackupEngine) due() bool {
 	if e.running {
 		return false
 	}
-	return len(e.pickLocked(c)) > 0
+	ts, _ := e.pickLocked(c)
+	return len(ts) > 0
 }
 
-// Run tries failed servers again between the Scheduler's runs (the runs themselves are the Scheduler's "backup" task).
+// Run starts the scheduled backups.
 func (e *BackupEngine) Run(ctx context.Context) {
 	e.runCtx = ctx
 	t := time.NewTicker(30 * time.Second)
@@ -961,8 +1006,8 @@ func (e *BackupEngine) start(all bool) error {
 	if c == nil || len(c.Targets) == 0 {
 		return errors.New("say which server to back up to first")
 	}
-	if !all && !e.isScheduled() {
-		return errors.New("backups are not scheduled")
+	if !all && !c.Enabled {
+		return errors.New("backups are not switched on")
 	}
 	cc := c.clone()
 	if err := cc.Validate(); err != nil {
@@ -975,7 +1020,7 @@ func (e *BackupEngine) start(all bool) error {
 	}
 	targets, full := cc.Targets, true
 	if !all {
-		targets, full = e.pickLocked(cc), false
+		targets, full = e.pickLocked(cc)
 		if len(targets) == 0 {
 			e.mu.Unlock()
 			return errors.New("nothing is due")
@@ -1005,55 +1050,6 @@ func (e *BackupEngine) start(all bool) error {
 		}
 	}()
 	return nil
-}
-
-// RunScheduled is the Scheduler's "backup" action: a backup of this node to every server, waited for, so the task's
-// history says how it went.
-func (e *BackupEngine) RunScheduled(actor string) (string, error) {
-	if err := e.start(true); err != nil {
-		return "", err
-	}
-	infof("backup: started by %s", actor)
-	e.mu.Lock()
-	began := e.status.LastStart
-	e.mu.Unlock()
-	for deadline := time.Now().Add(backupTimeout + time.Minute); time.Now().Before(deadline); time.Sleep(time.Second) {
-		e.mu.Lock()
-		running := e.running
-		e.mu.Unlock()
-		if !running {
-			break
-		}
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	c := e.cfg()
-	if c == nil {
-		return "", errors.New("the backup settings are gone")
-	}
-	var ok, bad []string
-	for i := range c.Targets {
-		t := &c.Targets[i]
-		st := e.status.Targets[t.key()]
-		switch {
-		case st == nil || st.LastStart < began:
-		case st.LastError != "":
-			bad = append(bad, t.label()+": "+st.LastError)
-		default:
-			ok = append(ok, t.label()+" ("+st.LastFile+")")
-		}
-	}
-	if e.running {
-		return "", errors.New("still running after " + backupTimeout.String())
-	}
-	out := "backed up to " + strings.Join(ok, ", ")
-	if len(ok) == 0 {
-		out = ""
-	}
-	if len(bad) > 0 {
-		return out, errors.New(strings.Join(bad, "; "))
-	}
-	return out, nil
 }
 
 // RunNow starts a backup to every server now (the button).
@@ -1101,7 +1097,7 @@ func (e *BackupEngine) backup(c *BackupConfig, targets []BackupTarget) error {
 	if err != nil {
 		return fail(err)
 	}
-	files, err := writeBackupArchive(f, "", e.stateDir, e.confFile, e.nodeName(), began)
+	files, err := writeBackupArchive(f, c.Password, e.stateDir, e.confFile, e.nodeName(), began)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -1420,27 +1416,23 @@ func (e *BackupEngine) pendingSummary() map[string]any {
 
 // PrepareRestore opens the backup file with the password and keeps what is in it, checked, for the restart.
 func (e *BackupEngine) PrepareRestore(file, password, actor string) (map[string]any, error) {
-	pd := pendingDir(e.stateDir)
-	var man *backupManifest
-	var err error
-	for _, pw := range e.restorePasswords(password) {
-		if err = os.RemoveAll(pd); err != nil {
-			return nil, err
-		}
-		if err = os.MkdirAll(filepath.Join(pd, "data"), 0o700); err != nil {
-			return nil, err
-		}
-		var f *os.File
-		if f, err = os.Open(file); err != nil {
-			os.RemoveAll(pd)
-			return nil, err
-		}
-		man, err = readBackupArchive(f, pw, filepath.Join(pd, "data"))
-		f.Close()
-		if !errors.Is(err, errBackupPassword) {
-			break
-		}
+	if password == "" {
+		return nil, errors.New("type the password the backup was made with")
 	}
+	pd := pendingDir(e.stateDir)
+	if err := os.RemoveAll(pd); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(pd, "data"), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		os.RemoveAll(pd)
+		return nil, err
+	}
+	defer f.Close()
+	man, err := readBackupArchive(f, password, filepath.Join(pd, "data"))
 	if err != nil {
 		os.RemoveAll(pd)
 		return nil, err
@@ -1460,19 +1452,6 @@ func (e *BackupEngine) PrepareRestore(file, password, actor string) (map[string]
 	}
 	warnf("backup: %s prepared the restore of a backup of %s from %s", actor, man.Node, man.Created)
 	return e.pendingSummary(), nil
-}
-
-// restorePasswords are the passwords to try on an archive, in order: the one given, none (archives since v188), and the
-// one in the settings (archives of v184-v187).
-func (e *BackupEngine) restorePasswords(given string) []string {
-	out := []string{given}
-	if given != "" {
-		out = append(out, "")
-	}
-	if c := e.cfg(); c != nil && c.Password != "" && c.Password != given {
-		out = append(out, c.Password)
-	}
-	return out
 }
 
 // CancelRestore forgets a prepared restore.
@@ -1518,8 +1497,8 @@ type RemoteBackup struct {
 	Time string `json:"time"`
 }
 
-// ListRemote lists the backups of every node on a server (the page shows this node's own unless "All nodes" is ticked).
-// With a password it logs in with it (a server this node has no key on, as on a node that was just installed).
+// ListRemote lists the backups of every node on a server.  With a password it logs in with it (a server this node has no key
+// on, as on a node that was just installed).
 func (e *BackupEngine) ListRemote(t *BackupTarget, password string) ([]RemoteBackup, error) {
 	if err := t.validate(); err != nil {
 		return nil, err
@@ -1739,7 +1718,7 @@ func showBackupStatus(sock string) {
 		Enabled   bool         `json:"enabled"`
 		Running   bool         `json:"running"`
 		PublicKey string       `json:"public_key"`
-		Retry     int64        `json:"retry"`
+		Next      int64        `json:"next"`
 		Status    BackupStatus `json:"status"`
 		Targets   []struct {
 			Label  string             `json:"label"`
@@ -1757,13 +1736,13 @@ func showBackupStatus(sock string) {
 		}
 		return time.Unix(u, 0).Format("2006-01-02 15:04:05")
 	}
-	fmt.Printf("Backups:       %s\n", map[bool]string{true: "scheduled (a \"Back up this node\" task in --schedule)", false: "not scheduled: add a task with the action backup (--schedule-set)"}[v.Enabled])
+	fmt.Printf("Backups:       %s\n", map[bool]string{true: "on", false: "off"}[v.Enabled])
 	if v.Running {
 		fmt.Println("Running now:   yes")
 	}
 	fmt.Printf("Last started:  %s\nLast success:  %s\n", at(v.Status.LastStart), at(v.Status.LastOK))
-	if v.Retry != 0 {
-		fmt.Printf("Retry:         %s\n", at(v.Retry))
+	if v.Next != 0 && v.Enabled {
+		fmt.Printf("Next:          %s\n", at(v.Next))
 	}
 	for _, t := range v.Targets {
 		fmt.Printf("\nServer %s (%s)\n  last success: %s", t.Label, t.Host, at(t.Status.LastOK))
@@ -1797,16 +1776,7 @@ func runRestore(file, pwFile, stateDir, conf, sock string) error {
 	case os.Getenv(backupEnv+"_BACKUP_PASSWORD") != "":
 		pw = os.Getenv(backupEnv + "_BACKUP_PASSWORD")
 	default:
-		// archives since v188 have no password: ask only for an older one that needs it
-		man, aside, err := restoreBackup(file, "", stateDir, conf)
-		if !errors.Is(err, errBackupPassword) {
-			if err != nil {
-				return err
-			}
-			restoredMsg(man, aside, stateDir)
-			return nil
-		}
-		fmt.Fprint(os.Stderr, "This backup was made with a password (v184-v187). Backup password: ")
+		fmt.Fprint(os.Stderr, "Backup password: ")
 		tty := false
 		if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 			tty = true
@@ -1827,12 +1797,8 @@ func runRestore(file, pwFile, stateDir, conf, sock string) error {
 	if err != nil {
 		return err
 	}
-	restoredMsg(man, aside, stateDir)
-	return nil
-}
-
-func restoredMsg(man *backupManifest, aside, stateDir string) {
 	fmt.Printf("Restored the backup of %s (%s, v%s) into %s.\n", man.Node, man.Created, man.Version, stateDir)
 	fmt.Printf("What was there before is in %s; delete it when you no longer need it.\n", aside)
 	fmt.Printf("Start the service again: systemctl start %s\n", backupProduct)
+	return nil
 }

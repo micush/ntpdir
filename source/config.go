@@ -1083,7 +1083,6 @@ func (dc *DaemonConfig) Validate() error {
 	if err := dc.Web.Validate(); err != nil {
 		return err
 	}
-	migrateBackupSchedule(&dc.NTP)
 	if err := validateSchedule(dc.NTP.Schedule); err != nil {
 		return err
 	}
@@ -1171,9 +1170,6 @@ func loadConfig(path string) (*DaemonConfig, error) {
 	if err := json.Unmarshal(b, dc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	// every reader (the page, the scheduler's edits, the history) sees the backup schedule of v184-v187 as the Scheduler
-	// task it becomes, so a save made from what was read keeps it
-	migrateBackupSchedule(&dc.NTP)
 	return dc, nil
 }
 

@@ -830,7 +830,17 @@ func (m *chronyMgr) sampleClients(rec *QStats) {
 		if dd > dp {
 			dd = dp
 		}
-		rec.RecordN(ip.Unmap(), node, 0, outAnswered, uint32(min(dp-dd, 1<<30)))
-		rec.RecordN(ip.Unmap(), node, 0, outRefused, uint32(min(dd, 1<<30)))
+		rec.RecordN(ip.Unmap(), node, 0, outAnswered, clampCount(dp-dd))
+		rec.RecordN(ip.Unmap(), node, 0, outRefused, clampCount(dd))
 	}
+}
+
+// clampCount turns a 64-bit counter delta into the 32-bit count RecordN takes, capped at 1<<30 so one poll can never
+// wrap or flood the statistics.
+func clampCount(v uint64) uint32 {
+	const maxCount = 1 << 30
+	if v > maxCount {
+		return maxCount
+	}
+	return uint32(v)
 }
