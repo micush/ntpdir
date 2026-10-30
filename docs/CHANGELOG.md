@@ -1,5 +1,45 @@
 # Changelog
 
+## [v190] - 2026-10-29 — MCP: drive the cluster from Claude (ported from dnsdir v606-v608); Alerts rows no longer reorder
+
+### Added
+- **The Model Context Protocol (MCP) at `POST /mcp` on the web GUI port** (`mcp.go`, from dnsdir v606-v608), so an assistant such as Claude can look at the cluster and, from an address allowed to, change it. Streamable HTTP with JSON answers, no event stream; protocol versions 2024-11-05 to 2025-11-25, batches too.
+- **Configure ▸ Monitoring ▸ MCP** (`mcp_acl` in the shared `ntp` block), the same way `/metrics` works.
+  - No login: the address of the connection decides, and an empty list means nobody.
+  - Each row is an address, a network or a host name, with **Access** `ro` or `rw`. `rw` is refused for a network or a host name.
+  - Under the list is the endpoint's URL. The tab has its own help page (`config_mcp`).
+- **Read tools:** `list_nodes`, `get_topology`, `get_ntp`, `get_time` (the node's clock and chrony), `get_gateways`, `get_alerts` (one node, or `all`), `get_log`, `get_query_stats` (NTP client requests: a node, the cluster, or one gateway), `get_host_stats`, `get_server_stats`, `get_schedule`, `get_updates`, `get_node_status`, `list_api`, `api_get`, `get_config`.
+- **Write tools (`rw` only):** `set_node_paused`; `set_paused` (gateway, server or anycast address; on one node or all); `alert_action` (ack, unack, silence, resolve, fix: `recheck` or `restart_chrony`); `schedule_set`, `schedule_delete`, `schedule_run`; `update_fetch`, `update_apply`, `update_push`, `update_cancel`; `rename_node`; `set_label`; `set_gateway_node`; `clear_left_nodes`; and full access through `edit_config` (any setting, merged and saved as Configure does, `dry_run`) and `api_request` (any route of the GUI's API).
+- **How a tool runs:** each one is a request to the GUI's own API, made in-process as the user `mcp@ADDRESS`, read-only unless the address is `rw`. So the GUI's rules apply (the last node in service cannot be paused, nor the last server of a gateway without fallback servers), another node is reached through the cluster relay, and changes are logged and kept in the configuration history under that name. A read-only address sees what a read-only GUI account sees, with the secrets hidden.
+- **A web page cannot use it:** a request whose `Origin` is another site is refused, and `GET /mcp` answers 405.
+- **`POST /api/canvas/edit`:** the `--canvas-*` edits over the web API, used by the MCP tools. It gains `prune node` (`group` 0 means every gateway): it drops the removed-node entries of nodes that are no longer in the cluster, keeps those still in it, and refuses to act when the cluster's nodes are not known. An edit that changes nothing answers "nothing to change" and saves no new version.
+- **`apiroutes.go`:** the route list behind `list_api`, generated from the source. `TestAPIRoutesListed` fails when it is out of date; `NTPDIR_UPDATE_ROUTES=1` writes it again.
+- **Left out on purpose (DNS only in dnsdir):** `get_dns`, `clear_cache` and `edit_domain`, and the `domain` kind of `set_paused`. `get_ntp` and `get_time` take their place.
+
+### Fixed
+- **Alerts page, rows reshuffling.** Alerts that opened in the same second came back in a different order on each poll, so the table jumped. `AlertEngine.View` built the list from a map and sorted it only by `opened`. It now sorts with `alertBefore`: newest first, then node, rule, subject and ID. The Alerts page here has no cluster view, so the server sort is the whole fix (dnsdir v609 also fixed its cluster merge in `app.js`).
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, and cross-builds for linux/amd64, arm64, arm, 386 and riscv64. Only the native amd64 build is verified with PAM; the cross-builds use the fail-closed stub.
+- **New tests:**
+  - `TestMCPACLNormalised`, `TestMCPNobodyUntilListed`, `TestMCPReadOnly`, `TestMCPReadWriteGoesThroughTheGUIRules` (a shell task and a backup task made, `edit_config` dry run, save and refusal, history under `mcp@127.0.0.1`, the only node cannot be paused, an unknown node named as such), `TestMCPRefusesBrowsersAndGET`.
+  - `TestAPIRoutesListed`, `TestCanvasPruneLeftNodes`, `TestAlertViewOrderStableForSameSecond`.
+  - The help tests now cover the MCP tab and `MCP_FIELDS`.
+- **Live, against a daemon in a scratch directory:**
+  - Real PAM: a group member signed in; a wrong password, a user outside the group, and root got the same generic refusal.
+  - Headless Chromium, light and dark: the MCP tab and its "?" panel showed. `10.1.0.0/24 rw` was refused with the reason in the page's red save-error line and nothing was saved; `127.0.0.1 rw` was saved to the file.
+  - Over `/mcp` with curl: `403` while the list was empty; `initialize` and 32 tools listed for rw; `list_nodes`, `get_time`, `get_ntp`, `get_topology`, `get_log` and `api_get /api/versions` answered.
+  - Write tools on a gateway on `lo`: `set_label` named the gateway and a server; `set_paused` paused and resumed a server on all nodes, and refused kind `domain`; `set_gateway_node` refused an unknown node; `clear_left_nodes` dropped a planted entry, then answered "nothing to change"; `edit_config` dry-ran and saved; `schedule_run` and `alert_action` with unknown ids and pausing the only node were refused. Every change is in the history as `mcp@127.0.0.1`.
+  - With the real `mcp-remote` client (npm, `NODE_TLS_REJECT_UNAUTHORIZED=0`), as Claude Desktop runs it: `initialize`, 32 tools, `list_nodes`, `get_time`, `get_alerts` (all nodes), and pausing and resuming a gateway, confirmed in `get_topology`.
+  - Read-only (`127.0.0.0/8`): 16 tools and no write tools listed, a write refused, `get_config` with the gateway key hidden. A foreign `Origin` got 403, and `GET /mcp` got 405.
+
+### Not verified
+- Claude Desktop itself, and a cluster of more than one node over MCP (the relay is the one the Node menu uses).
+- `rename_node` and `update_apply`/`update_push`, which rename or rebuild the host. They are the same requests as Operate ▸ Node and Operate ▸ Updates.
+
+### Known, not changed here
+- The top-level `ntp` block is validated only when some gateway has no `ntp` block of its own (`needGlobal` in `DaemonConfig.Validate`). Gateways made in the GUI always have one, so an out-of-range `client_rate` (or another value `NTPConfig.Validate` checks there) is saved without complaint from the GUI and from `edit_config` alike. A live run saved `client_rate: -5`; chrony ignores a rate of 0 or less, so it did no harm. dnsdir has the same pattern. Always validating the block could stop existing configurations from loading, so it is left for a release of its own.
+
 ## [v189] - 2026-10-27 — Fix two CodeQL code-scanning alerts (Zip Slip, integer conversion)
 
 ### Fixed

@@ -284,6 +284,10 @@ func cloneNTP(d NTPConfig) NTPConfig {
 	if len(d.MetricsACL) == 0 {
 		d.MetricsACL = nil
 	}
+	d.MCPACL = append([]string(nil), d.MCPACL...)
+	if len(d.MCPACL) == 0 {
+		d.MCPACL = nil
+	}
 	if len(d.Schedule) > 0 {
 		sch := make([]SchedTask, len(d.Schedule))
 		for i, t := range d.Schedule {

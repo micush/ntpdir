@@ -15,6 +15,7 @@ import (
 
 func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/vmactest", w.authed(w.op("vmac.test", nil)))
+	mux.HandleFunc("POST /api/canvas/edit", w.authed(w.op("canvas.edit", nil))) // as --canvas-*: used by the MCP tools (mcp.go)
 	// configuration history
 	mux.HandleFunc("GET /api/versions", w.authed(w.op("versions.list", nil)))
 	mux.HandleFunc("GET /api/versions/get", w.authed(w.op("versions.get", []string{"id"})))

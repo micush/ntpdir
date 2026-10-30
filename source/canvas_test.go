@@ -787,3 +787,31 @@ func TestPoolsSkipExcludedGateways(t *testing.T) {
 		t.Fatalf("a node removed from every gateway has no pools, got %d", len(s.poolList()))
 	}
 }
+
+// Only the entries of nodes no longer in the cluster are dropped, from one gateway or all.
+func TestCanvasPruneLeftNodes(t *testing.T) {
+	dc := newDaemonConfig()
+	a, b := defaultGroup(), defaultGroup()
+	a.GroupID, a.ExcludedNodes = 100, []string{"member01", "gone0001", "gone0002"}
+	b.GroupID, b.ExcludedNodes = 101, []string{"gone0001"}
+	dc.Groups = []GroupConfig{a, b}
+	msg, err := applyCanvasEdit(dc, canvasEdit{Action: "prune", Kind: "node", Group: 100, members: "member01,member02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(dc.Groups[0].ExcludedNodes, ",") != "member01" || len(dc.Groups[1].ExcludedNodes) != 1 {
+		t.Fatalf("%s: %v %v", msg, dc.Groups[0].ExcludedNodes, dc.Groups[1].ExcludedNodes)
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "prune", Kind: "node", members: "member01"}); err != nil || len(dc.Groups[1].ExcludedNodes) != 0 {
+		t.Fatalf("every gateway: %v %v", err, dc.Groups[1].ExcludedNodes)
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "prune", Kind: "node", members: "member01"}); err != errNoChange {
+		t.Fatalf("nothing left: %v", err)
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "prune", Kind: "node", Group: 999, members: "member01"}); err == nil {
+		t.Fatal("an unknown gateway was accepted")
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "prune", Kind: "node"}); err == nil {
+		t.Fatal("pruned without knowing the cluster")
+	}
+}

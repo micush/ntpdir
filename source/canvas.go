@@ -930,6 +930,37 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 			return fmt.Sprintf("deleted gateway %d with all its NTP servers", e.Group), nil
 		}
 	case "node":
+		if e.Action == "prune" { // the entries of nodes that have left the cluster, from one gateway (group) or all (0)
+			if e.members == "" {
+				return "", errors.New("the cluster's nodes are not known here, so nothing is taken as having left")
+			}
+			members := strings.Split(e.members, ",")
+			if e.Group != 0 {
+				if _, err := findGroup(dc, e.Group); err != nil {
+					return "", err
+				}
+			}
+			var did []string
+			for i := range dc.Groups {
+				g := &dc.Groups[i]
+				if e.Group != 0 && g.GroupID != e.Group {
+					continue
+				}
+				var kept []string
+				for _, id := range g.ExcludedNodes {
+					if containsStr(members, id) {
+						kept = append(kept, id)
+					} else {
+						did = append(did, fmt.Sprintf("%s from gateway %d", shortID(id), g.GroupID))
+					}
+				}
+				g.ExcludedNodes = kept
+			}
+			if len(did) == 0 {
+				return "", errNoChange
+			}
+			return "cleared the entries of nodes that left the cluster: " + strings.Join(did, ", "), nil
+		}
 		g, err := findGroup(dc, e.Group)
 		if err != nil {
 			return "", err
@@ -1220,12 +1251,25 @@ func (m *Mgmt) CanvasEdit(e canvasEdit, actor string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if e.Kind == "node" {
+	if e.Kind == "node" && e.Action == "prune" {
+		var ids []string
+		if m.cl != nil {
+			for _, p := range m.cl.View().Peers {
+				if p.NodeID != "" {
+					ids = append(ids, p.NodeID)
+				}
+			}
+		}
+		e.members = strings.Join(ids, ",")
+	} else if e.Kind == "node" {
 		if err := m.resolveNode(dc, &e); err != nil {
 			return "", err
 		}
 	}
 	msg, err := applyCanvasEdit(dc, e)
+	if errors.Is(err, errNoChange) {
+		return "nothing to change", nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -1234,6 +1278,17 @@ func (m *Mgmt) CanvasEdit(e canvasEdit, actor string) (string, error) {
 		return "", err
 	}
 	return msg, nil
+}
+
+// errNoChange: the edit would change nothing, so nothing is saved.
+var errNoChange = errors.New("nothing to change")
+
+// shortID is a node ID cut to its first 8 characters, as messages show it.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // pausedWhere words a pause scope: "all nodes" or "this node".

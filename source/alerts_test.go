@@ -327,3 +327,28 @@ func TestAlertsCanBeRelayedToAnotherNode(t *testing.T) {
 		}
 	}
 }
+
+// Alerts opened in the same second must come out in one fixed order on every View, not in the
+// map's order: the Alerts page polls, and rows that swap places look like values changing.
+func TestAlertViewOrderStableForSameSecond(t *testing.T) {
+	e := NewAlertEngine(t.TempDir(), "node1", func() *AlertsConfig { return &AlertsConfig{} })
+	e.now = func() time.Time { return time.Unix(1_700_000_100, 0) }
+	add := func(id, rule, subject string, opened, closed int64) {
+		e.alerts[id] = &Alert{ID: id, Rule: rule, Subject: subject, Node: "node1", Opened: opened, Closed: closed}
+	}
+	add("c3", "upstream_down", "203.0.113.3", 1000, 1360)
+	add("a1", "upstream_falseticker", "203.0.113.1", 1000, 1360)
+	add("b2", "upstream_down", "203.0.113.2", 1000, 1360)
+	add("d4", "listener_down", "gateway 100 v4", 2000, 2180)
+	add("e5", "upstream_down", "203.0.113.2", 1000, 1360) // same subject too: the ID decides
+	want := []string{"d4", "b2", "e5", "c3", "a1"}
+	for i := 0; i < 200; i++ {
+		var got []string
+		for _, a := range e.View().Alerts {
+			got = append(got, a.ID)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("view %d: order %v, want %v", i, got, want)
+		}
+	}
+}
