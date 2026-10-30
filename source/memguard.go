@@ -12,7 +12,7 @@ import (
 
 // The memory guard.  The statistics and the host history live in memory, and they
 // grow up to 30 days of data.  Every memGuardEvery the guard looks at how much
-// memory the machine is using (the same figure as Monitor ▸ Host: what programs hold, caches excluded; inside a
+// memory the machine is using (the same figure as Monitor ▸ Node: what programs hold, caches excluded; inside a
 // container with a memory limit, the container's own use against its limit, whichever is higher).  At or above
 // the limit (85 % by default) it drops the oldest data: each round removes the oldest tenth of the time span the
 // statistics and the host history cover, gives
@@ -32,7 +32,7 @@ const (
 	memGuardEnv    = "NTPDIR_MEMORY_LIMIT_PERCENT"
 )
 
-// MemGuardInfo is what the Host page and --host say about the guard.
+// MemGuardInfo is what Monitor ▸ Node and --host say about the guard.
 type MemGuardInfo struct {
 	Limit    float64 `json:"limit_pct"`
 	Trims    int     `json:"trims"` // checks that had to drop data

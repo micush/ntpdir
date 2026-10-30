@@ -783,7 +783,7 @@ const NTPDIR_HELP = {
     ],
   },
   host: {
-    title: "Monitor: Host",
+    title: "Monitor: Node",
     body: [
       "How busy the machine AnyTime runs on is, on the node picked in the **Node** menu: CPU, memory, disk and network. AnyTime reads the numbers itself from the operating system every 10 seconds and keeps them for **30 days** (per-minute averages, like Statistics). They are saved every 5 minutes and when AnyTime stops, so a restart does not empty them.",
       ["h", "What you can do here"],
