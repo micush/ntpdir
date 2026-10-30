@@ -493,6 +493,10 @@ type NTPConfig struct {
 	// AllowedClients: every node answers the same communities and reports the same contact.  The location is per node and
 	// lives in DaemonConfig.SNMP.  See snmp.go.
 	SNMPCommunities []string `json:"snmp_communities,omitempty"`
+	// LLDP turns on neighbor discovery (Configure ▸ Settings ▸ General ▸ Neighbor discovery): every node runs lldpd, so the switches see the
+	// nodes and each node sees which switch port it is on.  Off by default, and omitted while off so the shared hash of a cluster
+	// that never used it is unchanged.  See lldp.go.
+	LLDP bool `json:"lldp,omitempty"`
 	// Keys, ServerAuth, NTSServer, LeapTZ, LeapMode and LeapSmear: authentication and leap seconds for chrony (see auth.go).
 	Keys        []string `json:"keys,omitempty"`
 	ServerAuth  []string `json:"server_auth,omitempty"`

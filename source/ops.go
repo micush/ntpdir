@@ -122,6 +122,19 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		}
 		return snmpStatus(dc.snmpSettings()), nil
 
+	// LLDP (Configure ▸ Settings ▸ General ▸ Neighbor discovery)
+	case "lldp.status":
+		dc, _, err := m.LiveConfig()
+		if err != nil {
+			return nil, err
+		}
+		return lldpStatus(dc.NTP.LLDP), nil
+	case "lldp.set":
+		if err := m.LLDPSet(a.Enabled, actor); err != nil {
+			return nil, err
+		}
+		return map[string]any{"enabled": a.Enabled}, nil
+
 	// certificate
 	case "tls.status":
 		return m.certs.Status(), nil

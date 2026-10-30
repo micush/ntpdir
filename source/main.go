@@ -127,6 +127,8 @@ the web GUI):
                    --syslog-server HOST[:PORT]  [--syslog-protocol udp|tcp|tls]  [--syslog-facility daemon|local0..local7]
                    [--syslog-format rfc5424|rfc3164]  [--syslog-ca FILE]  [--syslog-tls-insecure]   (- = default / none)
                    --syslog-disable | --syslog-enable   (settings kept)   --syslog-test   (send a test message)
+  LLDP             --lldp   (neighbor discovery: the setting, lldpd on this node, and the switch port of each interface)
+                   --lldp-enable | --lldp-disable   (every node of the cluster runs lldpd, or none does; off by default)
   Cluster          --cluster-status  --cluster-token  --cluster-join CODE
                    --cluster-promote  --cluster-remove ADDR
                    --cluster-delete ADDR  --cluster-unremove ADDR  --cluster-leave  --cluster-sync
@@ -453,6 +455,8 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 	qstats.SetNames(dc.NTP.ClientNames)
 	go applySNMP(dc.snmpSettings())
 	go snmpRefresh(ctx, sup)
+	go applyLLDP(dc.NTP.LLDP)
+	go lldpWatch(ctx, sup)
 	go memguard.Run(ctx.Done())
 	go mg.sched.Run(ctx)
 	go sup.RunReevaluate(ctx)
@@ -548,6 +552,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 		sup.Reload(nu)
 		qstats.SetNames(nu.NTP.ClientNames)
 		go applySNMP(nu.snmpSettings())
+		go applyLLDP(nu.NTP.LLDP)
 		mg.OnConfigLoaded(nu)
 		if web != nil {
 			go func() { ensureReadGroup(nu.Web); web.Apply(nu.Web) }() // async: a listener restart must not wait on the request that triggered it

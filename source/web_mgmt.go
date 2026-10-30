@@ -26,6 +26,7 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/versions/upload", w.authed(w.handleVersionUpload))
 	// certificate
 	mux.HandleFunc("GET /api/snmp", w.authed(w.op("snmp.status", nil)))
+	mux.HandleFunc("GET /api/lldp", w.authed(w.op("lldp.status", nil)))
 	mux.HandleFunc("GET /api/tls", w.authed(w.op("tls.status", nil)))
 	mux.HandleFunc("POST /api/tls/install", w.authed(w.op("tls.install", nil)))
 	mux.HandleFunc("POST /api/tls/csr", w.authed(w.op("tls.csr", nil)))

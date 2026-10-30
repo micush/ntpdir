@@ -86,6 +86,11 @@
   // numbers are never cut off.  ~6.6 units a character at the 11px axis font, plus the gap and a little edge room.
   const axisMargin = (labels, min) => Math.max(min, Math.ceil(Math.max(0, ...labels.map((t) => String(t).length)) * 6.6) + 14);
   const pill = (text, kind) => h("span", { class: "pill " + (kind || "") }, text);
+  // what lldpd is doing on a node (GET /api/lldp), in a few words; the same as `ntpdir --lldp`
+  const lldpWords = (st) => !st.installed ? "lldpd is not installed on this node"
+    : st.deferred ? (st.running ? "Running, managed in AnyName on this host" : "Stopped: AnyName is on this host and decides")
+    : st.running && st.managed_by === "other" ? "Running, started outside AnyTime (left alone)"
+    : st.running ? "Running" : st.enabled ? "Stopped: see the log" : "Stopped";
   const fmtMs = (n) => (n == null ? "–" : Number(n).toFixed(2));
 
   // ── API ───────────────────────────────────────────────────────────────────
@@ -501,7 +506,7 @@
   function helpTopicKey() {
     const k = (() => {
       switch (state.tab) {
-      case "cfg_general": return state.settingsTab === "cluster" ? "config_cluster" : state.settingsTab === "upgrades" ? "config_upgrades" : "config_logs";
+      case "cfg_general": return state.settingsTab === "cluster" ? "config_cluster" : state.settingsTab === "upgrades" ? "config_upgrades" : state.settingsTab === "general" ? "config_general" : "config_logs";
       case "cfg_groups": return "config_groups";
       case "cfg_web": return "config_web";
       case "anycast": return "anycast_" + (state.anycastTab === 1 ? "ospf" : "bgp");
@@ -2284,6 +2289,10 @@
   const PROM_FIELDS = [
     { shared: true, k: "metrics_acl", l: "Allowed sources", t: "rows", rows: "metricsacl", wide: true },
   ];
+  // Configure ▸ Settings ▸ General ▸ Neighbor discovery (lldp.go)
+  const LLDP_FIELDS = [
+    { shared: true, k: "lldp", l: "Run LLDP (lldpd) on every node", t: "bool" },
+  ];
   const MCP_FIELDS = [
     { shared: true, k: "mcp_acl", l: "Allowed sources", t: "rows", rows: "mcpacl", wide: true },
   ];
@@ -3030,7 +3039,7 @@
   };
 
   const makeConfigView = (only) => {
-    let holder, status, collect = null, refreshSNMP = () => {}, refreshSyslog = () => {};
+    let holder, status, collect = null, refreshSNMP = () => {}, refreshSyslog = () => {}, refreshLLDP = () => {};
     const tab = only;
 
     // Action results ("Saved", "Restored" …) are not announced; only errors, warnings and hints are.
@@ -3047,6 +3056,20 @@
       const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_acl: cfg.ntp.snmp_acl, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
       const prom = fieldset(PROM_FIELDS, { metrics_acl: cfg.ntp.metrics_acl });
       const mcp = fieldset(MCP_FIELDS, { mcp_acl: cfg.ntp.mcp_acl });
+      const lldp = fieldset(LLDP_FIELDS, { lldp: !!cfg.ntp.lldp });
+      const lldpShared = () => ({ lldp: lldp.get().lldp });
+      // what lldpd is doing on this node, beside the box (refreshed after every save); a few words, never a banner
+      const lldpState = h("span", { class: "muted small" });
+      const lldpBox = lldp.el.querySelector("input[type=checkbox]");
+      refreshLLDP = async () => {
+        try {
+          const st = (await api("GET", "/api/lldp")).data;
+          const words = lldpWords(st);
+          clear(lldpState).append(...(st.running ? [pill("ACTIVE", "ok tiny")] : []), words === "Running" ? "" : " " + words);
+          lldpBox.disabled = !!st.deferred;   // AnyName (dnsdir) is on this host and decides
+        } catch (_) { clear(lldpState); }
+      };
+      refreshLLDP();
       const alerts = alertsForm(cfg.ntp.alerts);
       const alertsShared = () => { const a = alerts.get(); return a ? { alerts: a } : {}; };
       const backup = backupForm(cfg.ntp.backup, (sch) => { cfg.ntp.schedule = sch; if (state.cfg && state.cfg.ntp) state.cfg.ntp.schedule = sch; });
@@ -3127,7 +3150,7 @@
         ...logs.get(),
         // keep what this form has no fields for (a gateway's own NTP pool)
         groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...(g.orig.piggyback ? { piggyback: true, piggyback_of: g.orig.piggyback_of, dnsdir_shared: g.orig.dnsdir_shared } : {}), ...g.fs.get() })),
-        ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared(), ...alertsShared(), ...backupShared() },
+        ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared(), ...lldpShared(), ...alertsShared(), ...backupShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
         web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get(), ...ldap.get() },
         cluster: cluster.get(),
@@ -3224,6 +3247,7 @@
       // the Settings page is tabs (every card stays in the page, so a save reads all of them)
       const settingsTabs = () => {
         const TABS = [
+          ["general", "General", section("Neighbor discovery", lldp.el, h("p", { class: "f" }, lldpState))],
           ["logs", "Logs", h("div", {}, section("Log level", logs.el),
             section("Syslog", syslog.el, h("div", { class: "toolbar" }, syslogTest, syslogMsg, syslogState),
               h("p", { class: "hint" }, "Every line the log shows is also sent to the server, from this node only: the setting is not copied to the other nodes. A server that is down never holds anything up; the newest messages wait in a queue and the oldest are dropped if it fills.")))],
@@ -3312,6 +3336,7 @@
         state.cfgInfo.exists = true;
         setTimeout(() => refreshSNMP(), 1500);   // snmpd was (re)started by the save
         setTimeout(() => refreshSyslog(), 800);  // so was the connection to the syslog server
+        setTimeout(() => refreshLLDP(), 1500);   // and lldpd started or stopped
       } catch (e) { if (e.message !== "unauthenticated") say("bad", "Not saved: " + e.message); }
     }
 
@@ -4394,7 +4419,7 @@
       return step >= 3600 || long ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm : hm;
     };
 
-    let status, bar, cnote, tiles, charts, tables, foot, rangeBtns, fromIn, toIn, customRow;
+    let status, bar, cnote, tiles, charts, tables, neigh, foot, rangeBtns, fromIn, toIn, customRow;
     let range = "1h", lastAt = 0, seq = 0;
 
     // One line chart: series = [{ label, cls, values, text(i) }]; values below 0 are gaps.
@@ -4500,6 +4525,30 @@
         lastAt = Date.now();
         draw(r.data);
       } catch (e) { fail(status)(e); }
+      loadNeighbors(my);
+    }
+
+    // LLDP neighbors of the picked node: the switch and port each interface is plugged into.  Not for the cluster as one
+    // (that is a sum), and not while LLDP is off and lldpd is not running.
+    async function loadNeighbors(my) {
+      if (state.target === CLUSTER) { clear(neigh); return; }
+      let st;
+      try { st = (await api("GET", "/api/lldp")).data; } catch (e) { if (e.message === "unauthenticated") throw e; clear(neigh); return; }
+      if (my !== seq) return;
+      if (!st.enabled && !st.running) { clear(neigh); return; }
+      const ns = st.neighbors || [];
+      const rows = ns.map((n) => h("tr", {},
+        h("td", { class: "mono" }, n.interface),
+        h("td", { title: n.system_descr || null }, n.system_name || n.chassis_id || "–"),
+        h("td", { title: n.port_descr && n.port_descr !== n.port_id ? n.port_id : null }, n.port_descr || n.port_id || "–"),
+        h("td", {}, (n.vlans || []).join(", ") || "–"),
+        h("td", { class: "mono" }, (n.mgmt_ips || []).join(", ") || "–"),
+        h("td", { class: "num" }, n.age || "–")));
+      const body = st.error ? h("div", { class: "empty bad-text" }, st.error)
+        : !st.running ? h("div", { class: "empty" }, lldpWords(st))
+        : rows.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Interface", "Switch", "Port", "VLAN", "Management", "Seen"].map((t, i) => h("th", { class: i === 5 ? "num" : null }, t)))), h("tbody", {}, rows)))
+        : h("div", { class: "empty" }, "None seen yet.");
+      clear(neigh).append(h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc("LLDP neighbors"))), h("div", { class: "body flush" }, body)));
     }
 
     function setRange(r) {
@@ -4525,9 +4574,10 @@
         tiles = h("div", { class: "qtiles" });
         charts = h("div", { class: "hostcharts" });
         tables = h("div", { class: "hosttables" });
+        neigh = h("div", {});
         foot = h("p", { class: "hint" });
         cnote = h("div", {});
-        main.append(status, bar, cnote, tiles, charts, tables, foot);
+        main.append(status, bar, cnote, tiles, charts, tables, neigh, foot);
         setRange(range);
       },
       async poll() {

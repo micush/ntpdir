@@ -186,6 +186,19 @@ if [ -f "$SNMP_CONF" ] && grep -q '^# Managed by ntpdir (Configure' "$SNMP_CONF"
   fi
 fi
 
+# lldpd: when ntpdir started it (Configure ▸ Settings ▸ General ▸ Neighbor discovery), its marker file is there: stop lldpd, unless
+# dnsdir runs it too (its own marker).  An lldpd without ntpdir's marker was never ntpdir's and is left alone; lldpd stays installed.
+LLDP_DIR="${NTPDIR_LLDP_DIR:-/etc/lldpd.d}"
+if [ -f "$LLDP_DIR/ntpdir.conf" ] && grep -q '^# Managed by ntpdir (Configure' "$LLDP_DIR/ntpdir.conf"; then
+  run rm -f "$LLDP_DIR/ntpdir.conf"
+  if [ -f "$LLDP_DIR/dnsdir.conf" ]; then
+    info "removed $LLDP_DIR/ntpdir.conf; lldpd keeps running for dnsdir"
+  else
+    if [ "$HAVE_SYSTEMD" = 1 ]; then run "$SYSTEMCTL" disable --now lldpd >/dev/null 2>&1 || true; fi
+    info "switched off the lldpd ntpdir had started and removed $LLDP_DIR/ntpdir.conf (lldpd itself is left installed)"
+  fi
+fi
+
 # PAM service
 if [ -f "$PAM_FILE" ]; then
   if [ "$PURGE" = 1 ]; then
