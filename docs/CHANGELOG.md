@@ -1,5 +1,22 @@
 # Changelog
 
+## [v194] - 2026-10-30 — LLDP: the setting now controls lldpd, whoever started it
+
+### Changed
+- **The Neighbor discovery setting is authoritative.** Before, ntpdir only ever stopped an lldpd it had started itself and left any other running, so an lldpd started by its package (Debian starts it on install) or by hand kept running with LLDP off, and the box did nothing about it. Now, on every node: **on** → lldpd is enabled and running; **off** → lldpd is stopped and disabled, whoever started it. The minute check (`lldpWatch`) applies it again, so an lldpd installed, started or stopped behind ntpdir's back follows the setting within a minute. `applyLLDP` now looks at `systemctl is-enabled` too, so an lldpd that is only running, or only enabled at boot, is set right.
+- **Upgrading:** LLDP is off by default, so a node that already ran lldpd (installed by hand before this feature) has it stopped and disabled when it starts this version, until LLDP is switched on in Configure ▸ Settings ▸ General ▸ Neighbor discovery.
+- `/etc/lldpd.d/ntpdir.conf` now only says "LLDP is on here" (written while on, removed when off); the uninstaller still stops lldpd when it is there and never removes the package. The page and `--lldp` no longer have the *started outside (ntpdir) (left alone)* state.
+- **With AnyName (dnsdir) on the same host, AnyName decides, as before**, but more simply: ntpdir drops its file and neither starts nor stops lldpd while dnsdir is installed (no hand-over stop any more; dnsdir applies its own setting), and decides again within a minute of dnsdir being removed.
+- Help, README, installer and uninstaller comments say so.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-builds for linux/amd64, arm64, arm, 386 and riscv64 (only the native amd64 build is verified with PAM). `node --check` on `app.js` and `help.js`; `bash -n` and `shellcheck -x -S warning` on both scripts.
+- `TestApplyLLDPFollowsTheSetting` (off stops an lldpd started outside, or only enabled at boot; on enables one only started; not installed runs nothing) and `TestApplyLLDPDefersToDnsdir` (nothing touched while dnsdir is installed, either setting; decides again once it is gone) replace `TestApplyLLDPStartsAndStopsOnlyItsOwn` and the old hand-over test.
+- Live: A real lldpd started and enabled before the daemon, with LLDP off, was stopped and disabled at start-up; `--lldp-enable` enabled and started it and wrote the file; an lldpd killed by hand was started again by the minute check, and `--lldp` listed the peer `sw1`. With dnsdir "installed" (its directory), ntpdir dropped its file, said *managed by AnyName*, and left lldpd running even after `--lldp-disable`; with dnsdir "removed", it stopped and disabled lldpd within a minute (LLDP off).
+
+### Not verified
+- Real systemd (the shim stands in for `enable --now`, `disable --now`, `is-active` and `is-enabled`) and a real switch.
+
 ## [v193] - 2026-10-30 — LLDP: Configure ▸ Settings ▸ General ▸ Neighbor discovery, the switch port of each interface on Monitor ▸ Node, lldpd in the installer
 
 ### Added

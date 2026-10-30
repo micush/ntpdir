@@ -75,8 +75,6 @@ func lldpStateWords(st LLDPStatus) string {
 		return "running, managed by AnyName (dnsdir) on this host"
 	case st.Deferred:
 		return "stopped; AnyName (dnsdir) is installed here and decides (LLDP is switched there)"
-	case st.Running && st.ManagedBy == "other":
-		return "running, started outside ntpdir (left alone: switching LLDP off here does not stop it)"
 	case st.Running:
 		return "running"
 	case st.Enabled:

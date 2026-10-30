@@ -89,7 +89,6 @@
   // what lldpd is doing on a node (GET /api/lldp), in a few words; the same as `ntpdir --lldp`
   const lldpWords = (st) => !st.installed ? "lldpd is not installed on this node"
     : st.deferred ? (st.running ? "Running, managed in AnyName on this host" : "Stopped: AnyName is on this host and decides")
-    : st.running && st.managed_by === "other" ? "Running, started outside AnyTime (left alone)"
     : st.running ? "Running" : st.enabled ? "Stopped: see the log" : "Stopped";
   const fmtMs = (n) => (n == null ? "–" : Number(n).toFixed(2));
 
