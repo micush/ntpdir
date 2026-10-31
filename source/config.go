@@ -513,6 +513,9 @@ type NTPConfig struct {
 	// MCPACL is who may use the MCP endpoint (/mcp on the web GUI port, mcp.go): "10.1.0.0/24" reads, "10.1.1.50 rw" may
 	// also change things (a single address only).  Empty: nobody.  Shared by the cluster.
 	MCPACL []string `json:"mcp_acl,omitempty"`
+	// MCPKeys may use the MCP endpoint from any address, with the key in "Authorization: Bearer KEY" (mcpkeys.go); only a
+	// hash of each key is kept.  Shared by the cluster.
+	MCPKeys []MCPKey `json:"mcp_keys,omitempty"`
 	// Alerts are the rules, thresholds and the webhook of Configure ▸ Alerts (alerts.go).  Shared by the cluster.
 	Alerts *AlertsConfig `json:"alerts,omitempty"`
 	// Backup is the automatic off-host backup of Configure ▸ Backup (backup.go).  Shared by the cluster.
@@ -1111,6 +1114,9 @@ func (dc *DaemonConfig) Validate() error {
 		if dc.NTP.MCPACL, err = normMCPACL(dc.NTP.MCPACL); err != nil {
 			return err
 		}
+		if dc.NTP.MCPKeys, err = normMCPKeys(dc.NTP.MCPKeys); err != nil {
+			return err
+		}
 		if dc.NTP.Backup != nil {
 			if err := dc.NTP.Backup.Validate(); err != nil {
 				return err
@@ -1614,4 +1620,5 @@ func (d *NTPConfig) clearNodeWide() {
 	d.SNMPCommunities, d.SNMPContact, d.SNMPACL, d.MetricsACL, d.MCPACL, d.Alerts, d.Backup = nil, "", nil, nil, nil, nil, nil
 	d.Keys, d.ServerAuth, d.NTSServer, d.LeapTZ, d.LeapMode, d.LeapSmear = nil, nil, false, "", "", false
 	d.Schedule = nil
+	d.MCPKeys = nil
 }
