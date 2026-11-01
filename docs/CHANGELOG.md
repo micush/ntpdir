@@ -1,5 +1,70 @@
 # Changelog
 
+## [v201] - 2026-11-01 — Ported from dnsdir: IPv4-first connections, fallback servers are probed, self-check, per-gateway capture, faster log scan
+
+### Added
+- **IPv4-first outbound connections** (`netprefer.go`). Every name this node dials itself (update check, WHOIS, LDAP, syslog, SSO, cluster pinning, alert delivery) is tried over IPv4 first and IPv6 only if that fails, so a host with a broken IPv6 route no longer waits for it to time out.
+- **Fallback NTP servers are probed every round.** Before, a fallback server was assumed up. Now `ProbeNow` queries it like any other server and `applyFallback` records the result without ever changing whether the gateway is healthy (a fallback is still only used when every ordinary server is down).
+  - **New alert `fallback_down`** ("Fallback server not answering", warning): fires when a fallback has not answered for `FailThreshold` rounds in a row.
+  - Shown on the NTP page as an amber "no answer" pill, in the gateway canvas (`FallbackDown`), in `ntpdir --status` ("fallback servers NOT ANSWERING") and over MCP. The log notes when one stops answering and when it answers again.
+  - Names are resolved IPv4-first.
+- **Self-check** (`selfcheck.go`). The node asks its own NTP address (every anycast/VIP address it serves, from loopback) every 5 s. Three misses in a row pause the node, in memory only, so the gateway's traffic goes to another node. It is held for 1 minute, doubling up to 10 minutes, and ends after 6 good answers in a row.
+  - Quiet when silence is by design: chrony not serving (not running, not synced, too far off) or muted writes no allow rules and refuses the port, which the check does not count as a fault.
+  - Guards: never pauses the only node in service, never the last server of a gateway, and does nothing while AnyName is installed (`dnsdirPresent()`).
+  - A manual pause or resume takes over from a self-pause. `--node-status` and Monitor ▸ Node say "This node PAUSED ITSELF".
+  - Setting: Configure ▸ Settings ▸ General ▸ Self-check (on by default). Stored as `self_check` only when switched off, so a file that never touched it still loads in older versions.
+- **Per-gateway packet capture.** Monitor ▸ Capture: the Node menu lists each gateway; "Capture on its nodes" captures on that gateway's nodes only, on the gateway's own interface, filtered to the gateway's addresses (`(hosts) and (your filter)`). API field `gw` on `/api/clustercapture/start`. CLI: `--capture - --group N`, with `--capture-file FILE.tgz`.
+- **Test** that pausing the primary hands the role to a node in service (`TestPausingThePrimaryHandsItOver`).
+
+### Changed
+- **Faster log scan** (`logstore.go`): the log reader skips files outside the requested time range, counts lines without decoding them, and keeps a ring buffer instead of the whole result. Same output.
+- Help, README and `--help` updated for all of the above.
+
+### Fixed
+- **A paused node could be promoted by failover.** `pickFailover` now skips members that are paused.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test ./...` (ok; the second `-race` run failed `TestBGPOperateAPIAndStatus`, the known `fakeFRR` race below, and passed on a full re-run), `GOOS=linux GOARCH=… go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- The first full run failed `TestHelpCoversEveryField`: the Self-check checkbox was not in the test's list of Settings field arrays. `SELF_FIELDS` is added to `help_fields_test.go`; the help already had its entry.
+- **New tests:** `selfcheck_test.go` (pause after three misses, hold and doubling, six good answers to end it, manual pause/resume takes over, quiet when chrony is silent by design, no targets, the guards, `TestProbeNTP`, `TestProbeNTPComesFromLoopback`, `TestSelfCheckSetting`, `TestSelfCheckTargets`), `netprefer_test.go`, fallback probing (`TestFallbackProbedButAlwaysUp`, `TestFallbackByNameIsProbed`, `TestAlertFallbackNotAnswering`), `TestGatewayCaptureFilter`, `TestClusterCaptureOfAGateway`, `TestReadLogSkipsFilesBeforeTheRange`, `TestPausingThePrimaryHandsItOver`, and a paused-member case in `failover_test.go`.
+- **chrony, live:** a private `chronyd` with `ratelimit interval 1 burst 10`: probes from loopback are rate-limited like any client (5 probes/s lost 11 of 30), a muted chrony refuses the port. That is why a refused connection counts as a miss only while chrony is expected to answer (`chrony.answering()`).
+- **UI, live:** the real `webui/app.js` in headless Chromium (light and dark) against a mocked API: the NTP page shows "no answer" for a silent fallback and "up" for an answering one; Settings ▸ General has the Self-check box and saves `self_check:false` only when it is unticked; Monitor ▸ Capture lists the gateway in the Node menu, reads "Capture on Gateway Office" and sends `POST /api/clustercapture/start {"gw":"100",…}`. No script errors.
+
+### Not verified
+- **A real daemon pausing itself.** The self-check was tested with fakes and against a private chronyd for the rate-limit and mute behaviour, but not in a running two-node cluster with the anycast addresses on the loopback.
+- **Per-gateway capture on real nodes** (tcpdump on each node of a gateway and the combined download): tested with stubs and in the UI against a mock only.
+- **Fallback probing against real pool servers**, and the `fallback_down` alert end to end.
+- **The PAM and authentication checks** of the web GUI were not repeated: `web.go`, `webtls.go`, `pam_*.go` are untouched; only `webui/app.js` and `webui/help.js` changed there. Cross-compiles build the fail-closed PAM stub.
+- **Known flaky test:** `TestBGPOperateAPIAndStatus` can fail under `-race` (a data race in the test helper `fakeFRR`, also present in v199; about 1 run in 60).
+- Not ported: automatic (ACME) certificates for the GUI.
+
+## [v200] - 2026-11-01 — Monitor ▸ Anycast shows how fast a BGP neighbor drops a dead node (the BFD timers)
+
+### Added
+- **The BFD timers of every BGP session, and the time a dead node keeps getting traffic.** FRR already printed each session's intervals in `show bfd peers json`; only the state was read from it. `parseBFDSessions` (`bgp.go`) now also reads `receive-interval`, `transmit-interval` and `detect-multiplier`, and the neighbor's `remote-receive-interval`, `remote-transmit-interval` and `remote-detect-multiplier`, and for a session that is **up** works out, as RFC 5880 asynchronous mode defines it:
+  - **`detect_ms`, the time the neighbor takes to drop this node when it goes silent**: this node's detect multiplier times the slower of this node's transmit interval and the neighbor's receive interval. This is how long a dead node keeps being sent traffic, and so the number that matters for failover.
+  - **`peer_detect_ms`, the time this node takes to drop the neighbor**: the neighbor's multiplier times the slower of the neighbor's transmit interval and this node's receive interval. Left out when FRR does not print the neighbor's multiplier.
+- **Where it shows.**
+  - `/api/bgp`: each peer has `bfd_timers` (`tx_ms`, `rx_ms`, `mult`, `remote_tx_ms`, `remote_rx_ms`, `remote_mult`, `detect_ms`, `peer_detect_ms`). It is left out when the session is not up or FRR gave no intervals, so a session that is down never shows a made-up time.
+  - **Monitor ▸ Anycast ▸ BGP**: `detect_ms` in small text beside the BFD pill; the hover has the multiplier and interval behind it, and the other direction.
+  - `ntpdir --bgp`: `bfd up (drops this node after 900 ms)` after the BFD state.
+  - The OSPF tab and `--ospf` are unchanged; OSPF reads the BFD state through the same `parseBFDPeers`, which still returns the plain status.
+
+### Changed
+- **The help said to lower the timers on the router to notice a dead node sooner. That is only half true, and the text now says so.** BFD is on for every neighbor with no profile, so this node sends at FRR's defaults (every 300 ms, detect multiplier 3 = 900 ms). A router with slower timers makes the time longer; a faster one cannot make it shorter than this node's own. Changed in the BGP help topic (Configure ▸ Anycast) and the Monitor ▸ Anycast topic, and in the README. The same sentence in the OSPF help topic is left as it was.
+- **README:** the "Anycast addresses and BGP" section is updated.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok), `CGO_ENABLED=0 go test ./...` (ok), `GOOS=linux GOARCH=… go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- The first `go test -race` run failed `TestBGPOperateAPIAndStatus` with a data race inside the test helper `fakeFRR` (`bgp_test.go`: its call log is written by a background `Apply` and by the status call at the same time, with no lock). It is not new: the unmodified v199 tree fails the same test the same way (1 run of 60 with `-race -count=60`), and so does this tree about as often (2 of 60). A full re-run was ok. The helper is left as it is; it wants a mutex.
+- **New tests** (`bgp_test.go`): `TestParseBFDSessionsTimers` (the field names as FRR prints them; both ends at 300 ms × 3 = 900 ms each way; the slower end wins, 3 × 500 and 5 × 300 = 1500 ms; a router faster than this node's own interval still gives 900 ms; a session that is down, or up with no intervals, has no timers; the neighbor's multiplier missing gives only `detect_ms`; an address that is not an address is skipped; `parseBFDPeers` still gives the plain status) and `TestAddBFD` (state and timers set on the matching peers only, unreadable output leaves what was there, the JSON names and the timers left out when there are none).
+- **UI, live:** the real `webui/app.js` in headless Chromium (Playwright, light and dark) against a mocked API with three neighbors: an up session with both times (`up 900 ms`, hover with both directions), an up session where the router is the slower end (`up 1500 ms`), and a down session with no time. No script errors.
+
+### Not verified
+- **Against a real FRR and router.** The field names are the ones `show bfd peers json` prints as far as I know them, and the new tests use JSON of that shape, but no FRR was run for this change. If FRR leaves out `remote-detect-multiplier`, only `detect_ms` is shown (tested). Compare the figure on Monitor ▸ Anycast with `vtysh -c "show bfd peers"` on a real node after the update.
+- **The PAM and authentication checks** of the web GUI were not repeated: `web.go`, `webtls.go`, `pam_*.go` and every auth, CSRF and lockout path are untouched; only `webui/app.js` and `webui/help.js` changed.
+- **The cross-compiles** run with cgo off and so build the fail-closed PAM stub; only the native amd64 build was checked with PAM.
+
 ## [v198] - 2026-10-31 — The MCP Keys table looks and works like the address list above it
 
 ### Changed

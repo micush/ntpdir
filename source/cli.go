@@ -498,7 +498,9 @@ func (f *cliFlags) run(sock string) bool {
 	case *f.nodeStatus:
 		var r NodePauseState
 		decode(op(sock, "node.status", nil), &r)
-		if r.Paused {
+		if r.Paused && r.Auto != "" {
+			fmt.Println("This node PAUSED ITSELF: " + r.Auto + ". It starts again by itself to check; --node-resume tries at once.")
+		} else if r.Paused {
 			fmt.Println("This node is PAUSED: it is not serving. Resume it with --node-resume.")
 		} else {
 			fmt.Println("This node is running.")
@@ -814,6 +816,9 @@ func showCanvas(sock string) {
 				note = "IN USE now: every server is down or paused"
 			}
 			fmt.Printf("      fallback servers: %s — %s\n", strings.Join(g.Fallback, ", "), note)
+			if len(g.FallbackDown) > 0 {
+				fmt.Printf("      fallback servers NOT ANSWERING: %s\n", strings.Join(g.FallbackDown, ", "))
+			}
 		}
 		if g.LBOwn {
 			fmt.Printf("      health checks: this gateway's own (stratum up to %d, root distance up to %d ms, %s, %d failures) — --lb settings follows Settings\n",
@@ -1263,7 +1268,7 @@ func runCapture(sock string, f *cliFlags) {
 		}
 		secs = n
 	}
-	if *f.allNodes {
+	if *f.allNodes || *f.group > 0 {
 		runClusterCapture(sock, f, secs)
 		return
 	}
@@ -1293,11 +1298,20 @@ func runCapture(sock string, f *cliFlags) {
 
 func runClusterCapture(sock string, f *cliFlags, secs int) {
 	if *f.captureFile == "" {
-		fatalf("--all-nodes needs --capture-file FILE.tgz (one .pcap per node is bundled in it)")
+		fatalf("--all-nodes and --group need --capture-file FILE.tgz (one .pcap per node is bundled in it)")
 	}
 	var job CaptureJob
-	decode(op(sock, "capture.cluster.start", map[string]any{"iface": *f.captureIface, "filter": *f.captureFilter, "seconds": secs}), &job)
-	fmt.Fprintf(os.Stderr, "capturing on %s on every node for %d s ...\n", *f.captureIface, secs)
+	args := map[string]any{"iface": *f.captureIface, "filter": *f.captureFilter, "seconds": secs}
+	where := "every node"
+	if g := *f.group; g > 0 { // one gateway: its nodes only, its interface (--capture -) and its addresses
+		args["gw"] = strconv.Itoa(g)
+		where = "the nodes of gateway " + strconv.Itoa(g)
+		if *f.captureIface == "-" {
+			args["iface"] = ""
+		}
+	}
+	decode(op(sock, "capture.cluster.start", args), &job)
+	fmt.Fprintf(os.Stderr, "capturing on %s, on %s for %d s ...\n", job.Iface, where, secs)
 	for i := 0; i < secs+60; i++ {
 		time.Sleep(time.Second)
 		var st CaptureJob

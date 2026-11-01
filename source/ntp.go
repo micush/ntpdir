@@ -278,6 +278,7 @@ type Server struct {
 	round       *probeRound // this round's result, until the pool has judged all servers together
 	fam         [2]famState // what each address family found at the last probe
 	via         int         // the family the server's numbers come from (IPv4 whenever it answers well)
+	fbProbed    bool        // a fallback server: it has been asked at least once (it is reported on, never taken out)
 }
 
 // probeRound is one server's result in the round under way.
@@ -314,6 +315,9 @@ type ServerStat struct {
 	// Falseticker: its time differs from that of the other servers by more than max_offset_ms.
 	Chrony      string `json:"chrony,omitempty"` // chrony's mark for this server when it is one of its sources (see ChronySrc)
 	Falseticker bool   `json:"falseticker,omitempty"`
+	// Answering is set on fallback servers once they have been asked: whether the last probe was answered well.  A fallback
+	// that does not answer is reported, never taken out (it is the last resort).
+	Answering *bool `json:"answering,omitempty"`
 	// Auth says how the authentication of the server goes when it is set to use NTS or a key (Configure ▸ NTP ▸ Security).
 	Auth *AuthStat `json:"auth,omitempty"`
 	// Which address families the server was probed over; Via is the one its numbers come from (IPv4 when it answers well).
@@ -370,7 +374,7 @@ func NewPool(cfg NTPConfig) *Pool {
 		p.servers = append(p.servers, &Server{Addr: a, hist: srvhist.series(a)})
 	}
 	for _, a := range cfg.FallbackServers {
-		// a fallback is a last resort: it is never probed and always counts as up
+		// a fallback is a last resort: it is probed and reported on every round, but always counts as up
 		p.servers = append(p.servers, &Server{Addr: a, Fallback: true, healthy: true, hist: srvhist.series(a)})
 	}
 	return p
@@ -409,11 +413,13 @@ func (p *Pool) Stop() {
 func (p *Pool) ProbeNow(ctx context.Context) {
 	var wg sync.WaitGroup
 	var probed []*Server
+	var fbs []*Server
 	for _, s := range p.servers {
 		if s.Fallback {
-			continue
+			fbs = append(fbs, s)
+		} else {
+			probed = append(probed, s)
 		}
-		probed = append(probed, s)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -424,8 +430,43 @@ func (p *Pool) ProbeNow(ctx context.Context) {
 	wg.Wait()
 	if ctx.Err() == nil {
 		p.judgeRound(probed)
+		for _, s := range fbs {
+			p.applyFallback(s)
+		}
 	}
 	p.noteFallback()
+}
+
+// applyFallback records a fallback server's probe for the server list and the alerts.  Its health is not touched: a fallback
+// always counts as up, because it is the last resort and taking it out would leave nothing to answer from.
+func (p *Pool) applyFallback(s *Server) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.round
+	s.round = nil
+	if r == nil {
+		return
+	}
+	s.lastProbe = time.Now()
+	s.fbProbed = true
+	if r.err == nil {
+		if s.fails >= p.cfg.FailThreshold {
+			infof("ntp: fallback server %s answers again (%.1fms)", s.Addr, ms(r.s.RTT))
+		}
+		s.sample(r.s.RTT, p.cfg.LatencyAlpha)
+		s.okCount++
+		s.fails = 0
+		s.lastErr = ""
+		s.hist.addPrOK()
+		return
+	}
+	s.failCount++
+	s.fails++
+	s.lastErr = r.err.Error()
+	s.hist.addPrFail()
+	if s.fails == p.cfg.FailThreshold {
+		warnf("ntp: fallback server %s does not answer: %v (it stays in the list as the last resort)", s.Addr, r.err)
+	}
 }
 
 // noteFallback logs the moment the pool starts or stops answering from its fallback servers.
@@ -674,6 +715,10 @@ func (p *Pool) Snapshot() []ServerStat {
 		}
 		if !s.lastProbe.IsZero() {
 			st.Via = famName[s.via]
+		}
+		if s.Fallback && s.fbProbed {
+			ans := s.fails == 0
+			st.Answering = &ans
 		}
 		for f, fs := range s.fam {
 			if fs.tried {

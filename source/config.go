@@ -471,7 +471,7 @@ type NTPConfig struct {
 	ServerNames map[string]string `json:"server_names,omitempty"`
 	// FallbackServers are a last resort, used only while no server in Servers is in service (all down or paused,
 	// or none listed): the pool then answers from them, and goes back to Servers as soon as one of those answers
-	// again.  Same address forms as Servers.  They are never probed and always count as up.
+	// again.  Same address forms as Servers.  They are asked every probe round and reported (and raise an alert when silent) but always count as up.
 	FallbackServers []string `json:"fallback_servers,omitempty"`
 	// PausedServers are listed servers that are taken out of service (no
 	// requests, no probes) until resumed, e.g. during maintenance.  Replicated
@@ -870,6 +870,12 @@ type DaemonConfig struct {
 	// replicated; omitempty so a config that never used it stays readable by older
 	// versions.
 	NodePaused bool `json:"node_paused,omitempty"`
+	// SelfCheck makes the node send its own NTP addresses a request every few seconds and pause itself (like NodePaused, but
+	// only in memory) when chrony stops answering while the process is still up: otherwise the VIP and the anycast routes
+	// would stay and clients would time out.  It resumes by itself once the addresses answer again.  Local to the node.  A
+	// pointer so that a file that never touched it stays readable by older versions: nil and true are on, false is off
+	// (see selfcheck.go).
+	SelfCheck *bool `json:"self_check,omitempty"`
 	// PausedServersHere are the NTP servers paused on this node only (the shared list lives in the NTP block).
 	// Local, never replicated.
 	PausedServersHere []string `json:"paused_servers_here,omitempty"`
@@ -890,7 +896,7 @@ func (dc *DaemonConfig) effective() *DaemonConfig {
 	}
 	c.NTP = here(c.NTP)
 	for i := range c.Groups {
-		if dc.NodePaused || c.Groups[i].PausedAll { // paused on every node, or this whole node is
+		if dc.nodePausedNow() || c.Groups[i].PausedAll { // paused on every node, or this whole node is
 			c.Groups[i].Paused = true
 		}
 		if id := localNodeID(); id != "" && containsStr(c.Groups[i].ExcludedNodes, id) { // removed from this gateway: it serves nothing here

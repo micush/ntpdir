@@ -515,6 +515,9 @@ func configSections(a, b *DaemonConfig) []Section {
 		}
 	}
 
+	if a.selfCheckOn() != b.selfCheckOn() {
+		out = append(out, Section{"Self-check", onOff(a.selfCheckOn()) + " → " + onOff(b.selfCheckOn())})
+	}
 	if a.NodePaused != b.NodePaused {
 		if b.NodePaused {
 			out = append(out, Section{"Node", "paused — this node is out of service"})

@@ -40,6 +40,7 @@ func TestHelpCoversEveryField(t *testing.T) {
 		{"PROM_FIELDS", "config_metrics"},
 		{"MCP_FIELDS", "config_mcp"},
 		{"LLDP_FIELDS", "config_general"},
+		{"SELF_FIELDS", "config_general"},
 		{"CLUSTER_FIELDS", "config_cluster"},
 		{"LOG_FIELDS", "config_logs"},
 		{"SYSLOG_FIELDS", "config_logs"},

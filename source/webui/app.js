@@ -104,13 +104,15 @@
   // Statistics also offers each gateway: the nodes that serve it, added together like Cluster.  (The numbers are kept per node,
   // so a node that serves several gateways counts all its traffic in each.)
   const GW = "*gw:";
-  const GW_TABS = ["stats", "host"];   // the pages that offer the gateways
+  const GW_TABS = ["stats", "host", "capture"];   // the pages that offer the gateways
   const isGw = () => typeof state.target === "string" && state.target.startsWith(GW);
+  const gwTitle = (g) => g.name || String(g.vip4 || g.vip6 || "").split("/")[0] || "gateway " + g.group_id;
   const gwItems = () => (state.gws || []).map((g) => {
     const n = state.nodes.filter((p) => !(g.excluded_nodes || []).includes(p.node_id)).length;
-    const label = g.name || String(g.vip4 || g.vip6 || "").split("/")[0] || "gateway " + g.group_id;
-    return n ? [GW + g.group_id, "Gateway " + label + " (" + n + ")", false] : null;
+    return n ? [GW + g.group_id, "Gateway " + gwTitle(g) + " (" + n + ")", false] : null;
   }).filter(Boolean);
+  const pickedGw = () => (isGw() ? (state.gws || []).find((g) => String(g.group_id) === state.target.slice(GW.length)) || null : null);
+  const many = () => state.target === CLUSTER || isGw();   // a page about several nodes: every node, or a gateway's own
   const CLUSTER_TABS = ["stats", "host", "capture"];
   const CLUSTER_API = [[/^\/api\/qstats(\?|$)/, "/api/clusterstats"], [/^\/api\/host(\?|$)/, "/api/clusterhost"], [/^\/api\/qstats\/clear$/, "/api/clusterstats"]];
   function route(path) {
@@ -2113,7 +2115,7 @@
                     title: f.family + " " + f.addr + ": " + (f.ok ? (f.ewma_ms ? fmtMs(f.ewma_ms) + " ms" : "answers") : f.error || "no answer") + (f.ok && f.family === s.via ? " (the numbers shown are from this family)" : "") }, f.family === "IPv4" ? "v4" : "v6")) : null,
                   // authenticated with NTS or a key: green when it works, red when it does not, grey while chrony has yet to restart with it
                   s.auth ? h("span", { class: "fam-tag " + (s.auth.status === "ok" ? "use" : s.auth.status === "failing" ? "bad" : ""), title: s.auth.detail }, (s.auth.mode === "nts" ? "NTS" : "key") + (s.auth.status === "failing" ? " ✗" : s.auth.status === "pending" ? " …" : "")) : null),
-                h("td", {}, s.falseticker ? pill("falseticker", "bad") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad")),
+                h("td", {}, s.falseticker ? pill("falseticker", "bad") : s.fallback && s.answering === false ? pill("no answer", "warn") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad")),
                 h("td", {}, s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted" }, "no")),
                 h("td", { class: "num", title: s.time ? "Reference: " + s.time.refid : null }, s.time ? s.time.stratum : "–"),
                 h("td", { class: "num" }, s.time ? sgn(s.time.offset_ms) : "–"),
@@ -2156,7 +2158,7 @@
   const NTP_FIELDS = [
     { section: "Upstream servers" },
     { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
-    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are never probed and always count as up." },
+    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are asked every round and reported, but always count as up." },
     { section: "Health", cols: 3, note: "A server that fails a check is taken out as a source of every node. Applies to every gateway unless it has its own checks (Topology ▸ right-click the gateway ▸ Edit)." },
     { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", min: 1, max: 15 },
     { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", min: 0, max: 60000 },
@@ -2312,6 +2314,7 @@
     { k: "tls_insecure", l: "Do not check the server's certificate (tls)", t: "bool" },
   ];
   const LOG_FIELDS = [{ k: "log_level", l: "Log level", t: "select", options: ["debug", "info", "warning", "error"] }];
+  const SELF_FIELDS = [{ k: "self_check", l: "Pause this node when its own NTP stops answering", t: "bool" }];
 
   // Shown only when this node is part of a multi-node cluster.
   const sharedTag = (f) => (f.shared && state.clustered
@@ -3152,6 +3155,7 @@
 
     function renderForm(cfg) {
       const logs = fieldset(LOG_FIELDS, cfg);
+      const selfCheck = fieldset(SELF_FIELDS, { self_check: cfg.self_check !== false });   // on unless the file says false
       const syslog = fieldset(SYSLOG_FIELDS, cfg.syslog || {});
       const web = fieldset(WEB_FIELDS, cfg.web);
       const sso = ssoTabs(cfg.web);
@@ -3270,6 +3274,7 @@
         ...(cfg.bgp ? { bgp: cfg.bgp } : {}), // edited on the Anycast page
         ...(cfg.ospf ? { ospf: cfg.ospf } : {}), // likewise
         ...(cfg.node_paused ? { node_paused: true } : {}), // set on the Node page
+        ...(selfCheck.get().self_check ? {} : { self_check: false }), // on is the default and is not written
         ...(cfg.paused_servers_here ? { paused_servers_here: cfg.paused_servers_here } : {}), // set on the Topology page
       });
       // every committed edit (leaving a field, picking an option, ticking a box) is saved and applied
@@ -3358,7 +3363,7 @@
       // the Settings page is tabs (every card stays in the page, so a save reads all of them)
       const settingsTabs = () => {
         const TABS = [
-          ["general", "General", section("Neighbor discovery", lldp.el, h("p", { class: "f" }, lldpState))],
+          ["general", "General", h("div", {}, section("Self-check", selfCheck.el), section("Neighbor discovery", lldp.el, h("p", { class: "f" }, lldpState)))],
           ["logs", "Logs", h("div", {}, section("Log level", logs.el),
             section("Syslog", syslog.el, h("div", { class: "toolbar" }, syslogTest, syslogMsg, syslogState),
               h("p", { class: "hint" }, "Every line the log shows is also sent to the server, from this node only: the setting is not copied to the other nodes. A server that is down never holds anything up; the newest messages wait in a queue and the oldest are dropped if it fills.")))],
@@ -4799,7 +4804,7 @@
     let status, iface, filter, info, box, startBtn, dlBtn, ifs = null, cursor = 0, shown = 0, last = null, running = false;
     let job = null, jobBox, durSel, goBtn, dlJob;
     const ROWS = 1500;
-    const cluster = () => state.target === CLUSTER;
+    const cluster = many;
     const sizeText = (n) => (n < 1024 ? n + " bytes" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB");
 
     const ifaceSelect = () => h("select", { "aria-label": "Interface", class: "capif" });
@@ -4884,7 +4889,8 @@
     }
     async function goAll() {
       try {
-        await api("POST", "/api/clustercapture/start", { iface: iface.value, filter: filter.value.trim(), seconds: Number(durSel.value) });
+        const gw = pickedGw();
+        await api("POST", "/api/clustercapture/start", gw ? { gw: String(gw.group_id), filter: filter.value.trim(), seconds: Number(durSel.value) } : { iface: iface.value, filter: filter.value.trim(), seconds: Number(durSel.value) });
         say(status, "ok");
         await pollJob();
       } catch (e) { fail(status)(e); }
@@ -4907,10 +4913,11 @@
           goBtn = h("button", { class: "btn primary", type: "button", onclick: goAll }, "Capture on all nodes");
           dlJob = h("button", { class: "btn", type: "button", disabled: true, onclick: () => apiDownload("/api/clustercapture/download", "ntpdir-cluster-capture.tgz").catch(fail(status)) }, "Download .tgz");
           jobBox = h("div", {});
-          main.append(status, section("Capture on every node",
-            h("div", { class: "hint nomargin" }, "Runs the same capture on every node of the cluster at the same time, for the time you choose, and bundles one .pcap per node in a .tgz. Each node keeps its newest packets (about 4 MB). The capture only listens."),
-            h("div", { class: "toolbar tight logbar" }, iface, filter, durSel, goBtn, dlJob), jobBox));
-          await loadIfaces().catch(fail(status));
+          const gw = pickedGw();
+          if (gw) goBtn.textContent = "Capture on its nodes";
+          main.append(status, section(gw ? "Capture on gateway " + gwTitle(gw) : "Capture on every node",
+            h("div", { class: "toolbar tight logbar" }, gw ? h("span", { class: "mono small" }, gw.interface) : iface, filter, durSel, goBtn, dlJob), jobBox));
+          if (!gw) await loadIfaces().catch(fail(status));
           await pollJob().catch(fail(status));
           return;
         }
@@ -4962,6 +4969,9 @@
     const stateKind = (st) => (st === "Established" ? "ok" : st === "Active" || st === "Connect" || st === "OpenSent" || st === "OpenConfirm" ? "warn" : "bad");
     const ospfKind = (st) => (st === "Full" ? "ok" : st === "Down" || st === "Attempt" ? "bad" : "warn");
     const bfdKind = (st) => (st === "up" ? "ok" : st === "init" ? "warn" : st === "down" ? "bad" : "");
+    // the time beside a BFD pill: how long the router takes to drop this node once it goes silent
+    const bfdTip = (t) => "The router drops this node after " + t.detect_ms + " ms without a BFD packet (" + t.mult + " × " + Math.round(t.detect_ms / t.mult) + " ms)." +
+      (t.peer_detect_ms ? " This node drops the router after " + t.peer_detect_ms + " ms." : "");
     const applied = (a) => ["Last apply", h("span", {}, pill(a.ok ? "ok" : "failed", a.ok ? "ok" : "bad"), ...(a.ok ? [] : [" ", a.detail || "–"]))];
 
     function draw(st, os) {
@@ -4996,7 +5006,7 @@
         const p = live.get(n.peer);
         return h("tr", {}, h("td", { class: "mono" }, n.peer), h("td", {}, String(n.remote_as)), h("td", {}, n.description || ""),
           h("td", {}, n.disabled ? pill("disabled", "") : p ? pill(p.state, stateKind(p.state)) : pill(st.running ? "not known yet" : "–", "")),
-          h("td", {}, p && p.bfd ? pill(p.bfd, bfdKind(p.bfd)) : "–"),
+          h("td", {}, p && p.bfd ? pill(p.bfd, bfdKind(p.bfd)) : "–", p && p.bfd_timers ? h("span", { class: "hint", title: bfdTip(p.bfd_timers) }, " " + p.bfd_timers.detect_ms + " ms") : null),
           h("td", {}, p && p.state === "Established" ? p.uptime : "–"),
           h("td", {}, p && p.state === "Established" ? String(p.sent) : "–"));
       };

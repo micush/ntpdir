@@ -22,6 +22,7 @@ var alertDefs = []alertDef{
 	{ID: "upstream_down", Title: "Upstream server down", Subject: "upstream server", Kind: "updown", Sev: "warning", On: true, Fix: []string{"recheck"}, Go: "ntp"},
 	{ID: "upstream_falseticker", Title: "Upstream server has the wrong time", Subject: "upstream server", Kind: "updown", Sev: "warning", On: true, Fix: []string{"recheck"}, Go: "ntp"},
 	{ID: "fallback_in_use", Title: "Only fallback servers in use", Subject: "pool", Kind: "updown", Sev: "warning", On: true, Fix: []string{"recheck"}, Go: "ntp"},
+	{ID: "fallback_down", Title: "Fallback server not answering", Subject: "fallback server", Kind: "updown", Sev: "warning", On: true, Fix: []string{"recheck"}, Go: "ntp"},
 	{ID: "listener_down", Title: "NTP listener down", Subject: "gateway", Kind: "updown", Sev: "critical", On: true, Fix: []string{"restart_chrony"}, Go: "gateways"},
 	{ID: "no_active_gateway", Title: "No active gateway", Subject: "gateway", Kind: "updown", Sev: "critical", On: true, Go: "gateways"},
 	{ID: "certificate_expiring", Title: "Certificate about to expire", Subject: "certificate", Kind: "value", Sev: "warning", On: true, Unit: "days left", Below: true, Thresh: 14, ForMin: 0, Go: "cfg_web"},
@@ -86,9 +87,6 @@ func (e *AlertEngine) sampleNode(now time.Time) []alertSample {
 	for _, pi := range st.sup.poolList() {
 		pl := poolLabel(st, pi.Key)
 		for _, sv := range st.namedServers(pi) {
-			if sv.Fallback {
-				continue
-			}
 			who := sv.Addr
 			if sv.Name != "" {
 				who = sv.Name + " (" + sv.Addr + ")"
@@ -96,6 +94,16 @@ func (e *AlertEngine) sampleNode(now time.Time) []alertSample {
 			subj := sv.Addr
 			if pi.Key != 0 {
 				subj += " · " + pl
+			}
+			if sv.Fallback {
+				if sv.Answering != nil { // not before its first probe
+					msg := who + " is a fallback server and does not answer"
+					if sv.LastError != "" {
+						msg += ": " + sv.LastError
+					}
+					out = append(out, alertSample{Rule: "fallback_down", Subject: subj, Bad: !*sv.Answering && sv.ConsecFails >= pi.Pool.cfg.FailThreshold, Message: msg})
+				}
+				continue
 			}
 			msg := who + " does not pass its tests"
 			if sv.LastError != "" {

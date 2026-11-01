@@ -352,3 +352,57 @@ func TestAlertViewOrderStableForSameSecond(t *testing.T) {
 		}
 	}
 }
+
+// A fallback server that does not answer opens its own alert (after the failure threshold), while the
+// "upstream down" rule never looks at it.
+func TestAlertFallbackNotAnswering(t *testing.T) {
+	a, fb := newFakeNTP(t), newFakeNTP(t)
+	cfg := fbCfg([]string{a.addr}, []string{fb.addr})
+	p := NewPool(cfg)
+	dc := newDaemonConfig()
+	dc.Groups = nil
+	sup := NewSupervisor(context.Background(), dc)
+	sup.pools = map[int]*Pool{0: p}
+	e := &AlertEngine{st: &StatusServer{sup: sup}}
+	e.cfg = func() *AlertsConfig { return nil }
+	old := chronyNow
+	defer func() { chronyNow = old }()
+	chronyNow = func() ChronyState {
+		return ChronyState{Running: true, Synced: true, Sources: []ChronySrc{{Name: "a", Reach: 7}}}
+	}
+	bad := func() (fallbackDown, upstreamDown bool, n int) {
+		for _, s := range e.sampleNode(time.Now()) {
+			switch s.Rule {
+			case "fallback_down":
+				fallbackDown, n = s.Bad, n+1
+			case "upstream_down":
+				upstreamDown = upstreamDown || (s.Bad && strings.Contains(s.Subject, fb.addr))
+			}
+		}
+		return
+	}
+	if _, _, n := bad(); n != 0 {
+		t.Fatal("no verdict on a fallback before its first probe")
+	}
+	p.ProbeNow(context.Background())
+	if d, _, n := bad(); n != 1 || d {
+		t.Fatalf("an answering fallback: down=%v samples=%d", d, n)
+	}
+	fb.mode.Store(fakeKoD)
+	p.ProbeNow(context.Background()) // one failure: under the threshold
+	if d, _, _ := bad(); d && cfg.FailThreshold > 1 {
+		t.Fatal("one failed round is under the threshold")
+	}
+	for i := 0; i < cfg.FailThreshold; i++ {
+		p.ProbeNow(context.Background())
+	}
+	d, u, _ := bad()
+	if !d || u {
+		t.Fatalf("a silent fallback: fallback_down=%v upstream_down(fallback)=%v", d, u)
+	}
+	fb.mode.Store(0)
+	p.ProbeNow(context.Background())
+	if d, _, _ := bad(); d {
+		t.Fatal("the alert must clear once the fallback answers")
+	}
+}

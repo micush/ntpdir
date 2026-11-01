@@ -473,6 +473,14 @@ func (m *chronyMgr) authApplied() bool {
 	return authSumOf(body) == authSumOf(m.appliedKey())
 }
 
+// answering says whether chrony is meant to answer clients as far as ntpdir's own settings go: it has been given its allow
+// rules and has not been told to answer nobody.  (Whether it runs and keeps time is chronyServingFn's question.)
+func (m *chronyMgr) answering() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.allowed && !m.muted
+}
+
 func (m *chronyMgr) allowedOK() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -638,7 +638,7 @@ func postWebhook(u string, body []byte) error {
 	if err != nil {
 		return err
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := ipv4FirstClient(10 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}

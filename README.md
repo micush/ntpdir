@@ -135,7 +135,7 @@ chrony then does its own selection among the servers it is given. The old forwar
 
 ### Fallback servers
 
-`fallback_servers` in the `ntp` block lists upstreams that are used **only while no normal server is in service**: every one down or paused, or none listed. They are **never probed** and always count as up. As soon as a normal server answers again, the fallbacks are dropped. The NTP page marks them and says when they are in use, and the canvas shows amber "answering from the fallback servers".
+`fallback_servers` in the `ntp` block lists upstreams that are used **only while no normal server is in service**: every one down or paused, or none listed. They are **asked every probe round** and reported (the Servers page shows *no answer*, `--show-ntp` shows `silent`, and the alert *Fallback server not answering* opens), but they always count as up: a silent last resort is still the last resort. As soon as a normal server answers again, the fallbacks are dropped. The NTP page marks them and says when they are in use, and the canvas shows amber "answering from the fallback servers".
 
 ### Port and clients
 
@@ -379,7 +379,7 @@ AnyTime can drive FRR on a node so the anycast addresses are announced without a
 - A neighbor can have a **multihop** limit (2–255, eBGP only) for a peer that is not on a connected subnet. FRR then runs BFD to it in multihop mode, so the peer must be set up the same way.
 
 ```
-ntpdir --bgp                                                    # settings, neighbor and BFD state, announced addresses
+ntpdir --bgp                                                    # settings, neighbor and BFD state (with the time a dead node is noticed in), announced addresses
 ntpdir --asn 64512 --router-id 192.0.2.10        # --router-id needs an AS, set now or earlier
 ntpdir --keepalive 3 --hold 9
 ntpdir --as-prepend on                  # the local AS three more times on every announcement (off undoes it)
@@ -400,7 +400,7 @@ ntpdir --bgp-neighbor-disable 192.0.2.1          # shut one neighbor down, kept 
 - **A prefix is in FRR's table only while AnyTime holds the address on `lo`**, so it is withdrawn when no NTP server answers, the gateway is paused or AnyTime stops, and within about 10 seconds if AnyTime is killed (the address lifetime, above). Lower the router's timers to shorten the time your peers need to notice.
 - **The neighbor password** is an MD5 TCP session password. It is stored in the config file and its history (root-only), and `--password` on the command line is visible to other users of the host, so the Anycast page is the safer place to set it.
 
-**Where to look.** **Monitor ▸ Anycast** shows each neighbor's session and BFD state, read from FRR every few seconds (`vtysh -c "show bgp summary json"`, `show bfd peers json`), and which anycast addresses are announced. **Configure ▸ Anycast** (tab *BGP*, the first one) has the AS, router ID and the neighbor table (**+** adds a row, **−** removes the highlighted one).
+**Where to look.** **Monitor ▸ Anycast** shows each neighbor's session and BFD state, read from FRR every few seconds (`vtysh -c "show bgp summary json"`, `show bfd peers json`), and which anycast addresses are announced. Beside a session's BFD state is the time the neighbor takes to drop this node once it goes silent: the detect multiplier times the slower of this node's transmit interval and the neighbor's receive interval, as negotiated (the hover has the numbers). This node sends BFD at FRR's defaults (every 300 ms, 3 missed packets: 900 ms), so a router with slower timers makes the time longer, but a faster one cannot make it shorter. **Configure ▸ Anycast** (tab *BGP*, the first one) has the AS, router ID and the neighbor table (**+** adds a row, **−** removes the highlighted one).
 
 The generated config looks like this:
 
@@ -645,7 +645,7 @@ A directory account keeps its password and expiry date in the directory. **Add a
 | `--stats-clear` `[--all-nodes]`, `--scan ADDR`, `--ping ADDR\|NAME`, `--traceroute ADDR\|NAME` | Statistics page: **Clear**; right-click a client ▸ **Scan**, **Ping**, **Traceroute** |
 | `--stats` `[--stats-range now\|1h\|1d\|7d\|30d] [--stats-outcome KIND] [--stats-client ADDR \| --stats-server ADDR] [--all-nodes]`, `--whois ADDR` | Statistics page (Monitor); `--whois` is right-click ▸ **Whois** |
 | `--host` `[--host-range 1h\|1d\|7d\|30d] [--all-nodes]` | Monitor ▸ Node page; `--all-nodes` is the Node menu's **Cluster** entry (also on Statistics) |
-| `--capture IFACE` `[--capture-seconds N] [--capture-filter EXPR] [--capture-file FILE] [--all-nodes]`, `--capture-interfaces` | Capture page (Monitor); `--all-nodes` is the Node menu's **Cluster** entry there |
+| `--capture IFACE` `[--capture-seconds N] [--capture-filter EXPR] [--capture-file FILE] [--all-nodes] [--group N]`, `--capture-interfaces` | Capture page (Monitor); `--all-nodes` is the Node menu's **Cluster** entry there, `--group N` (with `--capture -`) its **Gateway** entries |
 | `--tshoot` `[--all-nodes] [--tshoot-file F]` | Log page ▸ tshoot |
 | `--log` `[--log-min LEVEL] [--log-grep WORDS] [--log-since 6h] [--log-lines N]` | Log page (Monitor) |
 | `--power restart\|shutdown\|cancel\|status` `[--in MIN \| --at HH:MM]` | Operate ▸ Node ▸ **Host** |
@@ -810,7 +810,7 @@ The Monitor section of the GUI has pages for statistics, the host, packet captur
 
 ### Alerts
 
-**Monitor ▸ Alerts** shows the alerts of the node picked in the top bar; **Configure ▸ Alerts** (`alerts` in the shared `ntp` block: `webhook`, `repeat_hours`, `rules`) holds the rules. The engine looks at the node every 15 seconds. A rule opens an alert when its condition has held long enough: *N failed checks in a row*, *N minutes*, or *M of the last N checks* for up/down rules (chrony not running, clock not synchronised, no time source answers, upstream server down or a falseticker, only fallback servers in use, NTP listener down, no active gateway), and *past a threshold for N minutes* for value rules (clock offset, stratum, certificate days left, CPU, memory, disk; stratum is off by default). It closes by itself after *N good checks in a row* or *N minutes* good (**Clear**). Only rules that are changed are written to the configuration; the others follow the defaults. An alert has a severity (info, warning, critical).
+**Monitor ▸ Alerts** shows the alerts of the node picked in the top bar; **Configure ▸ Alerts** (`alerts` in the shared `ntp` block: `webhook`, `repeat_hours`, `rules`) holds the rules. The engine looks at the node every 15 seconds. A rule opens an alert when its condition has held long enough: *N failed checks in a row*, *N minutes*, or *M of the last N checks* for up/down rules (chrony not running, clock not synchronised, no time source answers, upstream server down or a falseticker, only fallback servers in use, a fallback server not answering, NTP listener down, no active gateway), and *past a threshold for N minutes* for value rules (clock offset, stratum, certificate days left, CPU, memory, disk; stratum is off by default). It closes by itself after *N good checks in a row* or *N minutes* good (**Clear**). Only rules that are changed are written to the configuration; the others follow the defaults. An alert has a severity (info, warning, critical).
 
 States: open, recovering (good again, clear time not over), acknowledged (ends with the alert), silenced (a silence covers a rule and subject for 15 minutes to 7 days and outlives the alert) and closed (cleared, marked resolved, or rule switched off). An alert that closes and reopens within an hour is the same alert with its count raised. Right-click: Acknowledge, Silence…, Mark resolved, Copy, and More (Fix actions that are safe for the rule - check upstream servers now, restart chrony -, Go to, Edit rule…). Opened and resolved alerts are posted to the webhook as JSON and written to the log; with a repeat time the webhook is told again while the alert stays unacknowledged. Alerts and silences are kept per node in `alerts.json` in the state directory (30 days, 1000 alerts) and are not replicated. `/metrics` carries only counts: `ntpdir_alerts_active{severity}`, `ntpdir_alerts_acknowledged{severity}`, `ntpdir_alerts_opened_total`. API: `GET /api/alerts`, `POST /api/alerts/{ack,silence,resolve,fix,test}`.
 
@@ -927,9 +927,12 @@ ntpdir --capture-interfaces
 ntpdir --capture eth0 --capture-seconds 10 --capture-filter "host 10.20.0.205 and port 123"
 ntpdir --capture eth0 --capture-file /tmp/eth0.pcap
 ntpdir --capture eth0 --capture-seconds 30 --all-nodes --capture-file /tmp/cluster.tgz
+ntpdir --capture - --group 100 --capture-seconds 30 --capture-file /tmp/gateway.tgz
 ```
 
-Without `--capture-file` the packets are printed (the first 500); with `--all-nodes` a file is required. Every start is logged with the name of the user who made it.
+The last form captures one gateway: it runs only on the nodes that serve it (every node but the ones removed from it), on the gateway's interface (`-`; give an interface instead to override), and keeps only the packets to and from the gateway's addresses (its VIPs, further shared addresses and anycast addresses), narrowed further by `--capture-filter`. On the Capture page it is the Node menu's **Gateway** entries.
+
+Without `--capture-file` the packets are printed (the first 500); with `--all-nodes` or `--group` a file is required. Every start is logged with the name of the user who made it.
 
 ### Log
 
@@ -980,6 +983,8 @@ When a controller stops (a restart, an update, **Pause this node**), it tells th
 Operate ▸ Node ▸ *Maintenance* (or `ntpdir --node-pause`, `--node-resume`, `--node-status`) pauses every gateway on the node in one step. It resigns, stops answering NTP and stops probing, and the other nodes carry the traffic; the gateway controller role moves to another node, and if this node was the cluster's primary the primary role is handed to a running node too. Nothing is shut down.
 
 The flag (`node_paused` in the config file) is local to the node, never replicated, and survives restarts of AnyTime and of the host. Resuming brings the gateways back once their NTP servers answer. A gateway you paused on its own stays paused after the node resumes. With the Node menu, the page pauses any member, so to send all traffic to one node (to benchmark it, say), pause the others instead of shutting them down.
+
+**Self-check (a node whose NTP stops answering pauses itself).** The gateway address and the anycast routes follow what ntpdir says the node can do: the gateway runs, chrony is up and keeping time, an upstream server is healthy. A chrony that is stuck while it still runs would keep both on the node and clients would time out. So every 5 seconds the node sends a real NTP request, over UDP from its own loopback address (chrony always allows 127.0.0.0/8 and ::1 while it serves, whatever `allowed_clients` and `blocked_clients` say, and the address is the node's own, so the request reaches chrony's socket), to each address it serves: the gateway's shared addresses while the node is the active or a forwarding member, and the anycast addresses that are on lo. A kiss-o'-death answer counts as an answer. After 3 misses in a row the node pauses itself, in memory only, like Operate ▸ Node ▸ Pause: its gateways resign, the addresses come off and the other nodes carry on; the log says why and the Node page and `--node-status` show that the node paused itself. The configuration file is not changed, so a restart starts clean. After a minute the gateways start again to check, and 6 good answers in a row end the trouble; if they fail again the node pauses for twice as long, up to 10 minutes. Pause or Resume by hand takes over at once. Nothing counts as a miss while chrony is silent on purpose (no server in service, the clock too far off, chrony not running yet or its allow rules not sent yet) or for an address that is not on the machine. It never pauses the only node in service or the only node serving a gateway (it logs that instead), and it does nothing while AnyName is installed on the host. A request goes out once every 5 seconds to each address, far under any `client_rate`. Switch it off in Configure ▸ Settings ▸ General (`self_check: false` in the file; it is on when the key is absent, and a file that never mentioned it stays readable by older versions).
 
 ```
 ntpdir --node-pause

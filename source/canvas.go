@@ -68,10 +68,12 @@ type CanvasGateway struct {
 	LBOwn   bool           `json:"lb_own"`
 	Servers []CanvasServer `json:"servers"`
 	// Fallback are the servers used only while every one of Servers is down; UsingFallback says they are in use now.
-	Fallback      []string       `json:"fallback"`
-	UsingFallback bool           `json:"using_fallback,omitempty"`
-	Members       []CanvasMember `json:"members"`
-	Paused        bool           `json:"paused"`
+	Fallback      []string `json:"fallback"`
+	UsingFallback bool     `json:"using_fallback,omitempty"`
+	// FallbackDown are the fallback servers that did not answer their last probe (they still count as up).
+	FallbackDown []string       `json:"fallback_down,omitempty"`
+	Members      []CanvasMember `json:"members"`
+	Paused       bool           `json:"paused"`
 	// NodePaused says the pause comes from the whole node being paused, not from this gateway.
 	NodePaused bool `json:"node_paused,omitempty"`
 	// PausedScope says where this gateway is paused by its own setting: "all" (every node) or "node" (this one).
@@ -200,7 +202,7 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 	for i := range dc.Groups {
 		g := &dc.Groups[i]
 		cg := CanvasGateway{Name: g.Name, Piggyback: g.Piggyback, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
-			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.NodePaused, ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
+			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.nodePausedNow(), ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
 
 		if g.Piggyback {
 			cg.PiggybackShared = append([]string(nil), g.DNSDirShared...)
@@ -265,6 +267,9 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 		for _, addr := range cfg.FallbackServers {
 			if st, ok := stats[addr]; ok && st.Healthy {
 				fbUp = true
+			}
+			if st, ok := stats[addr]; ok && st.Answering != nil && !*st.Answering {
+				cg.FallbackDown = append(cg.FallbackDown, addr)
 			}
 		}
 		// the gateway itself, one state per address family
@@ -335,13 +340,13 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []Canva
 		cg.Status, cg.Detail = combineFamilies(cg.Families)
 		if g.Paused {
 			cg.Status, cg.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
-			if dc.NodePaused {
+			if dc.nodePausedNow() {
 				cg.Detail = "This node is paused — it is not serving; the other nodes carry on"
 			}
 			if g.PausedAll {
 				cg.PausedScope = "all"
 				cg.Detail = "Paused on all nodes — none of them serves it until it is resumed"
-			} else if !dc.NodePaused {
+			} else if !dc.nodePausedNow() {
 				cg.PausedScope = "node"
 			}
 			for i := range cg.Families {

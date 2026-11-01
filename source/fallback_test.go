@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -25,8 +28,8 @@ func TestFallbackServersOnlyWhenAllDown(t *testing.T) {
 	if p.UsingFallback() {
 		t.Fatal("not using the fallback while the normal servers are up")
 	}
-	if fb.hits.Load() != 0 { // a fallback is never probed
-		t.Fatalf("fallback got %d packets, want none", fb.hits.Load())
+	if fb.hits.Load() == 0 { // a fallback is asked every round, though it takes no clients
+		t.Fatal("the fallback was not probed")
 	}
 
 	// one normal server down: still no fallback
@@ -77,22 +80,76 @@ func TestNoFallbackStillFails(t *testing.T) {
 	}
 }
 
-// A fallback is a last resort: it is never probed and always counts as up, even though a probe
-// of it would fail.
-func TestFallbackNeverProbedAlwaysUp(t *testing.T) {
+// A fallback is a last resort: it is probed every round and reported on, but it always counts as up, even
+// when its probe fails.
+func TestFallbackProbedButAlwaysUp(t *testing.T) {
 	a, fb := newFakeNTP(t), newFakeNTP(t)
-	fb.mode.Store(fakeKoD) // refuses everything: a probe would fail it
-	p := NewPool(fbCfg([]string{a.addr}, []string{fb.addr}))
-	p.ProbeNow(context.Background())
-	p.ProbeNow(context.Background())
-	if fb.hits.Load() != 0 {
-		t.Fatalf("the fallback was probed %d times", fb.hits.Load())
+	fb.mode.Store(fakeKoD) // refuses everything: a probe fails
+	cfg := fbCfg([]string{a.addr}, []string{fb.addr})
+	p := NewPool(cfg)
+	find := func() ServerStat {
+		for _, s := range p.Snapshot() {
+			if s.Addr == fb.addr {
+				return s
+			}
+		}
+		t.Fatal("fallback missing from the snapshot")
+		return ServerStat{}
+	}
+	if find().Answering != nil {
+		t.Fatal("a fallback not asked yet must not claim either state")
+	}
+	for i := 0; i < cfg.FailThreshold+1; i++ {
+		p.ProbeNow(context.Background())
+	}
+	if got := fb.hits.Load(); got < 2 {
+		t.Fatalf("the fallback was probed %d times, want every round", got)
+	}
+	st := find()
+	if st.Answering == nil || *st.Answering || !st.Healthy || st.ConsecFails < cfg.FailThreshold || st.LastError == "" {
+		t.Fatalf("refusing fallback: %+v", st)
 	}
 	a.mode.Store(2)
 	p.ProbeNow(context.Background())
 	if !p.UsingFallback() {
-		t.Fatal("every normal server is down: the fallback must be in use without ever having been probed")
+		t.Fatal("every normal server is down: the failing fallback must still be the last resort in use")
 	}
+	if got := rankedAddrs(p); len(got) != 1 || got[0] != fb.addr {
+		t.Fatalf("ranked %v, want just the fallback", got)
+	}
+	// it answers again
+	fb.mode.Store(0)
+	p.ProbeNow(context.Background())
+	st = find()
+	if st.Answering == nil || !*st.Answering || st.ConsecFails != 0 || st.LastError != "" || st.Time == nil {
+		t.Fatalf("answering fallback: %+v", st)
+	}
+}
+
+// A fallback named by host is resolved like any server (IPv4 first).
+func TestFallbackByNameIsProbed(t *testing.T) {
+	fb := newFakeNTP(t)
+	_, port, _ := net.SplitHostPort(fb.addr)
+	old := lookupServerIPs
+	defer func() { lookupServerIPs = old }()
+	lookupServerIPs = func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+		if host == "time.fallback.test" && network == "ip4" {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		}
+		return nil, errors.New("no such host")
+	}
+	a := newFakeNTP(t)
+	p := NewPool(fbCfg([]string{a.addr}, []string{net.JoinHostPort("time.fallback.test", port)}))
+	p.ProbeNow(context.Background())
+	for _, s := range p.Snapshot() {
+		if s.Fallback {
+			if s.Answering == nil || !*s.Answering || s.Via != "IPv4" {
+				t.Fatalf("named fallback: %+v", s)
+			}
+			return
+		}
+	}
+	t.Fatal("no fallback in the snapshot")
 }
 
 func TestFallbackValidation(t *testing.T) {

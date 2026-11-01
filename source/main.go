@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
@@ -148,6 +149,7 @@ the web GUI):
                    --ping ADDR|NAME  --traceroute ADDR|NAME   (ping / mtr of a client or server, run from this node; needs ping and mtr)
                    --whois NAME   (registration data of a host name or address, asked of its registry from this node)
   Capture          --capture IFACE [--capture-seconds N] [--capture-filter EXPR] [--capture-file FILE] [--all-nodes]
+                   --capture - --group N --capture-file FILE.tgz   (one gateway: its nodes only, its interface and its addresses)
                    --capture-interfaces   (a packet capture on this node, printed or written as .pcap;
                                            --all-nodes: every cluster node at once, one .pcap each in a .tgz)
   Host             --host [--host-range 1h|1d|7d|30d] [--all-nodes]   (CPU, memory, disk and network use; the cluster as one)
@@ -182,7 +184,7 @@ NTP ("ntp" block at the top level of the config):
   the NTP page and --show-ntp).
   servers            upstream NTP servers, e.g. ["10.0.0.123", "10.0.1.123:1123", "ntp.example.com"]
                      (a host name is resolved when the server is probed; the default port is 123)
-  fallback_servers   used only while every server in "servers" is down; never probed, always counted as up
+  fallback_servers   used only while every server in "servers" is down; asked every round and reported, but always counted as up
   listen_port        UDP port chrony serves on (default 123; written to chrony as "port")
   allowed_clients    networks that may ask, e.g. ["10.0.0.0/8", "192.168.1.5"]; empty (default) =
                      everyone (chrony "allow"); the node itself always may
@@ -519,7 +521,7 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 		}
 		return gs
 	}
-	mg.pausedFn = func() bool { return sup.config().NodePaused }
+	mg.pausedFn = func() bool { return sup.config().nodePausedNow() }
 	mg.anycastFn = sup.AllAnycastStates
 	mg.poolOf = sup.poolFor
 	mg.tshootFn = func() map[string]any {
@@ -560,6 +562,33 @@ func run(dc *DaemonConfig, confFile, sockPath, stateDir string) error {
 		return nil
 	}
 	mg.reloadFn = reload
+	sc := &selfCheck{
+		enabled: func() bool { return sup.config().selfCheckOn() },
+		expect:  func() bool { return chronyServingFn() && chrony.answering() },
+		targets: func() []netip.AddrPort { return selfCheckTargets(sup, sup.sharedNTP().ListenPort) },
+		probe:   func(ap netip.AddrPort) (bool, bool) { return probeNTP(ap, selfTimeout) },
+		guard: func() string {
+			if dnsdirPresent() {
+				return "AnyName is installed on this host and decides where the gateway addresses answer"
+			}
+			if mg.othersInService() == 0 {
+				return "it is the only node in service, so pausing it would stop every gateway"
+			}
+			return mg.lastServerOf()
+		},
+		apply: func(pause bool, why string) {
+			if nu, err := loadConfig(confFile); err == nil {
+				sup.Reload(nu)
+			} else {
+				warnf("self-check: cannot read the configuration: %v", err)
+			}
+			if pause {
+				mg.handOver("self-check", "pausing this node: "+why) // the primary role does not stay on a node that is out of service
+			}
+		},
+		now: time.Now,
+	}
+	go sc.run(ctx)
 	web = NewWebServer(mg, st, sysAuth{})
 	mg.webH = web.Handler()
 	ensureReadGroup(dc.Web)
@@ -806,6 +835,9 @@ func showNTPTable(sock string) {
 			addr := s.Addr
 			if s.Fallback {
 				addr += " (fallback)"
+				if s.Answering != nil && !*s.Answering {
+					state = "silent"
+				}
 			}
 			in := orDefault(s.Chrony, "no")
 			fmt.Printf(f, orDefault(s.Name, "-"), addr, state, stratum, offset, fmt.Sprintf("%.2f", s.EWMAMS), in,

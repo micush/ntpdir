@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -527,10 +528,10 @@ func TestClusterCaptureBundlesEveryNode(t *testing.T) {
 	l, _ := net.ListenPacket("udp", "127.0.0.1:0")
 	defer l.Close()
 	port := l.LocalAddr().(*net.UDPAddr).Port
-	if _, err := a.mg.CaptureClusterStart("lo", "udp and dst port "+itoa(port), 2, "tester"); err != nil {
+	if _, err := a.mg.CaptureClusterStart("lo", "udp and dst port "+itoa(port), 2, 0, "tester"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.mg.CaptureClusterStart("lo", "", 2, "tester"); err == nil || !strings.Contains(err.Error(), "already running") {
+	if _, err := a.mg.CaptureClusterStart("lo", "", 2, 0, "tester"); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Errorf("a second job at once: %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
@@ -571,7 +572,7 @@ func TestClusterCaptureBundlesEveryNode(t *testing.T) {
 
 	// a node that cannot be asked is named in errors.txt and the others still make the bundle
 	b.mg.webH = nil
-	if _, err := a.mg.CaptureClusterStart("lo", "", 1, "tester"); err != nil {
+	if _, err := a.mg.CaptureClusterStart("lo", "", 1, 0, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	j = waitJob(t, a.mg)
@@ -586,7 +587,7 @@ func TestClusterCaptureBundlesEveryNode(t *testing.T) {
 		t.Fatalf("one node down: bad %d ready %v files %v", bad, j.Ready, keys(files))
 	}
 	// an interface the nodes do not have: every node says so, and there is nothing to download
-	if _, err := a.mg.CaptureClusterStart("nonesuch0", "", 1, "tester"); err != nil {
+	if _, err := a.mg.CaptureClusterStart("nonesuch0", "", 1, 0, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	j = waitJob(t, a.mg)
@@ -605,7 +606,7 @@ func TestClusterCaptureRefusals(t *testing.T) {
 		secs          int
 		want          string
 	}{{"lo", "", 0, "1 to 60"}, {"lo", "", 61, "1 to 60"}, {"", "", 5, "interface"}, {"lo", "port x", 5, "filter"}} {
-		if _, err := e.mg.CaptureClusterStart(c.iface, c.filter, c.secs, "t"); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := e.mg.CaptureClusterStart(c.iface, c.filter, c.secs, 0, "t"); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v", c, err)
 		}
 	}
@@ -685,7 +686,7 @@ func TestClusterCaptureOutlastsTheFailoverTimeout(t *testing.T) {
 	l, _ := net.ListenPacket("udp", "127.0.0.1:0")
 	defer l.Close()
 	port := l.LocalAddr().(*net.UDPAddr).Port
-	if _, err := a.mg.CaptureClusterStart("lo", "udp and dst port "+itoa(port), 8, "tester"); err != nil {
+	if _, err := a.mg.CaptureClusterStart("lo", "udp and dst port "+itoa(port), 8, 0, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)
@@ -750,5 +751,61 @@ func TestSharedAddrsComeFromTheGateways(t *testing.T) {
 		if !sh[want] {
 			t.Errorf("%s is not among the shared addresses %v", want, sh)
 		}
+	}
+}
+
+func TestGatewayCaptureFilter(t *testing.T) {
+	gc := &GroupConfig{VIP4: "192.0.2.10/24", VIP6: "2001:db8::10/64", MoreVIP4: []string{"192.0.2.11", "192.0.2.10"}, ExtraVIPs: []string{"198.51.100.123/32"}}
+	got := gatewayCapHosts(gc)
+	if got != "host 192.0.2.10 or host 2001:db8::10 or host 192.0.2.11 or host 198.51.100.123" {
+		t.Fatalf("%q", got)
+	}
+	for _, f := range []string{got, "(" + got + ") and (udp and port 123)"} {
+		if _, err := compileCapFilter(f); err != nil {
+			t.Fatalf("%q: %v", f, err)
+		}
+	}
+	if gatewayCapHosts(&GroupConfig{}) != "" {
+		t.Fatal("no address, no filter")
+	}
+}
+
+// A gateway's capture runs on its interface, keeps only its addresses, and refuses a gateway that does not exist.
+func TestClusterCaptureOfAGateway(t *testing.T) {
+	e := newWebEnv(t)
+	dc := newDaemonConfig()
+	dc.Cluster.Enabled = false
+	g := defaultGroup()
+	g.GroupID, g.Interface, g.VIP4, g.VIP6 = 7, "lo", "127.0.0.77/8", ""
+	dc.Groups = []GroupConfig{g}
+	b, _ := json.MarshalIndent(dc, "", "  ")
+	if err := os.WriteFile(e.conf, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(e.conf); err != nil {
+		t.Fatal(err)
+	}
+	job, err := e.mg.CaptureClusterStart("", "udp", 1, 7, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Iface != "lo" || job.Gateway != 7 || job.Filter != "(host 127.0.0.77) and (udp)" {
+		t.Fatalf("%+v", job)
+	}
+	for i := 0; i < 100; i++ { // let it finish
+		if st := e.mg.CaptureClusterStatus(); st != nil && st.Done {
+			if st.Gateway != 7 {
+				t.Fatalf("the status must say which gateway: %+v", st)
+			}
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := e.mg.CaptureClusterStart("", "", 1, 999, "t"); err == nil {
+		t.Fatal("a gateway that does not exist was accepted")
+	}
+	// a capture of the gateway keeps the filter within its limit
+	if _, err := e.mg.CaptureClusterStart("", "udp"+strings.Repeat(" ", capFilterMax-3), 1, 7, "t"); err == nil {
+		t.Fatal("a filter pushed over the limit by the gateway's addresses was accepted")
 	}
 }

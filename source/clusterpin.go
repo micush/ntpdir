@@ -91,7 +91,7 @@ func dialPeerTCP(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	var d net.Dialer
 	if net.ParseIP(host) != nil {
-		return d.DialContext(ctx, "tcp", addr)
+		return dialPrefer4(ctx, &d, "tcp", addr)
 	}
 	lctx, cancel := context.WithTimeout(ctx, peerLookupTimeout)
 	ips, lerr := lookupPeerHost(lctx, host)
@@ -107,7 +107,7 @@ func dialPeerTCP(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, lerr
 	}
 	var last error
-	for _, ip := range ips {
+	for _, ip := range ipv4First(ips) {
 		c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
 		if err == nil {
 			return c, nil
