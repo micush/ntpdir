@@ -1,5 +1,22 @@
 # Changelog
 
+## [v202] - 2026-11-02 — Monitor ▸ Statistics and Monitor ▸ Node: a download icon on each card saves its numbers as CSV
+
+### Added
+- **A small download icon in the header of each card** on Monitor ▸ Statistics (the chart, Outcome, IP family, Top Clients, Top Servers) and Monitor ▸ Node (the CPU, Memory, Disk and Network charts, Filesystems, Network interfaces, LLDP neighbors). It saves that card's numbers as a `.csv` file named after the card (`ntpdir-top-clients.csv`). The file is built in the browser from what the page already holds, so there is no new API route, no CLI flag and no change to the daemon. Ported from dnsdir v628.
+- **What each file holds.** Charts: one row per interval, times in UTC (ISO 8601); the Statistics chart has every line and the Clients count and leaves out the interval still filling, as the drawing does; the Node charts have the busiest sample of each interval beside the average for CPU, disk I/O and network, and a gap is an empty cell. Donuts: every name with its count and share, not folded into "Other". Top lists: every row the daemon returned for the picked range and filter, not just the page on screen. Tables: the same rows as on screen, with raw numbers (bytes, bits per second) instead of the formatted text.
+- A text cell that starts with `=`, `+`, `-` or `@` is written with a leading apostrophe, so a spreadsheet cannot read a client or host name from the network as a formula.
+- `webui/help.js`: a "Download as CSV" paragraph on the Statistics and Node topics. `webui/style.css`: the icon button and its row.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok on the second full run, see below), `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- **In Chromium (light and dark)** with the real `app.js`, `help.js` and `style.css` and the API mocked from the Go result structs: both pages load without console errors; all 12 icons download a file; the contents were read back (quoting of commas and quotes, the formula guard, a gap in a series, the unfinished interval dropped, the chart's button still working in the RPS view); the icons sit in the card headers in both themes.
+
+### Not verified
+- **Against a live daemon** (none was run); the PAM and authentication checks were not repeated (nothing in `web.go` changed). The Cluster view (several nodes added together) and an LLDP card with real data were not looked at.
+- **Known flaky test:** `TestBGPCannotBeSetOrEnabledWithDnsdir` reported a data race (`bgp_test.go:128` against `bgp.go`) in the first `-race` run of the full suite; it passes on its own (three runs) and the full `-race` run passed when repeated. No Go file was changed in this release.
+- There is no command-line equivalent: the files are made by the page.
+
 ## [v201] - 2026-11-01 — Ported from dnsdir: IPv4-first connections, fallback servers are probed, self-check, per-gateway capture, faster log scan
 
 ### Added
