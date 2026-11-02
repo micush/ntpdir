@@ -1,5 +1,9 @@
 // ntpdir — AnyTime NTP Director: a Distributed Gateway Load Balancing Protocol
 // daemon that tests the configured NTP servers and gives chrony the ones that pass; chrony serves the VIP.
+//
+// TCP listeners stay plain TCP: Go 1.24 listens with multipath TCP by default, and nothing here uses it.
+//
+//go:debug multipathtcp=0
 package main
 
 import (
