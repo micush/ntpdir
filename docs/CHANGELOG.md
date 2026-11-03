@@ -1,12 +1,49 @@
 # Changelog
 
+## [v210] - 2026-11-03 — Top Clients no longer lists the node itself
+
+### Fixed
+- **Monitor ▸ Statistics ▸ Top Clients listed `127.0.0.1` and `::1` (about a quarter of the requests each).** They are the node's own self-check asking its NTP service every 5 seconds, not clients. Loopback is now left out of the statistics when chrony's client table is read, so it is not counted in the totals either, and any loopback entry already in the stored statistics is left out of the client list and the client count. Totals and shares that were counted before the update still include the earlier self-checks until that data ages out of the range shown.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check app.js`.
+- **New test:** `TestSampleClientsLeavesLoopbackOut` (`127.0.0.1` and `::1` in chrony's client table are not counted and not listed; the real client is).
+
+### Not verified
+- Against a live chrony; the test feeds a made-up client table.
+
+## [v209] - 2026-11-03 — Add ▸ Node lists the nodes in a menu of its own
+
+### Fixed
+- **Topology: the gateway's right-click ▸ Add ▸ Node showed one "Node: name" line for each removed node.** It is one **Node** item again with a menu beside it listing the nodes that can be added back (as *Add node* did). Menus can now open a third menu from a sub-item; the arrow keys work in it (right opens, left closes).
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check app.js`.
+- **In Chromium** (mocked daemon): Add ▸ Node opens a third menu listing the removed nodes; picking one saves the gateway without it in `excluded_nodes`.
+
+### Not verified
+- Against a live daemon.
+
+## [v208] - 2026-11-03 — A block that covers the node itself can no longer pause it
+
+### Fixed
+- **A blocked loopback address made the node's own self-check fail, so the node paused itself** (and, with two nodes, un-pausing one paused the other: each one's self-check asks its own NTP service from `127.0.0.1` / `::1`, and a `deny` there is a miss). The settings already refused such an entry; now, whatever way one got in (an older version, a hand-edited settings file, a cluster copy), **chrony is never given a `deny` that covers loopback**, in the file or in the live rules, and the log says once which entry is ignored. Remove it in Configure ▸ Settings ▸ Blocked clients.
+- **Statistics ▸ Top Clients ▸ right-click on a loopback client** shows *Block* greyed out, with the reason as its tooltip.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- **New test:** `TestBlockedLoopbackNeverReachesChrony` (`127.0.0.1`, `::1` and `127.0.0.0/8` in the list never reach the chrony file or the live rules; `10.9.0.0/16` still does).
+
+### Not verified
+- I could not tell how the entries got past the settings check in the report (the check, `TestBlockedClientsValidation`, refuses `127.0.0.1`, `::1` and `127.0.0.0/8`); the new code does not depend on it. Not run on a live two-node cluster.
+
 ## [v207] - 2026-11-02 — Copy anycast addresses and servers to another gateway, and one Add menu on the gateway
 
 ### Added
 - **Topology: right-click an anycast address ▸ Copy ▸ Anycast address / All anycast addresses, then right-click another gateway ▸ Paste ▸ Anycast address / All anycast addresses.** *All* is every anycast address on the gateway the pill is on. They are added to the other gateway's own list and the first is selected; an address that gateway already has, or that is some gateway's shared address, is left out. Copy also puts them on the system clipboard as plain text. Paste is greyed out, with the reason as its tooltip, on the gateway they were copied from, when nothing is left to add, and before anything was copied. A pause is not copied. In ntpdir the gateway menu's single *Paste server* item became *Paste* ▸ *Server* / *Anycast address* / *All anycast addresses* (a piggyback gateway has no anycast addresses, so it only offers *Server*). The Topology help says so.
 
 ### Changed
-- **Topology: the gateway's right-click menu has one *Add* item** with *Anycast address*, *NTP server*, *AnyName address* (with AnyName on the host) and *Node* (one entry for each node that was removed from the gateway; greyed out, with the reason, when none was) in place of the separate *Add* items and *Add node*. The help says so.
+- **Topology: the gateway's right-click menu has one *Add* item** with *Anycast address*, *NTP server*, *AnyName address* (with AnyName on the host) and *Node* (a further menu listing each node that was removed from the gateway; greyed out, with the reason, when none was) in place of the separate *Add* items and *Add node*. The help says so.
 - **Sub-menus of the Topology right-click menu can grey an item out with the reason as its tooltip** (as in dnsdir); the Paste items use it.
 - **Topology: right-click a server ▸ Copy ▸ All servers, then right-click another gateway ▸ Paste ▸ All servers.** Every server of the gateway is copied; on the other gateway the ones it does not have yet are added as they are and the ones it has are left alone (no form opens). Paste ▸ All servers is greyed out, with the reason, before anything was copied, on the gateway they came from or one that has them all. In ntpdir the server's *Copy server* item became *Copy* ▸ *Server* / *All servers*.
 - **Configure ▸ Alerts: "Checks of last" fits on one line** (`3 of 5 checks`); the number boxes in the rules grid lose their spinner arrows and are narrower, and the Threshold column is wider.

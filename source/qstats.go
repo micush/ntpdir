@@ -445,6 +445,11 @@ func (s *QStats) Query(from, to time.Time, f QFilter) *QStatsResult {
 		r.Sums.Refused += r.Refused[i]
 	}
 	r.Guard = memguard.Info()
+	for k := range clients { // loopback is this node asking itself (older samples may hold it): not a client
+		if ip, err := netip.ParseAddr(k); err == nil && ip.Unmap().IsLoopback() {
+			delete(clients, k)
+		}
+	}
 	r.Sums.Clients = len(clients)
 	if _, ok := clients[qsOthers]; ok {
 		r.Sums.Clients--

@@ -1543,7 +1543,7 @@ func (d *NTPConfig) validateClients() error {
 	}
 	for _, s := range d.BlockedClients {
 		n, _ := netip.ParsePrefix(s)
-		if n.Contains(netip.MustParseAddr("127.0.0.1")) || n.Contains(netip.MustParseAddr("::1")) {
+		if coversThisNode(n) {
 			return fmt.Errorf("ntp: blocked_clients: %s covers this node itself, which always may ask", s)
 		}
 	}

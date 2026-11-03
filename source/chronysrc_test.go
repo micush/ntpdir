@@ -428,3 +428,45 @@ func TestBlockedClientsValidation(t *testing.T) {
 		t.Fatalf("normalised: %v %v", d.BlockedClients, err)
 	}
 }
+
+// An entry that covers the node itself (it got in some way that skipped the settings check) is not given to chrony: the
+// node's self-check asks from loopback, and a deny there pauses the node.
+func TestBlockedLoopbackNeverReachesChrony(t *testing.T) {
+	d := defaultNTP()
+	d.BlockedClients = []string{"127.0.0.1", "::1", "127.0.0.0/8", "10.9.0.0/16"}
+	body, err := chronyConfBody(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "deny all 127.") || strings.Contains(body, "deny all ::1") || !strings.Contains(body, "deny all 10.9.0.0/16\n") {
+		t.Errorf("file: %q", body)
+	}
+	f := hookChrony(t)
+	if err := allowLive(d); err != nil {
+		t.Fatal(err)
+	}
+	var seq []string
+	for _, c := range f.calls {
+		seq = append(seq, strings.Join(c, " "))
+	}
+	got := strings.Join(seq, "|")
+	if strings.Contains(got, "deny all 127.") || strings.Contains(got, "deny all ::1") || !strings.Contains(got, "deny all 10.9.0.0/16") {
+		t.Errorf("live: %s", got)
+	}
+}
+
+// The node's own self-check comes from loopback; it is not a client, so it is not counted and not listed.
+func TestSampleClientsLeavesLoopbackOut(t *testing.T) {
+	f := hookChrony(t)
+	qs := NewQStats()
+	m := chrony
+	f.answers["-n -c clients"] = "10.0.0.1,100,0,-5,127,0,0,0,127,4294967295\n127.0.0.1,500,0,-5,127,0,0,0,127,4294967295\n::1,500,0,-5,127,0,0,0,127,4294967295\n"
+	m.sampleClients(qs)
+	f.answers["-n -c clients"] = "10.0.0.1,110,0,-5,127,0,0,0,127,4294967295\n127.0.0.1,900,0,-5,127,0,0,0,127,4294967295\n::1,900,0,-5,127,0,0,0,127,4294967295\n"
+	m.sampleClients(qs)
+	qs.flush()
+	r := qs.Query(time.Now().Add(-time.Hour), time.Now().Add(time.Minute), QFilter{})
+	if r.Sums.Answered != 10 || r.Sums.Clients != 1 || len(r.Clients) != 1 || r.Clients[0].Name != "10.0.0.1" {
+		t.Fatalf("answered %d clients %d list %+v, want only 10.0.0.1 with 10", r.Sums.Answered, r.Sums.Clients, r.Clients)
+	}
+}

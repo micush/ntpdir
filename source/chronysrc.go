@@ -351,7 +351,7 @@ func chronyConfBodyAuth(d NTPConfig, muted bool, af authFiles) (string, error) {
 			}
 		}
 		// blocked clients come after every allow, and `deny all` also drops any more specific allow inside the block
-		blocked, err := parseClientNets(d.BlockedClients)
+		blocked, err := blockedNets(d.BlockedClients)
 		if err != nil {
 			return "", err
 		}
@@ -429,7 +429,7 @@ func allowLiveMuted(d NTPConfig, muted bool) error {
 			return err
 		}
 	}
-	blocked, err := parseClientNets(d.BlockedClients)
+	blocked, err := blockedNets(d.BlockedClients)
 	if err != nil {
 		return err
 	}
@@ -826,6 +826,9 @@ func (m *chronyMgr) sampleClients(rec *QStats) {
 		if err != nil {
 			continue
 		}
+		if ip.Unmap().IsLoopback() {
+			continue // the node's own self-check and chronyc asks: not a client, and not counted in the statistics
+		}
 		dp, dd := c.Packets, c.Drops
 		if p, ok := prev[c.Addr]; ok {
 			if c.Packets >= p.Packets {
@@ -851,4 +854,33 @@ func clampCount(v uint64) uint32 {
 		return maxCount
 	}
 	return uint32(v)
+}
+
+// coversThisNode says whether the network holds the loopback addresses the node asks itself from (its self-check, and the
+// chronyc commands).  Blocking those would make the node think its own NTP service is dead and pause itself.
+func coversThisNode(n netip.Prefix) bool {
+	return n.Contains(netip.MustParseAddr("127.0.0.1")) || n.Contains(netip.MustParseAddr("::1"))
+}
+
+var blockWarned sync.Map
+
+// blockedNets are the blocked_clients as networks, without any that covers this node itself: the settings refuse such an
+// entry, but one that got in some other way (an older version, a settings file written by hand) must not take the node's own
+// self-check down with it, so it is left out of what chrony is told, with one warning in the log.
+func blockedNets(list []string) ([]netip.Prefix, error) {
+	nets, err := parseClientNets(list)
+	if err != nil {
+		return nil, err
+	}
+	out := nets[:0:0]
+	for _, n := range nets {
+		if coversThisNode(n) {
+			if _, seen := blockWarned.LoadOrStore(n.String(), true); !seen {
+				warnf("ntp: blocked_clients entry %s covers this node itself (loopback) and is ignored; remove it in Configure ▸ Settings", n)
+			}
+			continue
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
