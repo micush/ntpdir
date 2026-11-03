@@ -1277,7 +1277,7 @@
       }
     }
     // items: [label, handler, "danger"?, subitems?]. An item with subitems opens a second menu beside the first
-    // when the pointer rests on it (or on click / the right arrow key); the sub-items are [label, handler] too.
+    // when the pointer rests on it (or on click / the right arrow key); the sub-items are [label, handler, why-not?] (a reason greys one out).
     let menuAt = { x: 0, y: 0 };
     function openMenu(e, items) {
       e.preventDefault(); e.stopPropagation();
@@ -1287,8 +1287,9 @@
         closeSub();
         menuEl.querySelectorAll("button.open").forEach((b) => b.classList.remove("open"));
         btn.classList.add("open");
-        subEl = h("div", { class: "cv-menu cv-sub", role: "menu" }, subs.map(([label, fn]) =>
-          h("button", { type: "button", role: "menuitem", onclick: () => { closeMenu(); fn(); } }, plain(label))));
+        subEl = h("div", { class: "cv-menu cv-sub", role: "menu" }, subs.map(([label, fn, off]) => off
+          ? h("button", { type: "button", role: "menuitem", disabled: true, title: off }, plain(label))
+          : h("button", { type: "button", role: "menuitem", onclick: () => { closeMenu(); fn(); } }, plain(label))));
         root.append(subEl);
         const pr = menuEl.getBoundingClientRect(), br = btn.getBoundingClientRect(), sr = subEl.getBoundingClientRect();
         const left = pr.right + sr.width + 4 <= window.innerWidth ? pr.right - 2 : Math.max(4, pr.left - sr.width + 2);
@@ -1453,24 +1454,46 @@
     // that is not on that gateway yet is added as it is, with its name; one that is already there needs its own, so the Add NTP server form
     // opens.  A pause is not copied.
     let srvClip = null;
-    const copyServer = (g, addr) => { srvClip = { addr, label: srvName(g, addr) }; };
-    const pasteServerWhy = () => (srvClip ? "" : "Nothing copied yet: right-click a server ▸ Copy server");
+    const serverClip = (g, addr) => ({ addr, label: srvName(g, addr) });
+    const copyServer = (g, addr) => { srvClip = serverClip(g, addr); };
+    const pasteServerWhy = () => (srvClip ? "" : "Nothing copied yet: right-click a server ▸ Copy ▸ Server");
+    const pushServer = (g, c) => {
+      g.ntp.servers.push(c.addr);
+      if (c.label) { g.ntp.server_names = g.ntp.server_names || {}; g.ntp.server_names[c.addr] = c.label; }
+    };
     function pasteServer(g) {
       if (pasteServerWhy()) return;
       const c = srvClip;
       ensureNTP(g);
       if (g.ntp.servers.includes(c.addr)) { serverForm(g, null, true); return; }
-      quick(() => {
-        g.ntp.servers.push(c.addr);
-        if (c.label) { g.ntp.server_names = g.ntp.server_names || {}; g.ntp.server_names[c.addr] = c.label; }
-        cv.sel = { kind: "srv", addr: c.addr };
-      });
+      quick(() => { pushServer(g, c); cv.sel = { kind: "srv", addr: c.addr }; });
     }
-    const pasteItem = (g) => ["Paste server", () => pasteServer(g), "", null, pasteServerWhy()];
-    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], ["Add NTP server", () => serverForm(g)], pasteItem(g),
-      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], ["Add NTP server", () => serverForm(g)], pasteItem(g), ["Add anycast address", () => anycastForm(g)],
-      ...(cv.dnsdir && cv.dnsdir.present ? [["Add AnyName address", () => dnsdirForm(g)]] : []),
-      ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]), ...addNodeItems(g),
+    // Copy ▸ All servers (every server of the gateway) and Paste ▸ All servers on another gateway: the ones it does not have yet are added
+    // with their names (the ones it has are left alone, so no form opens); a pause is not copied.
+    let srvsClip = null;
+    const copyAllServers = (g) => { srvsClip = { gid: g.group_id, list: ((g.ntp && g.ntp.servers) || []).map((a) => serverClip(g, a)) }; };
+    const serversToAdd = (g) => (srvsClip ? srvsClip.list.filter((c) => !((g.ntp && g.ntp.servers) || []).includes(c.addr)) : []);
+    const pasteServersWhy = (g) => {
+      if (!srvsClip) return "No servers copied yet: right-click a server ▸ Copy ▸ All servers";
+      if (!serversToAdd(g).length) return srvsClip.gid === g.group_id ? "Those are on this gateway: paste them on another gateway" : "This gateway already has all of them";
+      return "";
+    };
+    function pasteServers(g) {
+      if (pasteServersWhy(g)) return;
+      const add = serversToAdd(g);
+      ensureNTP(g);
+      quick(() => { for (const c of add) pushServer(g, c); cv.sel = { kind: "srv", addr: add[0].addr }; });
+    }
+    const pasteItem = (g) => ["Paste", null, "", [["Server", () => pasteServer(g), pasteServerWhy()], ["All servers", () => pasteServers(g), pasteServersWhy(g)], ...(g.piggyback ? [] : pasteAnySubs(g))]];
+    // Add ▸ Anycast address / DNS server (or NTP server) / Node (one item per node that was removed from the gateway) / AnyName address (ntpdir, with AnyName on the host)
+    const addGwItem = (g) => ["Add", null, "", [
+      ...(g.piggyback ? [] : [["Anycast address", () => anycastForm(g)]]),
+      ["NTP server", () => serverForm(g)],
+      ...(!g.piggyback && cv.dnsdir && cv.dnsdir.present ? [["AnyName address", () => dnsdirForm(g)]] : []),
+      ...(g.piggyback ? [] : addNodeSubs(g))]];
+    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], addGwItem(g), pasteItem(g),
+      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], addGwItem(g), pasteItem(g),
+      ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
     // a server's address as the packet filter and the log search want it: the host, and the port its queries go to
     const srvTarget = (addr) => {
@@ -1495,7 +1518,7 @@
     };
     // Monitor ▸ Log searched for this server
     const goLog = (addr) => { state.prefill.log = srvTarget(addr).host; selectTab("log"); };
-    const srvItems = (g, addr) => [["Statistics", () => serverStats(g, addr)], ["Capture", () => goCapture(addr)], ["Logs", () => goLog(addr)], "-", ["Edit", () => serverForm(g, addr)], ["Copy server", () => copyServer(g, addr)],
+    const srvItems = (g, addr) => [["Statistics", () => serverStats(g, addr)], ["Capture", () => goCapture(addr)], ["Logs", () => goLog(addr)], "-", ["Edit", () => serverForm(g, addr)], ["Copy", null, "", [["Server", () => copyServer(g, addr)], ["All servers", () => copyAllServers(g), ((g.ntp && g.ntp.servers) || []).length > 1 ? "" : "This gateway has only this server"]]],
       ...pauseItems("", (sc) => ((sc === "all" ? (g.ntp || cv.cfg.ntp || {}).paused_servers : cv.cfg.paused_servers_here) || []).includes(addr), (sc, p) => pauseServer(g, addr, sc, p), lastServerWhy(g, addr)), "-", ["Delete", delSel, "danger"]];
     // Pause / resume announcing one anycast address: on this node only (kept in this node's own settings) or on every node (shared)
     const anyPauseList = (g, scope) => (scope === "all" ? "paused_vips" : "paused_vips_here");
@@ -1508,7 +1531,32 @@
       });
     }
     const ddItems = (g, addr) => [["Delete", delSel, "danger"]];
-    const anyItems = (g, addr) => [["Edit", () => anycastForm(g, addr)],
+    // Right-click an anycast address ▸ Copy ▸ Anycast address / All anycast addresses (every one on its gateway), then right-click ANOTHER
+    // gateway ▸ Paste ▸ the same.  They are added to that gateway's own list (a pause stays where it was).  Copy also puts them on the
+    // system clipboard as plain text.  Pasting on the gateway they came from is refused; an address the gateway already has, or that is
+    // any gateway's shared address, is left out.
+    let anyClip = null, anysClip = null;
+    const copyAnycast = (g, addr) => { anyClip = { list: [addr], gid: g.group_id }; try { navigator.clipboard.writeText(addr); } catch (_) { /* the page keeps it for Paste */ } };
+    const copyAllAnycast = (g) => { anysClip = { list: (g.extra_vips || []).slice(), gid: g.group_id }; try { navigator.clipboard.writeText(anysClip.list.join("\n")); } catch (_) { /* the page keeps it for Paste */ } };
+    const anyPasteList = (g, clip) => (clip.list || []).map((x) => x.toLowerCase()).filter((a) => !(g.extra_vips || []).includes(a)
+      && !groups().some((x) => [x.vip4, x.vip6, ...(x.more_vip4 || []), ...(x.more_vip6 || [])].some((z) => z && z.split("/")[0].toLowerCase() === a)));
+    const pasteAnyWhy = (g, clip, none) => {
+      if (!clip) return none;
+      if (clip.gid === g.group_id) return "Those are on this gateway: paste them on another gateway";
+      if (!clip.list.length) return "That gateway has no anycast addresses";
+      if (!anyPasteList(g, clip).length) return clip.list.length === 1 ? "This gateway already has that address, or it is a gateway's own address" : "This gateway already has all of them, or they are gateways' own addresses";
+      return "";
+    };
+    const pasteOneWhy = (g) => pasteAnyWhy(g, anyClip, "No anycast address copied yet: right-click an anycast address ▸ Copy ▸ Anycast address");
+    const pasteAllWhy = (g) => pasteAnyWhy(g, anysClip, "No anycast addresses copied yet: right-click an anycast address ▸ Copy ▸ All anycast addresses");
+    function pasteAnycast(g, clip) {
+      if (pasteAnyWhy(g, clip, "none")) return;
+      const add = anyPasteList(g, clip);
+      quick(() => { g.extra_vips = (g.extra_vips || []).concat(add); cv.sel = { kind: "any", addr: add[0] }; });
+    }
+    const copyAnyItem = (g, addr) => ["Copy", null, "", [["Anycast address", () => copyAnycast(g, addr)], ["All anycast addresses", () => copyAllAnycast(g), (g.extra_vips || []).length > 1 ? "" : "This gateway has only this one"]]];
+    const pasteAnySubs = (g) => [["Anycast address", () => pasteAnycast(g, anyClip), pasteOneWhy(g)], ["All anycast addresses", () => pasteAnycast(g, anysClip), pasteAllWhy(g)]];
+    const anyItems = (g, addr) => [["Edit", () => anycastForm(g, addr)], copyAnyItem(g, addr),
       ...pauseItems("", (sc) => anyPaused(g, addr, sc), (sc, p) => pauseAnycast(g, addr, sc, p)), "-", ["Delete", delSel, "danger"]];
     // the cluster's nodes (the parallelograms left of the circle)
     const nodeTip = (n) => [
@@ -1613,9 +1661,9 @@
         return { id, label: n ? n.name + (n.self ? " (this node)" : "") : "A node that left the cluster (" + id.slice(0, 8) + ")" };
       });
     };
-    const addNodeItems = (g) => {
+    const addNodeSubs = (g) => {
       const l = removedNodes(g);
-      return l.length ? [["Add node", null, "", l.map((r) => [r.label, () => quick(() => toggleIn(g, "excluded_nodes", r.id, false))])]] : [];
+      return l.length ? l.map((r) => ["Node: " + r.label, () => quick(() => toggleIn(g, "excluded_nodes", r.id, false))]) : [["Node", null, "Every node already serves this gateway"]];
     };
     // The last node in service cannot be paused: the item is greyed out, with the reason as its tooltip.  A node that is not answering or
     // is paused is out of service.
@@ -2811,7 +2859,7 @@
           tbody.append(tr);
         }
       }
-      const cols = ["2.4rem", "", "8.6rem", "12.5rem", "10.5rem", "6rem", "11rem"];
+      const cols = ["2.4rem", "", "8.6rem", "10.5rem", "12.5rem", "6rem", "11rem"];
       clear(rulesBox).append(h("div", { class: "scroll" }, h("table", { class: "arules" },
         h("colgroup", {}, cols.map((w) => h("col", w ? { class: "w-" + w.replace(".", "_") } : {}))),
         h("thead", {}, h("tr", {}, ["On", "Rule", "Severity", "Alert when", "Threshold", "For", "Clear after"].map((x) => h("th", {}, x)))), tbody)));
