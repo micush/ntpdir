@@ -1772,12 +1772,12 @@
       const base = g || groups()[0];
       form(g ? "Edit gateway" : "New gateway", [
         { k: "id", l: "Group number", v: String(g ? g.group_id : nextGroupId()), disabled: !!g },
-        { k: "name", l: "Name (optional)", v: g ? (g.name || "") : "", ph: "e.g. Office NTP" },
-        { k: "vip4", l: "Shared IPv4 address / prefix", v: g ? g.vip4 : "", ph: "10.0.0.1/24" },
-        { k: "vip6", l: "Shared IPv6 address / prefix (optional)", v: g ? g.vip6 : "", ph: "2001:db8::1/64" },
-        { k: "more4", l: "More IPv4 addresses (same subnet, optional)", v: g ? (g.more_vip4 || []).join(", ") : "", ph: "10.0.0.2, 10.0.0.3" },
-        { k: "more6", l: "More IPv6 addresses (same subnet, optional)", v: g ? (g.more_vip6 || []).join(", ") : "", ph: "2001:db8::2" },
-        { k: "iface", l: "Network interface", v: g ? g.interface : (base ? base.interface : "eth0") },
+        { k: "name", l: "Name", v: g ? (g.name || "") : "", ph: "optional, e.g. Core" },
+        { k: "vip4", l: "IPv4 address / prefix", v: g ? g.vip4 : "", ph: "10.0.0.1/24" },
+        { k: "vip6", l: "IPv6 address / prefix", v: g ? g.vip6 : "", ph: "optional, 2001:db8::1/64" },
+        { k: "more4", l: "More IPv4 addresses", v: g ? (g.more_vip4 || []).join(", ") : "", ph: "optional, same subnet: 10.0.0.2, 10.0.0.3" },
+        { k: "more6", l: "More IPv6 addresses", v: g ? (g.more_vip6 || []).join(", ") : "", ph: "optional, same subnet: 2001:db8::2" },
+        { k: "iface", l: "Listening interface", v: g ? g.interface : (base ? base.interface : "eth0") },
         { k: "fb", l: "Fallback NTP servers (optional)", v: fallbackOf(g).join(", "), ph: "e.g. 1.1.1.1, 9.9.9.9" },
         { k: "lbmode", l: "Health checks", v: lbNow(g).own ? LB_OWN : LB_FOLLOW, options: [LB_FOLLOW, LB_OWN], initOn: true, on: (els) => showLB(els) },
         { k: "lb_stratum", l: "Highest stratum", v: String(lbNow(g).lb.max_stratum) },

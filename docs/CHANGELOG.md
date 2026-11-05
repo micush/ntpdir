@@ -1,5 +1,16 @@
 # Changelog
 
+## [v211] - 2026-11-05 — New gateway form labels
+
+### Changed
+- **Topology: the New gateway / Edit gateway form's labels** read *Name*, *IPv4 address / prefix*, *IPv6 address / prefix*, *More IPv4 addresses*, *More IPv6 addresses* and *Listening interface*; the words *optional* and *same subnet:* moved into the placeholders (`optional, e.g. Core`, `optional, 2001:db8::1/64`, `optional, same subnet: 10.0.0.2, 10.0.0.3`). The Gateway help and QUICKSTART use the same labels. Same change as dnsdir v636.
+
+### Verified
+- `gofmt -l .`, `go build`, `go vet ./...`, `go test -count=1 ./...` (ok), `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- Not looked at in a browser; no Go code changed.
+
 ## [v210] - 2026-11-03 — Top Clients no longer lists the node itself
 
 ### Fixed
