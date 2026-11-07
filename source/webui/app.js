@@ -1897,7 +1897,7 @@
       const lk = lookupHooks();
       form(edit ? "Edit NTP server" : pasted ? "Paste server" : "Add NTP server", [
         { k: "addr", l: "IP address or host name", v: edit ? shortAddr(edit) : "", ph: "10.0.0.123", hint: pasted ? "That server is already on this gateway: give the copy its own address." : "Add :port for a port other than 123.", on: lk.addr },
-        { k: "label", l: "Name (optional)", v: edit ? srvName(g, edit) : "", ph: "e.g. ntp-a", hint: "Shown under the address on the diagram. Fill in the address and its name is looked up; fill in a host name here and its address is.", on: lk.label },
+        { k: "label", l: "Name (optional)", v: edit ? srvName(g, edit) : "", ph: "e.g. ntp-a", hint: "Shown under the address.", on: lk.label },
       ], (v) => {
         if (!v.addr) return "Enter an IP address or host name.";
         if (!/^[A-Za-z0-9_.\-:\[\]]+$/.test(v.addr)) return "That doesn't look like an IP address or host name.";
@@ -1930,8 +1930,8 @@
       const have = new Set(groups().flatMap((x) => [...(x.dnsdir_vips || []), ...(x.extra_vips || [])]));
       const choices = ((cv.dnsdir && cv.dnsdir.offered) || []).filter((a) => !have.has(a));
       form("Add AnyName address", [
-        choices.length ? { k: "addr", l: "AnyName anycast address", options: choices, v: choices[0], hint: "Answered here only while AnyName holds it." }
-          : { k: "addr", l: "AnyName anycast address", v: "", disabled: true, hint: "None left: AnyName announces no other address." },
+        choices.length ? { k: "addr", l: "AnyName anycast address", options: choices, v: choices[0], hint: "Answered while held." }
+          : { k: "addr", l: "AnyName anycast address", v: "", disabled: true, hint: "None left." },
       ], (v) => {
         if (!v.addr) return "AnyName announces no address that is free.";
         g.dnsdir_vips = g.dnsdir_vips || [];
@@ -1944,7 +1944,7 @@
     function anycastForm(g, edit) {
       form(edit ? "Edit anycast address" : "Add anycast address", [
         { k: "addr", l: "Anycast address", v: edit || "", ph: "203.0.113.123 or 2001:db8:123::1",
-          hint: "Any subnet. Held on every node while an NTP server answers. Other gateways may carry it too." },
+          hint: "Any subnet. Held on every node." },
       ], (v) => {
         const a = (v.addr || "").trim().replace(/\/(32|128)$/, "").toLowerCase();
         if (!a) return "Enter an IPv4 or IPv6 address.";
@@ -2210,13 +2210,13 @@
   // ── configuration  (CLI: --show-config, --configure) ──────────────────────
   const LB = ["roundrobin", "weighted", "hostpinned", "failover"];
   const GROUP_FIELDS = [
-    { shared: true, k: "name", l: "Name", t: "text", hint: "optional label shown instead of the address" },
+    { shared: true, k: "name", l: "Name", t: "text", hint: "Optional label." },
     { shared: true, k: "group_id", l: "Group ID", t: "int", def: 100, min: 1, max: 255 },
     { k: "interface", l: "Interface", t: "text" },
     { shared: true, k: "vip4", l: "IPv4 VIP/prefix", t: "text", hint: "e.g. 10.0.0.1/24 — empty to disable" },
     { shared: true, k: "vip6", l: "IPv6 VIP/prefix", t: "text", hint: "e.g. 2001:db8::1/64 — empty to disable" },
-    { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
-    { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "rows", rows: "morevip6", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
+    { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet, one per row." },
+    { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "rows", rows: "morevip6", wide: true, hint: "Same subnet, one per row." },
     { k: "priority", l: "Priority", t: "int", def: 100, min: 0, max: 255 },
     { shared: true, k: "lb_method", l: "LB method", t: "select", options: LB },
     { k: "weight", l: "Weight", t: "int", def: 100, min: 0, max: 255 },
@@ -2225,14 +2225,14 @@
     { shared: true, k: "max_afns", l: "Max forwarders", t: "int", def: 128, min: 1, max: 255 },
     { shared: true, k: "key", l: "HMAC shared key", t: "text", weakKey: true },
     { k: "preempt", l: "Preemption", t: "bool" },
-    { shared: true, k: "real_macs", l: "Use real MAC addresses (no virtual MACs)", t: "bool", hint: "On for a gateway you add now (most networks need it: a VMware port group that is not promiscuous, a cloud with one MAC per interface, a switch with port security); gateways that already existed keep their setting. Off is the older way with a virtual MAC per node. On: the VIP is on every node's lo and the controller answers ARP with the real MAC of the node it picks. Failover then depends on the neighbors honoring an unsolicited ARP. Restarts the gateway; set it on every node's cluster together." },
-    { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "rows", rows: "neighbors", wide: true, hint: "Every node, one IP per row. Empty: multicast." },
+    { shared: true, k: "real_macs", l: "Use real MAC addresses (no virtual MACs)", t: "bool" },
+    { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "rows", rows: "neighbors", wide: true, hint: "Empty: multicast." },
   ];
   const NTP_FIELDS = [
     { section: "Upstream servers" },
-    { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
-    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are asked every round and reported, but always count as up." },
-    { section: "Health", cols: 3, note: "A server that fails a check is taken out as a source of every node. Applies to every gateway unless it has its own checks (Topology ▸ right-click the gateway ▸ Edit)." },
+    { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: IP, IP:port or name." },
+    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Used only while none above is up." },
+    { section: "Health", cols: 3, note: "Failing servers are dropped." },
     { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", def: 15, min: 1, max: 15 },
     { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", def: 1500, min: 0, max: 60000 },
     { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", def: 500, min: 0, max: 60000 },
@@ -2241,17 +2241,17 @@
     { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", def: 2, min: 1 },
     { section: "Serving" },
     { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", def: 123, min: 1, max: 65535 },
-    { section: "Client Rate Limiting", note: "Written to chrony (allow, ratelimit). This node itself is always allowed. The rate limit restarts chrony." },
-    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "rows", rows: "allowedclients", wide: true, hint: "Networks that may ask, one per row: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
-    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "rows", rows: "blockedclients", wide: true, hint: "Clients and networks that get no answers, one per row, whatever Allowed clients says (the block wins). Statistics ▸ Top Clients ▸ right-click ▸ Block adds one. This node itself cannot be blocked." },
-    { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit. A client is one IPv4 address or one IPv6 /64." },
+    { section: "Client Rate Limiting", note: "Written to chrony." },
+    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "rows", rows: "allowedclients", wide: true, hint: "One per row. Empty: everyone." },
+    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "rows", rows: "blockedclients", wide: true, hint: "One per row. Blocking wins." },
+    { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit." },
     { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
     { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
-    { section: "Authentication", note: "Symmetric keys and Network Time Security (NTS). Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
+    { section: "Authentication", note: "Keys and NTS. Restarts chrony." },
     { shared: true, k: "keys", l: "Keys", t: "rows", rows: "keys", wide: true },
     { shared: true, k: "server_auth", l: "Authenticated servers", t: "rows", rows: "serverauth", wide: true },
     { shared: true, k: "nts_server", l: "Serve NTS to clients", t: "bool" },
-    { section: "Leap seconds", note: "Written to chrony, which is restarted on every node, one at a time, when anything here changes." },
+    { section: "Leap seconds", note: "Written to chrony. Restarts chrony." },
     { shared: true, k: "leap_tz", l: "Leap second table", t: "text" },
     { shared: true, k: "leap_mode", l: "Leap second mode", t: "select", options: ["system", "step", "slew", "ignore"] },
     { shared: true, k: "leap_smear", l: "Smear leap seconds", t: "bool" },
@@ -2344,9 +2344,9 @@
   }
 
   const WEB_FIELDS = [
-    { k: "listen", l: "Listen address", t: "port", def: "12380", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
-    { shared: true, k: "group", l: "Login groups", t: "text", hint: "one or more, separated by commas: a member of any may sign in. The first one that is a local group is the one the Users page manages; the others can be directory (Active Directory) groups" },
-    { shared: true, k: "read_group", l: "Read-only groups", t: "text", hint: "same form; a member of one of these (and of none of the login groups) can sign in and look at everything but change nothing. Empty = nobody. People are added on the Users page" },
+    { k: "listen", l: "Listen address", t: "port", def: "12380", hint: "Port, or address:port." },
+    { shared: true, k: "group", l: "Login groups", t: "text", hint: "Separated by commas." },
+    { shared: true, k: "read_group", l: "Read-only groups", t: "text", hint: "Same form. Empty: nobody." },
     { k: "pam_service", l: "PAM service", t: "text" },
     { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", def: 30, min: 1 },
     { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", max: 1000, def: 3, min: 1 },
@@ -2372,7 +2372,7 @@
     { shared: true, k: "mcp_keys", l: "Keys", t: "mcpkeys", wide: true },
   ];
   const CLUSTER_FIELDS = [
-    { k: "listen", l: "Binding address", t: "port", def: "12381", hint: "the port, default 12381 (all addresses); or an address with the port: 10.0.0.1:12381" },
+    { k: "listen", l: "Binding address", t: "port", def: "12381", hint: "Port, or address:port." },
     { k: "self", l: "Advertised address", t: "text" },
     { k: "sync_interval_sec", l: "Sync interval (s)", t: "int", def: 5, min: 1, max: 3600 },
   ];
@@ -2380,10 +2380,10 @@
   const SYSLOG_FIELDS = [
     { k: "enabled", l: "Send the log to a syslog server", t: "bool", hint: "" },
     { k: "protocol", l: "Protocol", t: "select", options: ["tcp", "udp", "tls"] },
-    { k: "server", l: "Server", t: "text", hint: "a host name or address, with the port if it is not the usual one: logs.example.com or 10.0.0.9:1514 (514, and 6514 for tls)" },
+    { k: "server", l: "Server", t: "text", hint: "Host or host:port." },
     { k: "facility", l: "Facility", t: "select", options: ["daemon", "user", "auth", "authpriv", "local0", "local1", "local2", "local3", "local4", "local5", "local6", "local7"] },
     { k: "format", l: "Message format", t: "select", options: ["rfc5424", "rfc3164"] },
-    { k: "ca_file", l: "CA certificate file (tls)", t: "text", hint: "the PEM file of the authority that signed the server's certificate; empty trusts the system's authorities" },
+    { k: "ca_file", l: "CA certificate file (tls)", t: "text", hint: "PEM file. Empty: system CAs." },
     { k: "tls_insecure", l: "Do not check the server's certificate (tls)", t: "bool" },
   ];
   const LOG_FIELDS = [{ k: "log_level", l: "Log level", t: "select", options: ["debug", "info", "warning", "error"] }];
@@ -2771,12 +2771,13 @@
     return { el, get: () => keys.map((k) => (k.key ? { name: k.name, access: k.access || "ro", key: k.key, created: k.created } : { name: k.name, access: k.access || "ro", hash: k.hash, created: k.created })) };
   }
 
-  // the valid range under a number field, with its default: "Valid: 10 to 600. Default 30."
-  function rangeHint(f) {
-    if (f.t !== "int" && f.t !== "float") return null;
-    const r = f.range ? "Valid: " + f.range + "." : f.min != null && f.max != null ? "Valid: " + f.min + " to " + f.max + "." : f.min != null ? "Valid: " + f.min + " or more." : f.max != null ? "Valid: up to " + f.max + "." : "";
+  // the range under a number field, with its default, on one line: "10 to 600 s. Default 30."
+  function rangeText(f) {
+    if (f.t !== "int" && f.t !== "float") return "";
+    const u = f.unit ? " " + f.unit : "";
+    const r = f.range ? f.range : f.min != null && f.max != null ? f.min + " to " + f.max + u : f.min != null ? f.min + " or more" + u : f.max != null ? "up to " + f.max + u : "";
     const d = f.def != null ? "Default " + f.def + "." : "";
-    return r || d ? h("span", { class: "hint range" }, [r, d].filter(Boolean).join(" ")) : null;
+    return [r ? r + "." : "", d].filter(Boolean).join(" ");
   }
   function fieldset(specs, obj, asCards) {
     const getters = {};
@@ -2846,7 +2847,7 @@
         const upd = () => { weak.textContent = isWeakKey(input.value) ? "Well known or short: anyone on the network can take over this gateway." : ""; };
         input.addEventListener("input", upd); upd();
       }
-      grid.append(h("label", { class: "f" + (f.wide ? " wide" : "") + (f.brk ? " brk" : "") }, h("span", {}, f.l, sharedTag(f)), input, f.hint ? h("span", { class: "hint" }, f.hint) : null, rangeHint(f), weak));
+      grid.append(h("label", { class: "f" + (f.wide ? " wide" : "") + (f.brk ? " brk" : "") }, h("span", {}, f.l, sharedTag(f)), input, (f.hint || rangeText(f)) ? h("span", { class: "hint" }, [f.hint, rangeText(f)].filter(Boolean).join(" ")) : null, weak));
     }
     return { el: wrap, get: () => Object.fromEntries(Object.entries(getters).map(([k, g]) => [k, g()])) };
   }
