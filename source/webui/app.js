@@ -2211,18 +2211,18 @@
   const LB = ["roundrobin", "weighted", "hostpinned", "failover"];
   const GROUP_FIELDS = [
     { shared: true, k: "name", l: "Name", t: "text", hint: "optional label shown instead of the address" },
-    { shared: true, k: "group_id", l: "Group ID", t: "int", min: 1, max: 255 },
+    { shared: true, k: "group_id", l: "Group ID", t: "int", def: 100, min: 1, max: 255 },
     { k: "interface", l: "Interface", t: "text" },
     { shared: true, k: "vip4", l: "IPv4 VIP/prefix", t: "text", hint: "e.g. 10.0.0.1/24 — empty to disable" },
     { shared: true, k: "vip6", l: "IPv6 VIP/prefix", t: "text", hint: "e.g. 2001:db8::1/64 — empty to disable" },
     { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
     { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "rows", rows: "morevip6", wide: true, hint: "Same subnet as the VIP, one per row, no prefix length." },
-    { k: "priority", l: "Priority", t: "int", min: 0, max: 255 },
+    { k: "priority", l: "Priority", t: "int", def: 100, min: 0, max: 255 },
     { shared: true, k: "lb_method", l: "LB method", t: "select", options: LB },
-    { k: "weight", l: "Weight", t: "int", min: 0, max: 255 },
-    { shared: true, k: "hello_ms", l: "Hello interval (ms)", t: "int", min: 1 },
-    { shared: true, k: "hold_ms", l: "Hold time (ms)", t: "int", min: 1 },
-    { shared: true, k: "max_afns", l: "Max forwarders", t: "int", min: 1, max: 255 },
+    { k: "weight", l: "Weight", t: "int", def: 100, min: 0, max: 255 },
+    { shared: true, k: "hello_ms", l: "Hello interval (ms)", t: "int", max: 65535, def: 150, min: 1 },
+    { shared: true, k: "hold_ms", l: "Hold time (ms)", t: "int", max: 65535, def: 750, min: 1 },
+    { shared: true, k: "max_afns", l: "Max forwarders", t: "int", def: 128, min: 1, max: 255 },
     { shared: true, k: "key", l: "HMAC shared key", t: "text", weakKey: true },
     { k: "preempt", l: "Preemption", t: "bool" },
     { shared: true, k: "real_macs", l: "Use real MAC addresses (no virtual MACs)", t: "bool", hint: "On for a gateway you add now (most networks need it: a VMware port group that is not promiscuous, a cloud with one MAC per interface, a switch with port security); gateways that already existed keep their setting. Off is the older way with a virtual MAC per node. On: the VIP is on every node's lo and the controller answers ARP with the real MAC of the node it picks. Failover then depends on the neighbors honoring an unsolicited ARP. Restarts the gateway; set it on every node's cluster together." },
@@ -2233,14 +2233,14 @@
     { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: 10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com" },
     { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Same forms. Used only while no server above is in service (all down or paused), and dropped as soon as one passes again. They are asked every round and reported, but always count as up." },
     { section: "Health", cols: 3, note: "A server that fails a check is taken out as a source of every node. Applies to every gateway unless it has its own checks (Topology ▸ right-click the gateway ▸ Edit)." },
-    { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", min: 1, max: 15 },
-    { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", min: 0, max: 60000 },
-    { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", min: 0, max: 60000 },
-    { shared: true, k: "serve_offset_ms", l: "Serve only within (ms, 0 = off)", t: "int", min: 0, max: 3600000 },
-    { shared: true, k: "max_offset_ms", l: "Falseticker offset (ms, 0 = off)", t: "int", min: 0, max: 3600000 },
-    { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", min: 1 },
+    { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", def: 15, min: 1, max: 15 },
+    { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", def: 1500, min: 0, max: 60000 },
+    { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", def: 500, min: 0, max: 60000 },
+    { shared: true, k: "serve_offset_ms", l: "Serve only within (ms, 0 = off)", t: "int", def: 50, min: 0, max: 3600000 },
+    { shared: true, k: "max_offset_ms", l: "Falseticker offset (ms, 0 = off)", t: "int", def: 128, min: 0, max: 3600000 },
+    { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", def: 2, min: 1 },
     { section: "Serving" },
-    { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", min: 1, max: 65535 },
+    { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", def: 123, min: 1, max: 65535 },
     { section: "Client Rate Limiting", note: "Written to chrony (allow, ratelimit). This node itself is always allowed. The rate limit restarts chrony." },
     { shared: true, k: "allowed_clients", l: "Allowed clients", t: "rows", rows: "allowedclients", wide: true, hint: "Networks that may ask, one per row: 10.0.0.0/8, 192.168.1.5, 2001:db8::/32. Empty = everyone." },
     { shared: true, k: "blocked_clients", l: "Blocked clients", t: "rows", rows: "blockedclients", wide: true, hint: "Clients and networks that get no answers, one per row, whatever Allowed clients says (the block wins). Statistics ▸ Top Clients ▸ right-click ▸ Block adds one. This node itself cannot be blocked." },
@@ -2256,8 +2256,8 @@
     { shared: true, k: "leap_mode", l: "Leap second mode", t: "select", options: ["system", "step", "slew", "ignore"] },
     { shared: true, k: "leap_smear", l: "Smear leap seconds", t: "bool" },
     { section: "Timing" },
-    { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", min: 1 },
-    { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", min: 1 },
+    { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", def: 16000, min: 1 },
+    { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", def: 1000, min: 1 },
   ];
   const SSO_FIELDS = [
     { shared: true, k: "sso_base_url", brk: true, l: "Address of this console", t: "text" },
@@ -2344,15 +2344,15 @@
   }
 
   const WEB_FIELDS = [
-    { k: "listen", l: "Listen address", t: "port", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
+    { k: "listen", l: "Listen address", t: "port", def: "12380", hint: "the port, default 12380 (all addresses); to listen on one address only, write it with the port: 10.0.0.1:12380" },
     { shared: true, k: "group", l: "Login groups", t: "text", hint: "one or more, separated by commas: a member of any may sign in. The first one that is a local group is the one the Users page manages; the others can be directory (Active Directory) groups" },
     { shared: true, k: "read_group", l: "Read-only groups", t: "text", hint: "same form; a member of one of these (and of none of the login groups) can sign in and look at everything but change nothing. Empty = nobody. People are added on the Users page" },
     { k: "pam_service", l: "PAM service", t: "text" },
-    { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", min: 1 },
-    { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", min: 1 },
-    { shared: true, k: "failed_login_window_minutes", l: "…within this many minutes", t: "int", min: 1 },
-    { shared: true, k: "lockout_minutes", l: "Lockout lasts (minutes)", t: "int", min: 1 },
-    { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", min: 0, max: 128, hint: "0 = 8" },
+    { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", def: 30, min: 1 },
+    { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", max: 1000, def: 3, min: 1 },
+    { shared: true, k: "failed_login_window_minutes", l: "…within this many minutes", t: "int", max: 10080, def: 1, min: 1 },
+    { shared: true, k: "lockout_minutes", l: "Lockout lasts (minutes)", t: "int", max: 10080, def: 15, min: 1 },
+    { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", zeroDef: true, def: 8, min: 0, max: 128 },
   ];
   const SNMP_FIELDS = [
     { k: "location", l: "Location", t: "text" },
@@ -2372,9 +2372,9 @@
     { shared: true, k: "mcp_keys", l: "Keys", t: "mcpkeys", wide: true },
   ];
   const CLUSTER_FIELDS = [
-    { k: "listen", l: "Binding address", t: "port", hint: "the port, default 12381 (all addresses); or an address with the port: 10.0.0.1:12381" },
+    { k: "listen", l: "Binding address", t: "port", def: "12381", hint: "the port, default 12381 (all addresses); or an address with the port: 10.0.0.1:12381" },
     { k: "self", l: "Advertised address", t: "text" },
-    { k: "sync_interval_sec", l: "Sync interval (s)", t: "int", min: 1, max: 3600 },
+    { k: "sync_interval_sec", l: "Sync interval (s)", t: "int", def: 5, min: 1, max: 3600 },
   ];
   // Configure ▸ Settings ▸ Logs: where this node sends its log (per node, never replicated)
   const SYSLOG_FIELDS = [
@@ -2771,6 +2771,13 @@
     return { el, get: () => keys.map((k) => (k.key ? { name: k.name, access: k.access || "ro", key: k.key, created: k.created } : { name: k.name, access: k.access || "ro", hash: k.hash, created: k.created })) };
   }
 
+  // the valid range under a number field, with its default: "Valid: 10 to 600. Default 30."
+  function rangeHint(f) {
+    if (f.t !== "int" && f.t !== "float") return null;
+    const r = f.range ? "Valid: " + f.range + "." : f.min != null && f.max != null ? "Valid: " + f.min + " to " + f.max + "." : f.min != null ? "Valid: " + f.min + " or more." : f.max != null ? "Valid: up to " + f.max + "." : "";
+    const d = f.def != null ? "Default " + f.def + "." : "";
+    return r || d ? h("span", { class: "hint range" }, [r, d].filter(Boolean).join(" ")) : null;
+  }
   function fieldset(specs, obj, asCards) {
     const getters = {};
     let grid = h("div", { class: "grid" });
@@ -2817,7 +2824,7 @@
       } else if (f.t === "port") {
         // a listen address kept as ":12380" in the file is shown as the port alone; one with a host in front is shown as it is
         input = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false" });
-        input.value = v == null ? "" : String(v).replace(/^:(\d+)$/, "$1");
+        input.value = v == null || v === "" ? (f.def || "") : String(v).replace(/^:(\d+)$/, "$1");
         get = () => { const t = input.value.trim(); return /^\d+$/.test(t) ? ":" + t : t; };
       } else if (f.t === "secret") {
         input = h("input", { type: "password", autocomplete: "new-password", spellcheck: "false" });
@@ -2825,7 +2832,7 @@
         get = () => input.value.trim();
       } else if (f.t === "int" || f.t === "float") {
         input = h("input", { type: "number", step: f.t === "float" ? "any" : "1", min: f.min, max: f.max });
-        input.value = v == null ? "" : v;
+        input.value = v == null || v === "" || (v === 0 && f.def != null && (f.min > 0 || f.zeroDef)) ? (f.def == null ? "" : f.def) : v;   // empty or "the default" is shown as the default itself
         get = () => (input.value === "" ? 0 : Number(input.value));
       } else {
         input = h("input", { type: "text", autocomplete: "off", spellcheck: "false" });
@@ -2839,7 +2846,7 @@
         const upd = () => { weak.textContent = isWeakKey(input.value) ? "Well known or short: anyone on the network can take over this gateway." : ""; };
         input.addEventListener("input", upd); upd();
       }
-      grid.append(h("label", { class: "f" + (f.wide ? " wide" : "") + (f.brk ? " brk" : "") }, h("span", {}, f.l, sharedTag(f)), input, f.hint ? h("span", { class: "hint" }, f.hint) : null, weak));
+      grid.append(h("label", { class: "f" + (f.wide ? " wide" : "") + (f.brk ? " brk" : "") }, h("span", {}, f.l, sharedTag(f)), input, f.hint ? h("span", { class: "hint" }, f.hint) : null, rangeHint(f), weak));
     }
     return { el: wrap, get: () => Object.fromEntries(Object.entries(getters).map(([k, g]) => [k, g()])) };
   }

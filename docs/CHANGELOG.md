@@ -1,5 +1,16 @@
 # Changelog
 
+## [v215] - 2026-11-07 — defaults shown in the fields, valid range under them
+
+### Changed
+- A number field that was empty for "the default" now shows the default itself, and under every number field is its valid range and default ("Valid: 1 to 255. Default 128."). Filled in: Group ID 100 (what a new gateway gets), Priority 100, Weight 100, Hello 150 ms, Hold 750 ms, Max forwarders 128, Highest stratum 15, Largest root distance 1500 ms, Slowest round trip 500 ms, Serve only within 50 ms, Falseticker offset 128 ms, Failures before down 2, NTP port 123, Probe interval 16000 ms, Probe timeout 1000 ms, session idle 30 min, failed logins 3 in 1 min, lockout 15 min, minimum password length 8, sync interval 5 s. The listen ports (web GUI 12380 and cluster 12381) show their default too. A field where 0 means off or no limit keeps showing 0 (a range line says what is valid). A setting that was saved as 0 for "the default" (minimum password length) now shows the default, and is saved as shown. The "Default 10." and "0 = 8" style hints that said the same are gone. No Go change.
+
+### Verified
+- `gofmt -l .`, `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`, the five cross-compiles, `node --check webui/app.js`.
+
+### Not verified
+- Not looked at in a browser (the range lines and the filled defaults). The PAM sign-in was not re-run: no Go file changed.
+
 ## [v214] - 2026-11-06 — MCP: a tool's answer may be as large as a request (1 MiB)
 
 ### Changed
