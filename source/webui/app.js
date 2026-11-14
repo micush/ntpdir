@@ -3936,7 +3936,7 @@
         info = h("div", {});
         csrBox = h("div", {});
         const cert = h("textarea", { rows: 7, spellcheck: "false", class: "pem", placeholder: "-----BEGIN CERTIFICATE-----  (your certificate first, then any intermediate ones)", "aria-label": "Certificate PEM" });
-        const key = h("textarea", { rows: 5, spellcheck: "false", class: "pem", placeholder: "-----BEGIN PRIVATE KEY-----  (leave empty if you created a request below)", "aria-label": "Private key PEM", autocomplete: "off" });
+        const key = h("textarea", { rows: 7, spellcheck: "false", class: "pem", placeholder: "-----BEGIN PRIVATE KEY-----  (leave empty if you created a request below)", "aria-label": "Private key PEM", autocomplete: "off" });
         const certFile = h("input", { type: "file", accept: ".pem,.crt,.cer,.txt", "aria-label": "Certificate file" });
         const keyFile = h("input", { type: "file", accept: ".pem,.key,.txt", "aria-label": "Key file" });
         readFileInto(certFile, cert); readFileInto(keyFile, key);
@@ -3946,10 +3946,9 @@
         const lines = (t) => t.value.split("\n").map((s) => s.trim()).filter(Boolean);
         tools = h("div", {},
           section("Upload your own certificate",
-            h("p", { class: "hint" }, "Paste the certificate and its private key, or choose the files. It is used for the next connection — nothing restarts and nobody is logged out. Nodes in a cluster get the same certificate automatically."),
             h("div", { class: "grid2" },
-              h("label", { class: "f" }, "Certificate", cert, certFile),
-              h("label", { class: "f" }, "Private key", key, keyFile)),
+              h("label", { class: "f" }, h("span", {}, "Certificate", sharedTag({ shared: true })), cert, certFile),
+              h("label", { class: "f" }, h("span", {}, "Private key", sharedTag({ shared: true })), key, keyFile)),
             h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "button", onclick: async (ev) => {
               ev.target.disabled = true;
               try {
