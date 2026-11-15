@@ -8,6 +8,36 @@
     target: null, nodes: [], clustered: false }; // target: address of the node being driven, null = this one
   const root = document.getElementById("app");
 
+  // Theme: Auto follows the system (prefers-color-scheme); Light and Dark force one.  The choice is kept in this browser only.
+  const THEMES = [["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]];
+  const themeGet = () => { try { const t = localStorage.getItem("theme"); return THEMES.some(([k]) => k === t) ? t : "auto"; } catch (_) { return "auto"; } };
+  const themeApply = (t) => { if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; };
+  themeApply(themeGet());
+  function themeToggle() {
+    const svg = (tag, a) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
+    const ICON = {
+      auto: () => [svg("circle", { cx: 8, cy: 8, r: 6 }), svg("path", { d: "M8 2a6 6 0 0 1 0 12z", fill: "currentColor" })],
+      light: () => [svg("circle", { cx: 8, cy: 8, r: 3 }), ...[0, 45, 90, 135, 180, 225, 270, 315].map((a) => svg("path", { d: "M8 1.2v1.6", transform: "rotate(" + a + " 8 8)" }))],
+      dark: () => [svg("path", { d: "M13.4 9.6A5.6 5.6 0 0 1 6.4 2.6a5.6 5.6 0 1 0 7 7z" })],
+    };
+    const btn = h("button", { class: "theme-btn", type: "button" });
+    const draw = () => {
+      const t = themeGet(), i = THEMES.findIndex(([k]) => k === t), next = THEMES[(i + 1) % THEMES.length];
+      const s = svg("svg", { viewBox: "0 0 16 16", width: 16, height: 16, fill: "none", stroke: "currentColor", "stroke-width": 1.5, "stroke-linecap": "round", "aria-hidden": "true" });
+      for (const e of ICON[t]()) s.append(e);
+      btn.replaceChildren(s);
+      btn.title = "Theme: " + THEMES[i][1] + (t === "auto" ? " (follows the system)" : "") + ". Click for " + next[1] + ".";
+      btn.setAttribute("aria-label", btn.title);
+    };
+    btn.addEventListener("click", () => {
+      const next = THEMES[(THEMES.findIndex(([k]) => k === themeGet()) + 1) % THEMES.length][0];
+      try { if (next === "auto") localStorage.removeItem("theme"); else localStorage.setItem("theme", next); } catch (_) { /* no storage: lasts until reload */ }
+      themeApply(next); draw();
+    });
+    draw();
+    return h("div", { class: "nav-theme" }, btn);
+  }
+
   // The daemon puts its version in BUILD when it serves this file. After an upgrade the daemon restarts with a new
   // interface; a page left open notices (the session says which version answers) and reloads itself, but not while
   // a dialog is open, a field is being typed in, or a Configure page is open (it may hold changes not yet saved).
@@ -344,6 +374,7 @@
       h("div", { class: "mark" }, h("div", { class: "brand" }, "AnyTime NTP Director"),
         h("div", { class: "muted small" }, "v" + s.version + (s.hostname && s.hostname.toLowerCase() !== "ntpdir" ? " · " + s.hostname : ""))),
       h("div", { class: "nav-section" }, groups),
+      themeToggle(),
       h("div", { class: "nav-footer" },
         h("div", { class: "who" }, "Signed in as ", h("strong", {}, s.user)),
         h("button", { class: "nav-signout", type: "button", onclick: logout }, "Sign out")));
@@ -783,8 +814,6 @@
     // The gateway circle's tooltip: its name, how long it has been up, each address family's state, and how many
     // nodes serve it.  The overall status line is added only when it says more than the family lines do (a
     // pause, a gateway with one family, a start still waiting); it is the same words as the two together otherwise.
-    const vmacWords = { delivered: "delivered", "not-delivered": "NOT delivered", inconclusive: "inconclusive" };
-    const vmacLine = (r) => "Virtual MACs: " + (vmacWords[r.verdict] || r.verdict) + " — " + r.detail;
     const gwTip = (g, st, dual) => {
       const fam = (af) => (st.fams[af] ? st.fams[af].detail : "not running");
       const together = dual ? "IPv4: " + fam("v4") + "; IPv6: " + fam("v6") : null;
@@ -844,24 +873,6 @@
           : "This node stops serving the gateway — it gives up its address and stops answering NTP — so it can be taken offline. The other cluster nodes carry on. Resume it here when you are done.",
         "Pause gateway", () => quick(() => { g[k] = true; }), "btn primary");
     }
-    // "Test virtual MACs…": asks this node to check that replies addressed to a virtual MAC reach it, and shows what it found.
-    // Nothing changes unless the person presses "Use real MAC addresses".
-    async function vmacTest(g) {
-      const body = h("div", {}, h("p", {}, "Testing… this takes a few seconds."));
-      const toolbar = h("div", { class: "toolbar" }, h("button", { class: "btn", type: "button", onclick: closeEditor }, "Close"));
-      openDialog("Virtual MACs: " + gwLabel(g), body, toolbar);
-      try {
-        const r = await api("POST", "/api/vmactest", { group: g.group_id });
-        const x = (r.data || [])[0];
-        if (!x) throw new Error("no result");
-        clear(body).append(h("p", {}, vmacLine(x)), ...(x.families || []).map((f) => h("p", { class: "hint" }, f.af + ": " + f.detail)));
-        if (x.verdict === "not-delivered") {
-          toolbar.prepend(h("button", { class: "btn primary", type: "button", onclick: () => { closeEditor(); quick(() => { g.real_macs = true; }); } }, "Use real MAC addresses"));
-        }
-      } catch (e) {
-        clear(body).append(h("p", {}, "The test could not run: " + e.message));
-      }
-    }
     // The last server in service stays on unless the gateway has fallback servers to answer from; a server that is down (not answering or
     // paused) is not in service.  "" when it may be paused, otherwise the reason.
     function lastServerWhy(g, addr) {
@@ -888,7 +899,7 @@
       const oldWrap = svgHost.querySelector(".cv-wrap");
       const keep = oldWrap && cv.drawn === cv.gid ? { x: oldWrap.scrollLeft, y: oldWrap.scrollTop } : { x: 0, y: 0 };
       const g = curGroup();
-      if (!g) { clear(svgHost); svgHost.append(h("div", { class: "empty" }, "No gateway yet. Click “＋ New gateway” under Topology in the sidebar (or right-click here) to draw one.")); return; }
+      if (!g) { clear(svgHost); svgHost.append(h("div", { class: "empty" }, "No gateway yet. Click “＋ New gateway” under Topology in the sidebar to draw one.")); return; }
       const st = statusOf(g);
       const servers = (g.ntp && g.ntp.servers) || [];
       const COLW = 190, SW = 156;
@@ -1518,7 +1529,6 @@
       ...(g.piggyback ? [] : addNodeSubs(g))]];
     const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], addGwItem(g), pasteItem(g),
       ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], addGwItem(g), pasteItem(g),
-      ...(g.real_macs ? [] : [["Test virtual MACs", () => vmacTest(g)]]),
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
     // a server's address as the packet filter and the log search want it: the host, and the port its queries go to
     const srvTarget = (addr) => {
@@ -1683,13 +1693,19 @@
       const nodes = statusOf(g).nodes || [];
       return (g.excluded_nodes || []).map((id) => {
         const n = nodes.find((x) => x.node_id === id);
-        return { id, label: n ? n.name + (n.self ? " (this node)" : "") : "A node that left the cluster (" + id.slice(0, 8) + ")" };
+        return { id, gone: !!nodes.length && !n, label: n ? n.name + (n.self ? " (this node)" : "") : "A node that left the cluster (" + id.slice(0, 8) + ")" };
       });
     };
-    const addNodeSubs = (g) => {
-      const l = removedNodes(g);
-      return l.length ? [["Node", null, "", l.map((r) => [r.label, () => quick(() => toggleIn(g, "excluded_nodes", r.id, false))])]] : [["Node", null, "Every node already serves this gateway"]];
+    // Add ▸ Node lists the nodes that were taken off the gateway and are still in the cluster.  An entry for a node that has left the
+    // cluster is not a node that can be added: one item, "Forget nodes that left the cluster", clears them all from this gateway.
+    const nodeSubs = (g) => {
+      const l = removedNodes(g), live = l.filter((r) => !r.gone), gone = l.filter((r) => r.gone);
+      if (!live.length && !gone.length) return ["Node", null, "Every node already serves this gateway"];
+      return ["Node", null, "", [
+        ...live.map((r) => [r.label, () => quick(() => toggleIn(g, "excluded_nodes", r.id, false))]),
+        ...(gone.length ? [["Forget " + gone.length + " node" + (gone.length > 1 ? "s" : "") + " that left the cluster", () => quick(() => { g.excluded_nodes = (g.excluded_nodes || []).filter((id) => !gone.some((r) => r.id === id)); if (!g.excluded_nodes.length) delete g.excluded_nodes; })]] : [])]];
     };
+    const addNodeSubs = (g) => [nodeSubs(g)];
     // The last node in service cannot be paused: the item is greyed out, with the reason as its tooltip.  A node that is not answering or
     // is paused is out of service.
     const lastNodeWhy = (n) => {
@@ -2059,9 +2075,8 @@
       mount(main) {
         svgHost = h("div", { class: "cv-card",
           onmouseout: (e) => { if (cv.stale && !cv.drag && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".shape"))) draw(); },
-          // right-click on empty canvas (shapes and tabs handle their own menus)
-          oncontextmenu: (e) => { cv.sel = null; refresh(); const g = curGroup();
-            openMenu(e, (cv.dnsdir && cv.dnsdir.present ? [] : [["New gateway", () => gatewayForm(null)]]).concat(g ? [["Add NTP server…", () => serverForm(g)], pasteItem(g)] : [])); } });
+          // right-click on empty canvas: no menu (the shapes and tabs have their own); it only clears the selection
+          oncontextmenu: (e) => { e.preventDefault(); cv.sel = null; refresh(); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
           h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
         main.append(svgHost, legend);
@@ -2079,6 +2094,43 @@
   })();
 
   // Gateways  (CLI: --show-gateways, --show-neighbors)
+  // Virtual MACs (Monitor ▸ Gateways ▸ Test): asks this node to check that replies addressed to a virtual MAC reach it, and shows what
+  // it found.  Nothing changes unless the person presses "Use real MAC addresses", which is offered only when the test says they are not delivered.
+  const vmacWords = { delivered: "delivered", "not-delivered": "NOT delivered", inconclusive: "inconclusive" };
+  const vmacLine = (r) => "Virtual MACs: " + (vmacWords[r.verdict] || r.verdict) + " — " + r.detail;
+  function vmacTestPopup(gid, label) {
+    const out = h("div", { class: "vmac-out", "aria-live": "polite" }, h("p", {}, "Testing… this takes a few seconds."));
+    const useReal = h("button", { class: "btn primary", type: "button", hidden: true, onclick: async () => {
+      useReal.disabled = true;
+      try {
+        const r = await api("GET", "/api/config");
+        const g = (r.config.groups || []).find((x) => x.group_id === gid);
+        if (!g) throw new Error("the gateway is not in the saved configuration");
+        g.real_macs = true;
+        await api("PUT", "/api/config", { config: r.config, note: "Use real MAC addresses" });
+        useReal.textContent = "Real MAC addresses are on";
+      } catch (e) { if (e.message !== "unauthenticated") { useReal.disabled = false; useReal.textContent = "Could not save: " + e.message; } }
+    } }, "Use real MAC addresses");
+    const d = h("dialog", { class: "cv-dialog nt-dialog", "aria-label": "Virtual MACs: " + label });
+    const close = () => { try { d.close(); } catch (_) { /* closed */ } d.remove(); };
+    d.addEventListener("close", () => d.remove());
+    d.append(h("h2", {}, "Virtual MACs: " + label), out,
+      h("div", { class: "toolbar vmac-bar" }, useReal, h("button", { class: "btn", type: "button", onclick: close }, "Close")));
+    root.append(d);
+    d.showModal();
+    (async () => {
+      try {
+        const r = await api("POST", "/api/vmactest", { group: gid });
+        const x = (r.data || [])[0];
+        if (!x) throw new Error("no result");
+        // real MAC addresses on: just say so (the daemon's words, capitalised); otherwise the verdict, then a line per address family
+        const lines = x.verdict === "off" ? [x.detail.charAt(0).toUpperCase() + x.detail.slice(1)] : [vmacLine(x), ...(x.families || []).map((f) => f.af + ": " + f.detail)];
+        clear(out).append(...lines.map((t) => h("p", {}, t)));
+        useReal.hidden = x.verdict !== "not-delivered";
+      } catch (e) { if (e.message !== "unauthenticated") clear(out).append(h("p", {}, "The test could not run: " + e.message)); }
+    })();
+  }
+
   VIEWS.gateways = (() => {
     let body;
     return {
@@ -2108,9 +2160,12 @@
             h("td", { class: "mono" }, m.vmac || "–"),
             h("td", {}, pill(m.ntp_listening ? "answering" : "not answering", m.ntp_listening ? "ok" : "warn"))));
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, g.name ? g.name + " · Group " + g.group_id : "Group " + g.group_id),
-              h("span", { class: "mono muted" }, "VIP " + g.vip),
-              g.agc ? h("span", { class: "muted" }, "AGC ", h("span", { class: "mono" }, g.agc)) : null),
+            h("header", { class: "bar" }, h("h2", {}, g.name ? g.name + " · Group " + g.group_id : "Group " + g.group_id),
+              h("span", { class: "muted gw-vip" }, "VIP ", h("span", { class: "mono" }, g.vip)),
+              g.agc ? h("span", { class: "muted" }, "AGC ", h("span", { class: "mono" }, g.agc)) : null,
+              h("span", { class: "grow" }),
+              g.members.some((m) => m.local && m.real_macs) ? null
+                : h("button", { class: "btn hdr", type: "button", title: "Check that replies addressed to this gateway's virtual MAC reach this node", onclick: () => vmacTestPopup(g.group_id, g.name || "Group " + g.group_id) }, "Test")),
             h("div", { class: "scroll" }, h("table", { class: "tight" },
               h("thead", {}, h("tr", {}, ["Node name", "Node IP", "Pri", "Slot", "Weight", "Role", "State", "Hello avg / max (ms)", "vMAC", "NTP"].map((t, i) => h("th", { class: [2, 3, 4, 7].includes(i) ? "num" : "" }, t)))),
               h("tbody", {}, rows)))));
@@ -2131,7 +2186,7 @@
         if (c && c.data) {
           const v = c.data;
           out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, tc("Cluster members")), h("span", { class: "muted" }, "Nodes sharing these settings."),
+            h("header", {}, h("h2", {}, tc("Cluster members")),
               v.conflict ? pill("conflict", "bad") : null),
             membersTable(v, null, true)));
         }
