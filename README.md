@@ -107,7 +107,7 @@ Every node runs chrony, and chrony answers the clients on every address of the n
 - It writes the servers that pass into `<sourcedir>/ntpdir.sources` and tells chrony (`chronyc reload sources`). Servers that stop passing are removed the same way. This is done every 2 seconds on every node, so the nodes agree because they test the same servers.
 - It writes the client settings into `<confdir>/ntpdir.conf` (the port, `allow` and `ratelimit`) ; a new allow list is applied to the running chrony (`chronyc allow`/`deny`), and chrony is restarted only when the port or the rate limit changes, because chrony reads those at start and has no command for them: see the rolling restart below.
 
-The NTP page (Monitor ▸ NTP, or `ntpdir --show-ntp`) shows chrony's state (synchronised, stratum, offset, the server it is synchronised to, the requests it has handled and dropped) and, for every server, its health and whether chrony has it as a source (the **In chrony** column: synchronised to, combined, not combined, not reachable, falseticker, too variable, or no).
+The NTP page (Monitor ▸ NTP, or `ntpdir --show-ntp`) shows chrony's state (synchronised, stratum, offset, its time source (the server it has selected), the requests it has handled and dropped) and, for every server, its health and whether chrony has it as a source (on its card: selected, combined, not combined, not reachable, falseticker, too variable, or not in chrony).
 
 ![Monitor ▸ NTP: chrony's state and each server's health and role in chrony](snaps/ntp.png)
 

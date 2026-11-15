@@ -2159,44 +2159,42 @@
           stat("chrony", d.chrony_roll ? h("span", { class: "pill warn" }, d.chrony_roll) : h("span", { class: "pill " + (c.synced ? "ok" : "bad") }, cState)),
           stat("Stratum", c.synced ? c.stratum : "–"),
           stat("System clock offset", c.synced ? sgn(c.offset_ms) + " ms" : "–"),
-          stat("Synchronised to", c.synced ? c.ref || "–" : "–", true),
+          stat("Time source", c.synced ? c.ref || "–" : "–", true),
           stat("Requests", ss.received == null ? "–" : ss.received),
           stat("Dropped", ss.dropped == null ? "–" : ss.dropped)));
         // "group 1 192.168.0.5:123" -> where each gateway answers, shown on its own card
         const addrsOf = {};
         for (const l of d.listeners || []) { const m = /^group (\d+) (.+)$/.exec(l); if (m) (addrsOf[m[1]] = addrsOf[m[1]] || []).push(m[2]); }
         const fills = [];
-        const IN_CHRONY = { "*": ["synchronised to", "ok"], "+": ["combined", "ok"], "-": ["not combined", "info"], "?": ["not reachable", "warn"], "x": ["falseticker", "bad"], "~": ["too variable", "warn"] };
+        const IN_CHRONY = { "*": ["selected", "ok"], "+": ["combined", "ok"], "-": ["not combined", "info"], "?": ["not reachable", "warn"], "x": ["falseticker", "bad"], "~": ["too variable", "warn"] };
+        // one card per server: its name, address and state on the left, its numbers in a row beside them, the last error under them
+        const cell = (k, v, tip) => h("div", { class: "m", title: tip || null }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
+        const srvCard = (s) => h("div", { class: "srv" },
+          h("div", { class: "who" },
+            h("div", { class: "nm", title: s.name || null }, s.name || "–"),
+            h("div", { class: "mono addr" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null,
+              // a server named by host is probed over IPv4 and over IPv6; the one whose numbers count is marked
+              (s.families || []).length > 1 || s.via === "IPv6" ? (s.families || []).map((f) => h("span", { class: "fam-tag " + (!f.ok ? "bad" : f.family === s.via ? "use" : ""),
+                title: f.family + " " + f.addr + ": " + (f.ok ? (f.ewma_ms ? fmtMs(f.ewma_ms) + " ms" : "answers") : f.error || "no answer") + (f.ok && f.family === s.via ? " (the numbers shown are from this family)" : "") }, f.family === "IPv4" ? "v4" : "v6")) : null,
+              // authenticated with NTS or a key: green when it works, red when it does not, grey while chrony has yet to restart with it
+              s.auth ? h("span", { class: "fam-tag " + (s.auth.status === "ok" ? "use" : s.auth.status === "failing" ? "bad" : ""), title: s.auth.detail }, (s.auth.mode === "nts" ? "NTS" : "key") + (s.auth.status === "failing" ? " ✗" : s.auth.status === "pending" ? " …" : "")) : null),
+            h("div", { class: "pills" },
+              s.falseticker ? pill("falseticker", "bad") : s.fallback && s.answering === false ? pill("no answer", "warn") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad"),
+              s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted small" }, "not in chrony"))),
+          cell("Stratum", s.time ? s.time.stratum : "–", s.time ? "Reference: " + s.time.refid : null),
+          cell("Offset", s.time ? sgn(s.time.offset_ms) + " ms" : "–"),
+          cell("Root dist.", s.time ? fmtMs(s.time.root_distance_ms) + " ms" : "–"),
+          cell("Round trip", s.healthy && s.ewma_ms > 0 ? [h("span", { class: "bar-wrap" }, h("span", { class: "bar-fill" })), fmtMs(s.ewma_ms) + " ms"] : "–"),
+          cell("Last", s.last_ms > 0 ? fmtMs(s.last_ms) + " ms" : "–"),
+          cell("OK / fail", s.successes + " / " + s.failures),
+          s.last_error ? h("div", { class: "err muted small" }, s.last_error) : null);
         for (const p of pools) {
           const maxE = Math.max(1, ...p.servers.filter((s) => s.healthy).map((s) => s.ewma_ms));
           out.append(h("div", { class: "card" },
             h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared Servers" + (p.groups.length ? " (Group " + p.groups.join(", ") + ")" : "")),
-              p.max_stratum ? h("span", { class: "muted small" }, "stratum up to " + p.max_stratum + " · root distance up to " + p.max_root_distance_ms + " ms · " + (p.max_rtt_ms ? "round trip up to " + p.max_rtt_ms + " ms" : "round trip not checked") + " · " + (p.max_offset_ms ? "falseticker beyond " + p.max_offset_ms + " ms" : "falseticker check off")) : null,
               p.using_fallback ? pill("every server is down: using the fallback servers", "warn") : null,
-              h("span", { class: "spacer" }),
-              (() => {
-                const on = (p.groups.length ? p.groups : [p.key]).flatMap((g) => addrsOf[g] || []);
-                return on.length ? h("span", { class: "mono small" }, "answering on " + on.join(" · ")) : h("span", { class: "muted small" }, "not answering on this node");
-              })()),
-            h("div", { class: "scroll" }, h("table", { class: "ntp" },
-              h("thead", {}, h("tr", {}, ["Server name", "Server IP", "State", "In chrony", "Stratum", "Offset (ms)", "Root dist. (ms)", "Round trip (ms)", "Last (ms)", "OK", "Fail", "Last error"].map((t, i) => h("th", { class: i >= 4 && i <= 10 ? "num" : "" }, t)))),
-              h("tbody", {}, p.servers.map((s) => h("tr", {},
-                h("td", { class: "sname", title: s.name || null }, s.name || "–"),   // a long name is cut short; the whole is the tooltip
-                h("td", { class: "mono" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null,
-                  // a server named by host is probed over IPv4 and over IPv6; the one whose numbers count is marked
-                  (s.families || []).length > 1 || s.via === "IPv6" ? (s.families || []).map((f) => h("span", { class: "fam-tag " + (!f.ok ? "bad" : f.family === s.via ? "use" : ""),
-                    title: f.family + " " + f.addr + ": " + (f.ok ? (f.ewma_ms ? fmtMs(f.ewma_ms) + " ms" : "answers") : f.error || "no answer") + (f.ok && f.family === s.via ? " (the numbers shown are from this family)" : "") }, f.family === "IPv4" ? "v4" : "v6")) : null,
-                  // authenticated with NTS or a key: green when it works, red when it does not, grey while chrony has yet to restart with it
-                  s.auth ? h("span", { class: "fam-tag " + (s.auth.status === "ok" ? "use" : s.auth.status === "failing" ? "bad" : ""), title: s.auth.detail }, (s.auth.mode === "nts" ? "NTS" : "key") + (s.auth.status === "failing" ? " ✗" : s.auth.status === "pending" ? " …" : "")) : null),
-                h("td", {}, s.falseticker ? pill("falseticker", "bad") : s.fallback && s.answering === false ? pill("no answer", "warn") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad")),
-                h("td", {}, s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted" }, "no")),
-                h("td", { class: "num", title: s.time ? "Reference: " + s.time.refid : null }, s.time ? s.time.stratum : "–"),
-                h("td", { class: "num" }, s.time ? sgn(s.time.offset_ms) : "–"),
-                h("td", { class: "num" }, s.time ? fmtMs(s.time.root_distance_ms) : "–"),
-                h("td", { class: "num" }, s.healthy && s.ewma_ms > 0 ? h("span", { class: "bar-wrap" }, h("span", { class: "bar-fill" })) : null, s.healthy && s.ewma_ms > 0 ? fmtMs(s.ewma_ms) : "–"),
-                h("td", { class: "num" }, s.last_ms > 0 ? fmtMs(s.last_ms) : "–"),
-                h("td", { class: "num" }, s.successes), h("td", { class: "num" }, s.failures),
-                h("td", { class: "wrap muted" }, s.last_error || ""))))))));
+              (p.groups.length ? p.groups : [p.key]).some((g) => (addrsOf[g] || []).length) ? null : pill("not answering on this node", "warn")),
+            h("div", { class: "srv-list" }, p.servers.map((s) => srvCard(s)))));
           for (const s of p.servers) if (s.healthy && s.ewma_ms > 0) fills.push([s, maxE]);
         }
         morph(body, out);

@@ -853,7 +853,7 @@ func showNTPTable(sock string) {
 				strconv.FormatUint(s.Successes, 10), strconv.FormatUint(s.Failures, 10), s.LastError)
 		}
 	}
-	fmt.Println("\nIN CHRONY: * chrony is synchronised to it, + combined with it, - not combined, ? not reachable, x falseticker, ~ too variable, no = not a chrony source")
+	fmt.Println("\nIN CHRONY: * chrony has selected it as its main source, + combined with it, - not combined, ? not reachable, x falseticker, ~ too variable, no = not a chrony source")
 }
 
 // ── Interactive configure ────────────────────────────────────────────────────

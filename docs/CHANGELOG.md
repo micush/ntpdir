@@ -1,5 +1,19 @@
 # Changelog
 
+## [v222] - 2026-11-15 — Monitor ▸ NTP: one card per server
+
+### Changed
+- The server table on Monitor ▸ NTP was wider than the page (the "Root dist." and "Round trip" headings ran into each other, names were cut to "time.cl…" and the columns after OK were off screen). Each server is now a card: its name, address and tags (fallback, v4/v6, NTS) on the left, the state and chrony's mark as pills under them, and Stratum, Offset, Root dist., Round trip (with the bar), Last and OK / fail in a row beside them. A failing server's last error is on a line of its own under the card. In a narrow window the six numbers wrap into two rows of three, so nothing is cut off.
+- The gateway card's header no longer has the settings line ("stratum up to 15 · root distance up to 1500 ms · …") or "answering on address:port", as on the DNS page in AnyName v653. The settings are in Configure ▸ NTP. The "every server is down" warning stays, and a gateway that answers on no address of this node shows a "not answering on this node" warning.
+- Wording: the tile "Synchronised to" is now **Time source**, and chrony's mark for the source it follows is **selected** (it was "synchronised to"); a server that is not a chrony source says "not in chrony" instead of "no". `--show-ntp`'s key line, the help panel and the README say the same. (The chrony tile still says "synchronised": that is the state of the clock.)
+
+### Verified
+- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
+
+### Not verified
+- Not run against a real daemon. The page was rendered in headless Chromium (light and dark, 1300 and 700 px wide) with a mocked `/api/ntp` holding a selected, a combined, a fallback with v4/v6 tags, an NTS and a down server: four cards, no script errors, nothing cut off.
+- The README screenshot of this page, if any, still shows the table.
+
 ## [v221] - 2026-11-15 — History under Operate, plain search and page boxes
 
 ### Changed
