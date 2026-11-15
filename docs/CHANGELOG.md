@@ -1,5 +1,21 @@
 # Changelog
 
+## [v221] - 2026-11-15 — History under Operate, plain search and page boxes
+
+### Changed
+- **History** (every saved version of the configuration: diff, restore, download, upload, snapshot) is now under **Operate**, between Scheduler and Upgrade, no longer last under Configure. The page, its address (`#history`), permissions and command-line commands are unchanged, so a bookmark still works. The help panel is titled "Operate: History"; the README, `--help` and QUICKSTART name the new place.
+- The filter box on the Log page was drawn in the browser's own style (square corners, no border, another height than the lists beside it) because the style rule for fields did not list `type=search`. It now looks like the other fields.
+- The page number in the pager under the long lists is a plain box: the up and down arrows are gone and the number is centred. You still type a page and press Enter or leave the box.
+- The same three changes as AnyName v651 to v656.
+
+### Verified
+- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
+
+### Not verified
+- Not opened in a browser; the look was judged from the AnyName screenshots and the style rules.
+- The README screenshot `snaps/history.png` was not retaken, so it may still show the old menu.
+- Whether a read-only user's menu shows History under Operate as it did under Configure was not tried.
+
 ## [v220] - 2026-11-14 — Certificate page: no description text, equal-sized boxes, "shared" tag
 
 ### Changed

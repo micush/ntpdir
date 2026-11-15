@@ -91,7 +91,7 @@ Both nodes now answer on the shared address and one of them is the controller (s
 - **AnyName on the same host:** AnyTime then shows AnyName's gateways (same names) and answers NTP on their addresses by itself. You only choose the NTP servers, one list for all of them; there is no gateway to draw.
 
 - **Settings (with its Logs, Upgrades and Cluster tabs), Gateways, NTP and Web GUI** (all under Configure) hold everything else, and every field saves on its own: probe timing, stratum, root-distance and round-trip limits, falseticker offset, allowed clients, client rate limits, and more. Each page's **?** help lists the command-line equivalent.
-- **History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.
+- **Operate ▸ History** keeps every saved change as a version. You can compare a version with the live one and restore any of them.
 - **Operate ▸ Upgrade**: upload a newer AnyTime tarball, tick the nodes to update and press the button in the Nodes card (none ticked = this node). A bad update rolls back by itself.
 - **Operate ▸ Anycast**: switch BGP, or a single neighbor, off and on without losing the settings (set them under **Configure ▸ Anycast**).
 - **Operate ▸ Node**: make this node the gateway controller, put it in maintenance (pause; the controller and primary roles move to another node), or restart or shut down the host, now or later.
