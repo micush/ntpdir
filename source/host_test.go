@@ -25,7 +25,7 @@ func TestParseProc(t *testing.T) {
 	if n["eth0"].rx != 1000 || n["eth0"].tx != 2000 || len(n) != 2 {
 		t.Fatalf("net %v", n)
 	}
-	for name, want := range map[string]bool{"eth0": true, "ens3": true, "bond0": true, "lo": false, "netdir1.1": false, "veth12": false, "docker0": false, "br-ab12": false, "virbr0": false} {
+	for name, want := range map[string]bool{"eth0": true, "ens3": true, "bond0": true, "lo": false, "ntpdir1.1": false, "veth12": false, "docker0": false, "br-ab12": false, "virbr0": false} {
 		if netCounted(name) != want {
 			t.Errorf("netCounted(%s) != %v", name, want)
 		}
@@ -37,7 +37,7 @@ func TestParseProc(t *testing.T) {
 
 func fakeHost(t0 time.Time) (*HostStats, *time.Time, *hostReading) {
 	cur := t0
-	rd := &hostReading{cores: 2, memTotal: 1000, memAvail: 600, ioTicks: map[string]uint64{"sda": 0}, net: map[string]netCounters{"eth0": {speed: 1000, up: true}, "lo": {up: true}, "netdir1.1": {}},
+	rd := &hostReading{cores: 2, memTotal: 1000, memAvail: 600, ioTicks: map[string]uint64{"sda": 0}, net: map[string]netCounters{"eth0": {speed: 1000, up: true}, "lo": {up: true}, "ntpdir1.1": {}},
 		fs: []fsUsage{{Mount: "/", Device: "sda1", Type: "ext4", Total: 1000, Used: 400, Pct: 40}}}
 	h := NewHostStats()
 	h.now = func() time.Time { return cur }
@@ -134,6 +134,38 @@ func TestHostSampleAndQuery(t *testing.T) {
 	}
 }
 
+func TestHostRetentionAndSteps(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	h, cur, rd := fakeHost(t0)
+	h.Sample()
+	*cur = t0.Add(10 * time.Second)
+	rd.cpuTotal, rd.cpuBusy = 100, 10
+	h.Sample()
+	*cur = t0.Add(40 * 24 * time.Hour)
+	r := h.Query(t0, *cur)
+	if r.Step != 10800 || r.From != cur.Add(-hostRetain).Unix() {
+		t.Fatalf("step %d from %d", r.Step, r.From)
+	}
+	for _, v := range r.CPU {
+		if v >= 0 {
+			t.Fatal("data older than 30 days must be gone")
+		}
+	}
+	if len(r.CPU) > qsMaxPoints {
+		t.Fatalf("too many points: %d", len(r.CPU))
+	}
+}
+
+func TestHostMountsTracked(t *testing.T) {
+	h := NewHostStats()
+	for i := 0; i < hostMaxFS+3; i++ {
+		h.fsIndex("/m" + fmtN(i))
+	}
+	if len(h.mounts) != hostMaxFS || h.fsIndex("/m"+fmtN(hostMaxFS+1)) != -1 || h.fsIndex("/m0") != 0 {
+		t.Fatalf("mounts %v", h.mounts)
+	}
+}
+
 // The load a node shows its cluster: CPU, memory and the fullest disk; "over the limit" means strictly more than 85%.
 func TestHostLoadStrain(t *testing.T) {
 	h, now, rd := fakeHost(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
@@ -163,37 +195,5 @@ func TestHostLoadStrain(t *testing.T) {
 		if got := c.l.Strained(true); len(got) != c.want {
 			t.Errorf("%+v: %v", c.l, got)
 		}
-	}
-}
-
-func TestHostMountsTracked(t *testing.T) {
-	h := NewHostStats()
-	for i := 0; i < hostMaxFS+3; i++ {
-		h.fsIndex("/m" + fmtN(i))
-	}
-	if len(h.mounts) != hostMaxFS || h.fsIndex("/m"+fmtN(hostMaxFS+1)) != -1 || h.fsIndex("/m0") != 0 {
-		t.Fatalf("mounts %v", h.mounts)
-	}
-}
-
-func TestHostRetentionAndSteps(t *testing.T) {
-	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	h, cur, rd := fakeHost(t0)
-	h.Sample()
-	*cur = t0.Add(10 * time.Second)
-	rd.cpuTotal, rd.cpuBusy = 100, 10
-	h.Sample()
-	*cur = t0.Add(40 * 24 * time.Hour)
-	r := h.Query(t0, *cur)
-	if r.Step != 10800 || r.From != cur.Add(-hostRetain).Unix() {
-		t.Fatalf("step %d from %d", r.Step, r.From)
-	}
-	for _, v := range r.CPU {
-		if v >= 0 {
-			t.Fatal("data older than 30 days must be gone")
-		}
-	}
-	if len(r.CPU) > maxPoints {
-		t.Fatalf("too many points: %d", len(r.CPU))
 	}
 }

@@ -1,546 +1,34 @@
 # Changelog
 
-## [v201] - 2026-11-17 — Device changes and captures come from the device's own site too
-
-### Changed
-- In a cluster `device_change`, `device_change_raw` and `device_capture` (and the same from the GUI, the CLI and the API) are carried out by the node that checks each device, as the reads have been since v200. The node that got the request makes the change on its own devices, hands the others to the nodes that check them and puts the answers together (one answer per device, `dry_run` and `change` as before). The caller needs the same access as before; the node that makes the change logs it as "user via node".
-- Unlike a read, a device whose node does not answer is never done from the node that got the request: it is reported as "did not confirm … may or may not have been made", so a change that may have been made is not made twice. Look at the device before asking again.
-- A request that mentions a disabled device is refused as a whole, as before, and a capture on more than 10 devices too.
-- `device_troubleshoot_user` is still carried out by the node that got the request.
-
-### Fixed
-- On a gateway drawn as small squares (more devices than the threshold), a disabled or paused device was a hollow square that only took the pointer on its 1 px outline, so it was hard to hover. It now takes the pointer over its whole area.
-
-### Verified
-- gofmt, vet, `go test -race ./...`, no-cgo, cross-compiles; a test for the split, the put-together answer, no fallback and no second hand-over.
-
-### Not verified
-- A real cluster with nodes on separate sites; a change or capture through another node on a real device.
-
----
-
-## [v200] - 2026-11-17 — Device requests come from the device's own site
-
-### Changed
-- In a cluster a device request (`device_facts`, `device_interfaces`, `device_ports`, `device_neighbors`, `device_routes`, `device_firewall`, `device_show`, `device_config` and the other reads, over MCP, the API and the GUI) is carried out by the node that checks the device, whichever node it arrives on. The node that got it hands the devices of another site to that node (`GET /api/devices/query` over the cluster channel) and puts the answers together. The caller's limits go along: an MCP caller stays one (no secrets; the privacy level too) and a read-only account stays read-only; what a key may not use is dropped before anything is sent.
-- A node that does not answer is skipped: the node that got the request asks those devices itself. A device that no other node has reported lately is asked from the node that got the request. A request that another node handed over is never handed on.
-- A request to a device that no other node checks, and any request outside a cluster, behaves as before.
-
-### Not changed
-- `device_change`, `device_change_raw` and `device_capture` (writes) and `device_troubleshoot_user` are still carried out by the node that got the request.
-
-### Verified
-- gofmt, vet, `go test -race ./...`, no-cgo, cross-compiles; tests for who checks a device, the hand-over with the caller's limits, no second hand-over, the fallback and a report too old to send the request away.
-
-### Not verified
-- A real cluster with the nodes on separate sites. A node on an older version ignores the MCP flags it is sent; netdir hides secrets in the answer again on the node that got the request.
-
----
-
-## [v199] - 2026-11-16 — AND, OR and ! in every filter box
+## [v231] - 2026-11-16 — AND, OR and ! in every filter box
 
 ### Added
-- Every filter box in the GUI (Topology, Monitor ▸ Devices, the Configure tables including Tags, the user lists, and the Log) reads `AND`, `OR` and `!`: `phx AND !dns` shows what has phx and not dns. `AND` is optional (`phx !dns` is the same), `OR` takes either side (AND binds first) and `!word`, or `NOT word`, leaves out whatever contains the word. Note: in the Log box a plain word `not` is now an operator, not a word to find. `tag:` words work with `!` on Topology (`!tag:site=dc1`).
-- The Log filter already had AND and OR on the server; it now has `!` and `NOT` too.
+- Every filter box in the GUI (the Configure tables, the user lists, the query-statistics filter and the Log) reads `AND`, `OR` and `!`: `a AND !b` shows what has a and not b. `AND` is optional (`a !b` is the same), `OR` takes either side (AND binds first) and `!word`, or `NOT word`, leaves out whatever contains the word. In the Configure tables the words are now matched in any column, not as one phrase in one column. Note: a plain word `not` in a filter is now an operator, not a word to find.
+- The server side (the Log and the query statistics) already had AND and OR; it now has `!` and `NOT` too.
 
 ### Verified
 - gofmt, vet, `go test -race ./...`, no-cgo, cross-compiles; the filter parser checked on its own in Node.
 
 ### Not verified
-- Clicking through each box in a browser: the Topology and Monitor boxes were not driven by a test.
+- Clicking through each box in a browser.
 
 ---
 
-## [v198] - 2026-11-17 — The gateway's controller checks its devices
-
-### Changed
-- In a cluster a device's health is now checked by the **controller of its gateway**, not by the primary, so the checks stay local to the site. A device on several gateways is checked by only one: the lowest-numbered gateway that holds it and is not paused on every node. For a gateway with both address families the IPv4 controller stands for it (the IPv6 one when the gateway has no IPv4 address). A controller keeps the job for 10 seconds after it loses the election, so a flapping election does not move the checks.
-- Every node still shows every device: it reads the other nodes' results over the cluster channel (`GET /api/devices/health`, per node, cached 10 s, older answer used while a new one is fetched) and the newest result of a device wins. The device's tooltip (Topology and Monitor ▸ Devices) says **Checked by** which node did it.
-- A result older than a few check intervals reads "not checked" (grey), for instance when the node that checked has gone.
-- The primary also checks any device that no other node reports lately, so a gateway whose nodes are all down, or a device whose gateway is paused, is still covered.
-- Recheck and "someone is looking" go to the node that checks the device.
-- A node outside a cluster checks all its devices, as before.
-- Help (Configure ▸ Devices ▸ Checks) and the README say so.
+## [v230] - 2026-11-16 — Topology and the Gateways/NTP pages no longer wait for a node that does not answer
 
 ### Fixed
-- Stale comment on `devHealth`.
+- The Topology page (`viaServing`), Monitor ▸ Gateways (`gatewaysVia`) and Monitor ▸ NTP (`ntpVia`) fill in what this node does not run from the nodes that serve it, asking them one after another with a 4-second limit each and keeping nothing between requests. A node that is up but does not answer in time therefore cost every poll (2 s) the whole limit again: up to 4 s per such node, and a page load, which asks several things at once, several times over. The asks now go through one helper (`peerBody`): the last good answer of a node is kept 3 s and an older one is used at once while a new one is fetched in the background; a node that has never answered is waited for at most 1.5 s, once; a node that fails is retried in the background about once a second and never waited for again. The same change was made in netdir v191, where it took a page load from about 15 s to about 2 s.
+- A log line `topology: node <addr> took <t> to answer <path>` names a node that took over a second.
 
 ### Verified
-- `go test -race ./...`, gofmt, vet, no-cgo and cross-compiles (see below); new tests for the owner gateway, controller detection, the hold, the primary fallback, merging and stale results, and the per-node fetch.
+- Tests: a node that does not answer is waited for once and not again (a retry of it holds no request); a good answer is kept for the polls that follow (one ask for six); the first fails without the `tried` rule. `gofmt -l .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, the 5-arch cross-compile.
 
 ### Not verified
-- A real multi-node cluster with controllers on different nodes: only the logic is tested, with a stubbed cluster. After an upgrade the node that checks a device may change; a node that now checks devices will log in to them.
+- No live multi-node cluster run: the in-process tests do not start daemons that relay to each other. The cluster channel itself is unchanged (`Relay` is called the same way, now from a background goroutine).
 
 ---
 
-## [v197] - 2026-11-16 — A device on no gateway is not used
-
-### Changed
-- A device that is on no gateway is treated as disabled: it is never contacted (no health checks, no facts), left out of `list_devices` and the other device tools, and refused by a change, a raw change, a capture or a troubleshoot with "device X is on no gateway: add it to a gateway first". Before, the inventory as a whole was used and a gateway only grouped devices for the drawing and for `gateway:N` limits.
-- Monitor ▸ Devices shows such a device with a **no gateway** pill (and the filter finds it by those words); its state reads "on no gateway: never contacted". Putting it on a gateway takes effect within a few seconds, as enabling a device does.
-- The inventory itself is not changed: the saved device keeps its own Disabled setting, and Configure ▸ Devices lists every device.
-- A configuration with no gateway at all has no device in use.
-- Help (Configure ▸ Devices) says so.
-
-### Verified
-- Go: a device on a gateway is live, on no gateway is disabled and unattached, on another gateway is live, with no gateways none is; the saved inventory is never changed; the refusal texts. The existing device tests now put their devices on a gateway first (`attachDevices` in the tests).
-
-### Not verified
-- A cluster with several nodes after an upgrade: devices that were on no gateway stop being contacted at once (the other nodes' colours follow when they run this version).
-- The `/metrics` device series for an unattached device (it reads the same inventory, so it reports it as disabled).
-
----
-
-## [v196] - 2026-11-16 — Tags are pills; the filter box takes the focus when switching gateways
-
-### Fixed
-- Topology: the filter box now takes the focus each time another gateway is picked in the sidebar, not only on the first load (the toolbar is not redrawn when the gateway changes, so the focus was never asked for; now the drawing asks). It does not take the focus from a box being typed in or from an open dialog.
-
-### Changed
-- Every Tags box shows its tags as pills instead of space-separated words: the Tags column of Configure ▸ Devices and Add/Edit device (right-click a device on the Topology map). Type a tag, then a space, a comma or Enter to make a pill (a paste of several makes several); the × on a pill, or Backspace in the empty box, takes one off. The tags in use are offered while typing, leaving out those already on the device. A tag typed and not yet made a pill is kept when the dialog's Save is pressed or the box is left.
-- Configure ▸ Devices: the table's Tags column takes the room the other columns leave, so the pills fit; the table may use the whole page width.
-- Saved as before: the same list of tags per device.
-
-### Verified
-- jsdom: with two gateways, picking the other one in the sidebar (and back) leaves the focus in the filter box; pills shown for a device's tags; a suggestion chosen with Down and Enter becomes a pill; several words typed at once become several; Enter; Backspace; the ×; no suggestions for tags already on the device. Chromium (dark): the table and the Edit device dialog.
-
-### Not verified
-- Keyboard use with a screen reader (the pills are buttons with "Remove TAG" labels).
-
----
-
-## [v195] - 2026-11-16 — Configure ▸ Devices ▸ Tags is a table like the others
-
-### Changed
-- The Tags tab was a bare list with a cramped tag box. It is now built like the other Devices tables: a filter box with the count, pages (25 to 500 a page), numbered rows, a wide tag box, and a right-click menu on each row: **Rename**, **Copy**, **Show the devices with this tag** (opens the Devices tab with that tag typed into its filter) and **Remove from every device**. Changing the text of a tag still renames it on every device (onto an existing tag it asks, then merges); Enter or leaving the box applies it, Esc puts it back.
-
-### Verified
-- jsdom: the listing with counts, the filter ("1–2 of 2 (filtered from 5)"), rename, the right-click menu, Remove, Show the devices (Devices tab with the filter set), and the saved device tags. Chromium (dark): 72 tags over 2 pages, the menu.
-
-### Not verified
-- A very long list of tags with the page-size box in a narrow window.
-
----
-
-## [v194] - 2026-11-16 — The small-squares threshold moves to Configure ▸ Settings ▸ General
-
-### Changed
-- The "Squares above [36] devices" box is gone from the Topology page. The setting is now **Configure ▸ Settings ▸ General ▸ Topology ▸ Draw devices as small squares above** (`settings.topology_squares_above`, 1 to 5000, empty = 36). It is a shared setting: the whole cluster uses it, unlike v193's box, which was kept in one browser (that value is no longer read).
-- Help (Settings ▸ General and the Topology filter text) describes it.
-
-### Verified
-- Go: the setting is validated (0, 1, 36, 5000 accepted; -1 and 5001 refused); help-panel tests. jsdom: the General page shows the field with 36, a change saves `topology_squares_above`; the Topology drawing follows the setting (400 gives all boxes for 320 devices, 300 gives squares, none set gives squares).
-
-### Not verified
-- Several nodes in a real cluster copying the setting (it travels as any shared setting does).
-
----
-
-## [v193] - 2026-11-16 — Tags: the Topology filter finds them, tag boxes suggest the tags in use, and a Tags tab to manage them
-
-### Added
-- The Topology filter box has the focus when a gateway's drawing is opened (once for each gateway; later redraws of the toolbar never take the focus from what is being typed).
-- Configure ▸ Devices has a fourth tab, **Tags**: every tag in use with the number of devices that carry it; change a tag's text to rename it (onto an existing tag: asks, then merges), **Remove** takes it off every device. It works on the devices table, so it saves like any other change.
-- Every Tags box (the Tags column of Configure ▸ Devices, and Add/Edit device on the Topology page) offers the tags already in use while the last word is typed: click one, or Down and Enter/Tab; Esc closes the list. Enter with nothing chosen still submits.
-
-- Topology: **Squares above [36] devices** box beside the filter: how many devices a gateway may have before each is drawn as a small square. Kept in this browser (not in the shared configuration), like the theme; 1 to 5000; 36 is the default.
-- A Tags box says so: several tags are separated by spaces.
-
-### Fixed
-- Topology, small squares: the full-size card for the square under the pointer is now drawn above it, not over it, so the squares beside and below it can still be reached.
-
-### Changed
-- The Topology filter box also searches tags with a plain word (`dc1 core`). The `source=` tag of an imported device is skipped by a plain word (it would match the server's name); `tag:` before a word still searches every tag.
-- Help: new topic for the Tags tab; the filter-box text updated.
-
-### Verified
-- jsdom: focus on load; plain word matches tags, two words, `source=` skipped, `tag:` finds it; four tabs; the suggestion list, Enter picks, no list when nothing matches; the Tags tab counts, rename, remove and the saved device tags. Go tests (help panels for the new tab).
-
-### Not verified
-- The suggestion list's position inside the Add/Edit device dialog in a real browser (it is placed from the box's position inside the dialog); the focus on load in Firefox.
-
----
-
-## [v192] - 2026-11-16 — Topology: a gateway with more than 36 devices draws them as small squares
-
-### Added
-- A gateway with more than 36 devices is drawn with a small square for each device, joined to the gateway by a thin line and coloured by its state, instead of 300 full-size boxes. The full-size square (name, address, platform) shows beside the one the pointer or the keyboard focus is on. Devices that are amber or red are always full size. While the filter box has text, the matches are full size and every other device stays a small square. Clicking, Shift/Ctrl-click, right-click and the tooltip work on a small square as on a box. Drag-to-reorder is off in this drawing (as it already is while a filter is on).
-- 36 devices or fewer: the drawing is exactly as before.
-- Help (Topology, filter box) describes it.
-
-### Verified
-- jsdom: 320 devices give amber/red boxes plus 302 squares with a line each; the hover card shows the hovered device, hides again and is the last thing drawn; the filter gives full-size matches and squares for the rest, and clearing it restores the squares; 36 and 12 devices give all boxes. Chromium screenshots (light and dark) of all four states.
-
-### Not verified
-- Behaviour on a real gateway with ~320 devices and a live poll; touch screens (no hover, so a tap selects the device and its tooltip is the only full view).
-
----
-
-## [v191] - 2026-11-16 — Topology: a node that does not answer cost every poll 2 s; a failed health fetch left 18 s of gray
-
-### Fixed
-- The log of v190 (`/api/canvas took 2s … their callers 2s`, on every poll) showed it: `addPeerClients` asked each serving node for its callers with a 2 s limit and, when a node did not answer, kept nothing, so every poll waited the 2 s again (and a page load, with several requests at once, several times over). It now reads the picture `peerCanvasOf` keeps of each node (one background ask at a time, kept 3 s, retried a second after a failure), waits at most 1.5 s for a node it has never heard from and never again for one that did not answer.
-- After a failed first fetch of the device health on a node that is not the primary, the retry time was set 8 s into the *future* (the comment says "ask again in a couple of seconds"): the cache counted as fresh and empty for about 18 s, every device gray. It now counts as 8 s old (asked again in 2 s). The same slip is corrected for the nodes' pictures (`peerCanvasOf`).
-
-### Verified
-- Tests: a node that does not answer is waited for once and not again, a retry of it starts in the background and holds no request; a failed first health fetch is retried within about 2 s (fails with the old timing); plus the v189/v190 tests. `gofmt -l .`, `go vet ./...`, `go test -race ./...`, no-cgo, 5-arch cross-compile.
-
-### Not verified
-- Not run against a real cluster. Why one node does not answer `GET /api/canvas?own=1` within 2 s was not found (it may itself be slow: its own log, with v190 or later, says `web: /api/canvas took …` and which part); it is no longer waited for.
-
----
-
-## [v190] - 2026-11-16 — Topology after a reload: no waiting on other nodes; a log line for what is slow
-
-### Changed
-- `GET /api/canvas` (what Topology polls; blank, with no nodes and the devices gray, until it answers) waited, one after the other, for the primary's device health (up to 5 s), for each node that serves a gateway this node does not (up to 4 s each) and for the nodes' callers (2 s). On a node that is not the primary the sum could be 15 s after a page load. Now a request waits at most 2 s for the device health when this node has none yet, and at most 1.5 s for a node's picture it has none of yet; anything older is used at once while a new one is fetched in the background (`replicaHealth`, `peerCanvasOf`). The next poll, two seconds later, has what the wait missed.
-- A node's picture of its gateways is kept for 3 s (it was asked again on every poll).
-
-### Added
-- Log lines for the slow part, when the cause is not what the above covers: `web: /api/canvas took 14.2s for "user" (this node …, the nodes that serve its gateways …, their callers …)` for an answer that took over 2 s; `devices: the primary took … to answer for the device health`; `topology: node … took … to give its picture of its gateways`.
-
-### Verified
-- Tests: the second asker of the health waits for the fetch in flight and the primary is asked once; a primary that never answers holds a request for no longer than the bound; an older answer is used at once and the refreshed one by the next request.
-- `gofmt -l .`, `go vet ./...`, `go test -race ./...`, no-cgo, 5-arch cross-compile.
-
-### Not verified
-- Not run against a real cluster, so it is not confirmed that these waits are the 15 s seen on a reload. If it is still slow, the `web: /api/canvas took` line says which part. `liveBGPPeers` (vtysh) and the local part of the canvas are not bounded here; they show in the same line as "this node".
-
----
-
-## [v189] - 2026-11-16 — Topology no longer starts gray on a node that is not the primary
-
-### Fixed
-- On a cluster node that is not the primary, the first look at the devices after a quiet time showed every device gray ("not checked yet") for several seconds. The node has no health of its own and asks the primary for it; the Topology page asks twice at once (the canvas and the devices), and the second request, finding a fetch already under way and nothing cached, was answered with an empty list at once. The second request now waits for that fetch (at most its 5 s timeout plus 1 s), so both get the primary's answer. With an older answer cached it is still used at once. (`devicehealth.go`: `deviceHealth` now hands the replica part to `replicaHealth`.)
-
-### Verified
-- `TestReplicaHealthSecondAskerWaitsForTheFetch`: two askers, a slow fetch; the second returns only after it ends, with the same answer, and the primary is asked once. The test fails with the old logic (the second asker returned `map[]` before the fetch ended).
-- `gofmt -l .`, `go vet ./...`, `go test -race ./...`, no-cgo, 5-arch cross-compile.
-
-### Not verified
-- Not run against a real cluster. A daemon that has just (re)started has no health anywhere until its first round of checks has run (323 devices, 16 at a time, each asked for its facts: some 15 to 20 s); that wait is unchanged, and still shows gray on the primary and on the nodes that ask it.
-
----
-
-## [v188] - 2026-11-16 — A refused save no longer leaves the Configure page stuck
-
-### Fixed
-- Configure pages (Devices and the others made by `makeConfigView`): when the daemon refused a save with "the configuration changed after this page loaded it" (409), the message said the page now showed what is saved, but the page kept its old copy and its old `base`, so every later edit was refused the same way and nothing could be saved until the person reloaded the browser. The page now reads the saved configuration again on that refusal (as the Topology page already did) and then shows the message; the next edit goes out with the fresh base. The edit that was refused is not kept, as the message says: make it again.
-- The daemon is unchanged: it still refuses a save made from an older copy.
-
-### Verified
-- jsdom with a mock that keeps the base: a save with a stale base is refused once, the page shows "Not saved", and the next edit is sent with the new base and saved (port 9443). The same test fails on v187 (the next edit is sent with the old base again). The v183/v184/v186 jsdom tests still pass.
-- `gofmt -l .`, `go vet ./...`, help tests.
-
-### Not verified
-- What changed the configuration in the first place was not found: another page or user, an import, or, in a cluster, another node's save (a node that is not the primary compares the page's base with its own copy, which can be a moment behind the primary's). The refusal is correct; only the recovery was wrong. A full `go test -race` run was not repeated (no Go file changed).
-
----
-
-## [v187] - 2026-11-16 — Edit device kept a wrong port
-
-### Fixed
-- Topology ▸ right-click a device ▸ **Edit** opened with the Port box reset to 443 (or the platform's default) whenever the saved port was *any* platform's default, e.g. 8443 on a switch (8443 is the Proxmox Datacenter Manager default). The Port box showed the old value and a Save wrote it over the real one. The port now follows the platform only while it is still the default of the platform the form had before, or empty; a port the device really has is kept when the form opens, and a port typed by hand is still kept when the platform changes. (`webui/app.js`, `deviceForm`.)
-
-### Verified
-- jsdom, with a config kept by the mock: a port changed on Configure ▸ Devices is saved (`port: 8443`), shows in the Topology tooltip after Add ▸ Device ▸ from inventory, and the Edit box showed 443 before the fix and 8443 after; changing the platform in the form still fills in the new platform's default (eos → proxmox 8006 → pbs 8007) and keeps a typed port.
-- `gofmt -l .` empty; `go vet ./...`; help tests. The v183/v184/v186 jsdom tests still pass.
-
-### Not verified
-- The gateway stores only a device's name; its port, address and login always come from the inventory, so adding from inventory copies nothing and the Go side was not changed. A full `go test -race` run was not repeated (no Go file changed since v186).
-
----
-
-## [v186] - 2026-11-16 — Configure ▸ Devices in three tabs; filter and pages on Logins
-
-### Changed
-- Configure ▸ Devices is three tabs, **Devices | Logins | Checks**, like Monitoring (SNMP | Metrics). Every table stays in the page, so the autosave still reads and saves all three together; the login-rename cascade (v183) works with the Devices tab hidden.
-- The **Logins** table has the filter box, the page box and the rows-per-page box that Devices has (it was a small table with none). The filter looks at every column except **Password** and **Token**, so typing part of a secret finds nothing.
-- `webui/help.js`: the one `config_devices` topic is now `config_devices`, `config_logins` and `config_checks`, and the tab shown picks the topic. The four interval fields were nested inside the Logins entry and never listed; they are now on Checks. `help_test.go` and `help_fields_test.go` follow.
-
-### Verified
-- jsdom: three tabs, one shown at a time; Logins with 121 rows: 50 to a page, 3 pages, filter by name and by user name, no match on a password or a token; a rename made on Logins reaches the devices on the hidden Devices tab; the autosave carries devices and logins; Checks has its four boxes. The v183 and v184 tests still pass.
-- `gofmt -l .` empty; `go vet ./...`; the help tests.
-
-### Not verified
-- Not looked at in a real browser in light and dark; the code adds no styles (the tabs and the bar are the existing classes).
-
----
-
-## [v185] - 2026-11-16 — Recheck a device now
-
-### Added
-- Right-click a device ▸ **Network tools ▸ Recheck** (Topology) or right-click its row ▸ **Recheck** (Monitor ▸ Devices): that device is asked again at once, whatever its state, and a popup says what it answered (`answering`, `refusing` or `unreachable`, and why); *Run again* asks once more, and the Monitor page shows the new state without waiting. It is for after a login or a firewall rule was corrected: a device that *refuses* a request (the amber one) was asked again only every `device_live_facts_min` minutes (5) while someone had Monitor ▸ Devices or Topology open, and every six hours when nobody did, so a corrected login could stay amber for minutes. A device that is unreachable was already asked every round. A disabled device is not contacted (it says `disabled`). Not offered for a device below another Network Director (its state is that director's), nor to an account that can only look.
-- `POST /api/devices/recheck {"name"}` answers `{"data":{"name","health":{"status","detail","checked",…}}}` (no facts, no secrets); 400 without a name, 404 for a device that is not there or not in the caller's scope; refused to read-only accounts like every POST. Only the primary of a cluster does the checks, so any other node hands the request to it over the cluster channel (`/api/devices` is already relayable, so the node picker works too) and forgets its few-second copy of the health. `device.Monitor.Recheck` is the check itself (the facts are asked again whatever `FactsAt` says).
-- `webui/help.js`: Topology and Monitor ▸ Devices say it.
-
-### Changed
-- `webui/app.js`: `toolItems(addr, device)` adds Recheck for a device of this gateway (the Monitor table passes none for a remote row); `recheckPopup`; `VIEWS.devices.refresh()`. Nothing else about the menus or the pages changed.
-
-### Verified
-- `gofmt -l .` empty; `go build`; `go vet ./...`; `go test -race -count=1 ./...` (netdir 132 s, netdir/device 10 s); `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` build; `node --check` on `app.js` and `help.js`. New tests: `TestMonitorRecheck` (a wrong password shows `warn`; a round a minute after the login was corrected still says `warn`, as the bug was; Recheck says `ok`; a still-wrong login says `warn` again without the password; a disabled device is not contacted; a missing login says so), `TestHandleDeviceRecheck` (400, 404, a dead port, a disabled device, a caller limited to some devices), `TestRecheckIsAPostRefusedToReadOnly`.
-- Live, real daemon with a real PAM login and a stub device that answers 401 until it is "corrected", in headless Chromium: the device shows `refusing`; after the stub is corrected it still does; Topology right-click ▸ Network tools ▸ Recheck and the Monitor row's Recheck both say `answering`, the Topology node turns from amber to green and the Monitor table follows at once; an unreachable device says `the API port does not answer`. Then two daemons in a cluster (a replica joined to the primary by `--cluster-join`): the same Recheck on the **replica** reaches the primary, the replica's page shows `answering` at once, and the primary's own page shows it too. The test user, groups (`netdir`, and the `netdir-ro` the daemon makes) and PAM file were removed afterwards.
-- The v183 login-rename and v184 filter/pages jsdom tests still pass.
-
-### Not verified
-- The Recheck popup in dark mode, and the Topology submenu in dark mode, were not looked at (the code adds no styles; the popup is the one Ping and Whois use). A read-only account was tested by the unit test only, not live. A node picked in the picker (a request relayed by the picker to a non-primary node, then on to the primary) was not run: the same two relays, each live-tested on its own. No certificate, update or history check was run: none of that code changed.
-
----
-
-## [v184] - 2026-11-16 — Filter and pages on Monitor ▸ Devices
-
-### Added
-- Monitor ▸ Devices: the Devices card has the filter box, the page box and the rows-per-page box of the tables under Configure ▸ Devices (same classes, so the same look in light and dark): the filter keeps the devices that hold every word typed, in any column (name, state as `answering`, `refusing`, `unreachable`, `disabled` or `not checked`, platform, address, the directors between, tags); the count reads `1–50 of 130` (`(filtered from N)` while a filter is on); « ‹ page › » and 25, 50 (the start), 100, 250 or 500 rows to a page; the pager hides when there is one page, and the box hides when the inventory is empty. A filter with no match says so in the card.
-- The page polls the devices every few seconds. The bar is built once and a poll redraws only the table, so what is typed, the page, the page size and the focus stay; a page past the end after the list shrinks is pulled back to the last. The tiles still count every device, not the filtered ones.
-- `webui/help.js` (Monitor ▸ Devices) says it.
-
-### Changed
-- `webui/app.js` only (`VIEWS.devices`); the table's columns, the state pills, the right-click menu and the tooltips are as they were. No change to the daemon, the API or the config.
-
-### Verified
-- `gofmt -l .` empty; `go build`; `go vet ./...`; `go test -race -count=1 ./...` (netdir 130 s, netdir/device 11 s); `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` build. `node --check` on `webui/app.js` and `webui/help.js`.
-- A throwaway jsdom test (scratch directory, not in the repo) loads the real `app.js` against a mocked API with 131 devices: the first page, next, last, the page box, 25, 50 and 100 rows to a page, the filter by name, platform, state, tag and address, several words, no match, clearing it, and a poll while a filter is typed and the focus is in the box (text, page and focus stay; the tiles count all); the list shrinking while on the last page; an empty inventory. The same test against the v183 `app.js` fails at once (no bar). The v183 login-rename test still passes.
-- Looked at in headless Chromium (light and dark), unfiltered and filtered, and the "?" panel of the page in both.
-
-### Not verified
-- Not run against a live daemon with real devices: the page was served from the real `webui/` files with a mocked API. The real PAM login and the cluster checks were not run: no auth, session, cluster or Go code changed.
-
----
-
-## [v183] - 2026-11-16 — Renaming a login renames it on every device that uses it
-
-### Changed
-- Configure ▸ Devices: a device holds its login by name, so renaming a login in the Logins table left every device that used it pointing at a name that no longer existed, and the save was refused (`device X: credential "old" is not in the credentials list`) until each device's Login was changed by hand. Now, when a login's name is entered, every row of the Devices table whose Login is the old name takes the new one at once, and the form's autosave then carries both in the same save. A rename follows from the name the login had when the page was drawn (or last renamed), so renaming it twice in one visit works, and a swap of two names is done in one step. A name another login already has is not followed (the daemon still refuses that save as "listed twice"); fixing it to a free name then follows from the real old name. Editing a password, user name or token moves nothing.
-- `webui/app.js` only: `rowTable` gains `track` (the Logins table sets it), `renames()`, `commit()` and `retarget()`, and `fieldset` gives its row tables back through `table(key)`. The daemon, the config format (`credential` is still the login's name) and the API are unchanged, so a hand-edited config or an API client still has to rename a login's references itself. `webui/help.js` (Configure ▸ Devices) says it.
-
-### Verified
-- `gofmt -l .` empty; `go build`; `go vet ./...`; `go test -race -count=1 ./...` (netdir 134 s, netdir/device 11 s) all pass; `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...` pass; `linux/amd64`, `arm64`, `arm`, `386` and `riscv64` build. `node --check` passes on `webui/app.js` and `webui/help.js`.
-- A throwaway jsdom test (scratch directory, not in the repo) loads the real `app.js` and `help.js` against a mocked API, opens Configure ▸ Devices and edits the Logins table: a rename updates the Devices table's Login column and the autosave PUT carries the new name on every device that used it with the secrets untouched; a second rename continues from the first; a rename onto an existing name moves nothing and fixing it follows; a password edit moves nothing. The same test against the v182 `app.js` fails 7 of its 13 checks.
-
-### Not verified
-- Not clicked through in a real browser (Chromium, light and dark): nothing about the layout changed, and only the jsdom test above drove the page.
-- The real PAM login and the multi-daemon cluster checks were not run: no auth, session, cluster or Go code changed.
-- Not covered on purpose: a rename made outside the web GUI (a hand-edited `netdir.conf`, `PUT /api/config`) is not followed.
-
----
-
-## [v182] - 2026-11-16 — Make the scan command findable
-
-### Fixed
-- An MCP client asked to "scan the tv library" on a multi-media[encoder] started a real encode with `start_job` (stopped again, queue left holding the scan's files): `show scan` (v181) was not named in the `device_show` tool description, which lists the show names for no mediaencoder, and the `device_change_raw` description listed `start_job` without saying what it does.
-- `device_show` now names the mediaencoder reads and says `show scan target=movies|tv|/dir` is the scan-only command and to use it instead of `start_job`. `device_change_raw` says `start_job` starts a real encode job and points to `show scan`. The platform help says the same.
-
-### Verified
-- Against the live encoders (both v25): `show scan target=tv` on nvenc1-mme checked 4494 files and reported 114.8 GB to encode, and started nothing.
-- `VERSION` is `182`. Checks as for v181.
-
-## [v181] - 2026-11-16 — Ask multi-media[encoder] what it would encode
-
-### Added
-- **`show scan target=movies|tv|/absolute/dir`** for the `mediaencoder` platform (`device/mediaencoder.go`, needs multi-mediaencoder v25): calls the encoder's read-only `scan_library` tool and returns what a job on that target would encode (counts, bytes to encode, the file lists, which already-optimal files a real job would rename). Nothing is encoded, renamed or changed on the encoder, no job is started, and it is a read, so it works with `NETDIR_DEVICE_GUARDS=1` on. It can take a while on a large library.
-- `target` is checked before anything is sent: `movies`, `tv` or an absolute path (spaces allowed, no control characters, 1024 bytes at most); a missing or relative target is refused without a call. `scan_library` is not accepted as a `CALL` action.
-- README and the platform help say so. `TestMediaEncoderScan` in `device/mediaencoder_test.go`.
-- `VERSION` is `181`.
-
-## [v180] - 2026-11-16 — Delete the multi-media[encoder] quarantine from netdir
-
-### Added
-- **`purge_quarantine` for the `mediaencoder` platform** (`device/mediaencoder.go`, needs multi-mediaencoder v24): `device_change_raw` with method `CALL`, path `purge_quarantine`. With no body it deletes every file in the encoder's quarantine (the originals kept after an encode); `{"older_than_days": N}` deletes only older ones. The encoder has a real dry run for this tool, so a dry run here (or `"dry_run": true` in the body) asks it what would be deleted, and `Before` holds its list; nothing is deleted. The answer holds the count and the space freed.
-- `show quarantine` and the API route `/api/quarantine` (the quarantine's size per folder, the oldest age and what the automatic purge would delete next).
-- Arguments are checked before anything is sent: `older_than_days` a number from 0 to 3650, `dry_run` a boolean, no other key.
-- With `NETDIR_DEVICE_GUARDS=1` only a dry run of `purge_quarantine` is accepted (it joins `clear_log`, `clear_history` and `clean_temp_files`).
-- README, the platform help and the `device_change_raw` description say so. Tests in `device/mediaencoder_test.go`: show and API, the dry run (the tool is called with `dry_run: true`), delete all, `older_than_days` passed on, a body `dry_run`, every bad argument refused without a call, guards on and off.
-
-### Changed
-- `VERSION` is `180`.
-
-### Verified
-- `gofmt -l .` clean, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, the cgo-off `go vet`/`go test`, `sh tools/leaktest.sh`, `node --check webui/help.js`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-- **Against a real multi-mediaencoder v24 daemon** with quarantine files of two ages: a throwaway program using the driver ran `show quarantine`, a dry run (listed both files, deleted none) and `CALL purge_quarantine` with no body: both files were deleted (1.2 MB), the marker file stayed and the encoder's log read "requested by mcp". The daemon and its files were removed afterwards.
-
-### Not verified
-- Only against the encoder's quarantine on a local file system: not on NFS or SMB, and not with `quarantine_dir` set to another disk.
-- The wording of the GUI help was syntax-checked, not looked at in Chromium.
-
-
-## [v179] - 2026-11-16 — A driver for multi-media[encoder] (`mediaencoder`)
-
-### Added
-- **Platform `mediaencoder`** (`device/mediaencoder.go`): the multi-media[encoder] NVENC HEVC re-encoding daemon (multi-mediaencoder v23 and later), reached through its own MCP endpoint (`POST /mcp` on its web port, default 8765) with the encoder's MCP token as the credential's token. Standard library only. Like `dnsdir`, `ntpdir` and `netdir` it only calls the other end's tools; it needs no change to the encoder.
-- **Reads.** Facts: release (from `initialize`, which must say it is a `multi-mediaencoder`), the cluster name and node count when the encoder's cluster is on, the GPU model. Resources: CPU, load, memory, swap and the GPU's load, NVENC/NVDEC, memory, temperature, power and fan (the newest `get_metrics` sample). Config: `get_config`. Show: `show status|live-session|queue|log|history|history-log|metrics|cluster|cluster-check|schedules|config` with `lines=` (1 to 2000) and `id=` checked before anything is sent. API: the encoder's own routes that have a read tool (`/api/status`, `/api/live-session`, `/api/queue`, `/api/log?n=`, `/api/sessions`, `/api/sessions/ID/lines`, `/api/sys`, `/api/gpu`, `/api/cluster`, `/api/cluster/check`, `/api/schedules`, `/api/config`), plus a catalog. Interfaces and Neighbors answer `ErrUnsupported` (not a network device).
-- **Changes** (`RawChange`, so `device_change_raw`, rw): method `SET` (a JSON object of settings, through `set_config`) and method `CALL` with the action as the path: `start_job`, `stop_job`, `stop_cluster_jobs`, `drain_node`, `create_schedule`, `update_schedule`, `toggle_schedule`, `run_schedule`, `delete_schedule`, `clear_queue`, `clear_log`, `clear_history`, `clean_temp_files`. The encoder has no dry run, so a dry run checks the request here, reads how things stand (the settings it would replace, the status, the schedules or the cluster) and sends nothing that changes. `Before` holds what was replaced; nothing is put back. With `NETDIR_DEVICE_GUARDS=1`: `clear_log`, `clear_history`, `clean_temp_files` and setting `allowed_groups`, `session_hours` or `port` are refused.
-- `cluster_secret`, `plex_token` and `mcp_token` are never set from here (refused before anything is sent) and the encoder leaves them out of its answers; there is no tool for its certificate, Plex sign-in or tokens. The token is in no error text.
-- Registered everywhere a platform is: default port 8765 (`device.go`, the GUI's `PORT_DEF`), the GUI's platform names, the add-device and platform help (`webui/help.js`), the CLI help (`main.go`), the `device_change_raw` description (`devraw.go`), the README (drivers table, platform list, a `mediaencoder` section), `netdir.conf.example`, `tools/devprobe/lab.json.example` (with an `enckey` login), `CLAUDE.md`, the no-restart note in `rawreboot.go`, and the "every platform is writable" and default-port tests.
-- Tests: `device/mediaencoder_test.go` against a TLS stub of the encoder's endpoint: registration and port, facts, resources arithmetic (MiB to bytes, sensors, three memory pools), every show name and the arguments refused without a call, the API routes and the paths refused, wrong token (401, token not in the error), MCP switched off (404 gets a plain message), another MCP server refused, SET and CALL (dry runs send nothing that changes; secrets, unknown actions, a bad id, lines and other methods refused before a call; the encoder's own refusal comes back as the error; guards on and off).
-
-### Changed
-- `VERSION` is `179`.
-
-### Verified
-- `gofmt -l .` clean, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (main package and `./device`), after `apt-get install libpam0g-dev`. `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` pass (stub path). `sh tools/leaktest.sh` passes (the new platform needed no change there: it has the same set of optional interfaces as `nios` and `technitium`). `node --check` on `webui/app.js` and `webui/help.js`.
-- **Against a real multi-mediaencoder v23 daemon** (built from its source and started with a scratch directory and a generated token): `go run ./tools/devprobe` with `-op facts` (release v23), `config` (its three secrets absent), `show status|metrics|schedules|log lines=3|cluster`, `interfaces` (unsupported), and a wrong token (401). A throwaway Go program using the driver ran `SET` (dry run and applied: `config.json` held the new values), a `SET` the encoder refused (HTTP 400 and its text came back as the error), `CALL create_schedule`, `CALL start_job` (the encoder's log shows the scan "by mcp") and a `start_job` on a missing directory (400 with the encoder's message), plus `/api/schedules` through the API reader. The daemon, its files and the program were removed afterwards.
-- Cross-compiled `linux/amd64`, `arm64`, `arm`, `386` and `riscv64`.
-
-### Not verified
-- **Resources on an unwatched encoder: it is empty by the encoder's design.** Version 23 of the encoder samples its host and GPU only while a browser has its page open, so `get_metrics` has no samples otherwise. The driver says so in `Details.Unavailable` instead of guessing. The numbers (CPU, memory, GPU) were verified only against the stub, never against a sampled encoder or a real NVIDIA GPU. Making the encoder sample when an MCP client asks is a change in the encoder, not here.
-- Facts has no host name unless the encoder's cluster is on (its MCP server has no tool that returns one) and no uptime or serial.
-- Not run: the cluster, web GUI, install, federation or live multi-node checks of this file's process: nothing in those code paths changed. The new GUI text was syntax-checked, not looked at in Chromium; the only GUI changes are two entries in lookup tables (a port and a platform name).
-- The driver reaches the encoder only over HTTPS (the encoder's default); an encoder started with `-no-tls` cannot be reached. Not tested through a reverse proxy or with a CA-signed certificate (`ca_pem`).
-
-
-## [v178] - 2026-11-15 — Tested on real equipment; the documentation says what v172 did
-
-### Verified
-- The maintainer ran the features of v170 to v177 on real equipment and they worked: clearing port counters, saving the configuration, the typed port changes on Junos, NX-OS, FortiOS and BIG-IP, VM and container create, delete and resize, `rw` without the refusal lists, the `linux` and `windows` drivers, and the Proxmox and vCenter imports. The "Not verified" notes of those releases below are what was true when each was cut. (Which models and versions were used was not recorded here.)
-
-### Changed
-- **Documentation**: every place that said a change is refused, never done or never touched (README, the help, the vCenter API catalog) now says it is refused only with `NETDIR_DEVICE_GUARDS=1`, the switch v172 added; the help opens its platform list with one note saying so. The README's description of what a raw change still checks is rewritten to the plain-path and well-formed-body checks that remain. A port that holds the gateway's address is shut down when the lists are off, as v172 made it; the README no longer says it is never shut down.
-- The README and the help no longer say the `linux` and `windows` drivers were not run on real hosts.
-- No code changed except the text of one API catalog answer (vCenter). A check of every refusal site in the drivers found each one inside a guard that `NETDIR_DEVICE_GUARDS` switches off; the only ones that stay on are the well-formedness checks (method, path shape, JSON where JSON is wanted).
-
-## [v177] - 2026-11-15 — Import the virtual machines of a vCenter
-
-### Added
-- **Import ▸ Devices / Preview on a `vcenter` device** (`device/import.go`): each powered-on VM (`/vcenter/vm?power_states=POWERED_ON`) becomes a `linux` or `windows` device, disabled, no login, tagged `source=vcenter` and `vm=ID`. System: the guest family of `/vcenter/vm/ID/guest/identity` (VMware Tools), else the guest OS of `/vcenter/vm/ID`. Address: a usable IPv4 address from the Tools (the identity, then `guest/networking/interfaces`), else the Tools' host name or the VM's name (tag `address=name`). Off or suspended machines, other systems and unknown ones are skipped with the reason.
-
-### Not verified
-- Not run against a real vCenter: the test feeds canned answers in the shapes of the vSphere Automation API. A VM name with spaces becomes a name with dashes. Two VMs of the same name in different folders import once (the second is skipped as the same name). An account without read access to a machine's guest data gets the guest-OS judgement and the VM's name as its address.
-
-## [v176] - 2026-11-15 — Proxmox import: only guests that are powered on
-
-### Changed
-- **Import ▸ Devices / Preview on a `proxmox` device** takes only running VMs and containers; a stopped or paused one is listed as skipped ("is not running") and no more of its API is read. Its address therefore always comes from what the running guest reports (guest agent, container interfaces), else its static configuration, else its name.
-
-## [v175] - 2026-11-15 — Windows hosts over OpenSSH (`windows`)
-
-### Added
-- **`windows` platform** (`device/windows.go`): facts, interfaces and ports with counters, routes, resources, configuration (ipconfig, routes, DNS, firewall), `show` commands from a fixed list (`ip`, `links`, `routes`, `neighbors`, `ports`, `services`, `service NAME`, `processes`, `eventlog`, `log`, `disk`, `memory`, `cpu`, `version`, `firewall`, `dns`, `time`, `users`, `updates`, `shares`) with the same filters as Linux, typed shutdown and no shutdown (`Disable-NetAdapter`, `Enable-NetAdapter`; `ethernet2` finds *Ethernet 2*), and raw lines of PowerShell (`$ErrorActionPreference = 'Stop'`).
-- Transport shared with `linux`: the script is base64-encoded into one line of PowerShell fed to `powershell -Command -` on standard input (`winInvocation`), so there is no cmd.exe quoting and no command-line length limit; `sshExec` now asks `remoteInvocation` for the command and the standard input. The password is in neither.
-- **Proxmox import**: a VM whose `ostype` is Windows (`win*`, `w2k*`, `wxp`, `wvista`) is imported as a `windows` device (it was skipped).
-- Port grammar accepts `ethernet` and `wi-fi` as written. The default port is 22; the web UI, help and README list the platform.
-- **Devices table**: a field whose text is longer than its box shows the whole text as a tooltip. Configure ▸ Devices (and every other row table): checked when the pointer arrives, the box is focused or its text changes; a box that is wide enough has none; a password or token is never put in a tooltip. Monitor ▸ Devices: a cell cut with an ellipsis (the name, say) shows its text; the State cell keeps its own tooltip.
-- Tests: `windows_test.go` with a fake runner and a stand-in `ssh` that records its arguments and standard input.
-
-### Not verified
-- Nothing was run against a real Windows host. The property names of `Get-NetAdapter` (`Speed`, `MtuSize`, `FullDuplex`, `ifIndex`) and `Get-NetAdapterStatistics` are those of Windows 10 / Server 2016 and later; an older release may lack some, and the answer shows zero for them.
-- PowerShell 7 or Windows PowerShell 5.1: only `powershell` (5.1) is started. A host with only `pwsh` would need the command changed.
-- A non-administrator can read most things and change nothing; the refusal is Windows's.
-- `Get-WinEvent -LogName Security` needs an administrator.
-
-## [v174] - 2026-11-15 — Import the VMs and containers of a Proxmox VE host
-
-### Added
-- **Import ▸ Devices / Preview on a `proxmox` device** (`device/import.go`, `ImportSources`): each VM and container of the cluster (`/cluster/resources?type=vm`) becomes a `linux` device, disabled, no login, tagged `source=proxmox`, `node=`, `vmid=` and `type=qemu|lxc`. Address, in order: the QEMU guest agent (`network-get-interfaces`) or the container's `/interfaces` while it runs; a static address in the configuration (`ipconfigN`, `netN` `ip=`); the guest's name (tag `address=name`). Loopback, link-local, Docker, bridge and veth addresses are never taken.
-- Skipped with a reason: templates, VMs whose `ostype` is not `l24` or `l26`, unmanaged containers, entries that are not guests, guests whose configuration could not be read, and guests already in the inventory.
-- Guest reads run 8 at a time; a skipped row now names the guest.
-
-### Not verified
-- Not run against a real Proxmox VE: the test feeds canned answers. The guest agent's and the container interface list's answer shapes are those in Proxmox's API documentation. A token without VM.Audit may see no guests, or no configurations.
-- A guest with several network cards gets the first usable IPv4 address, which may not be the one the gateway reaches.
-
-## [v173] - 2026-11-15 — Linux hosts over SSH (`linux`)
-
-### Added
-- **`linux` platform** (`device/linux.go`): facts, interfaces, ports with counters, routes, resources, LLDP neighbors (`lldpctl -f json`), a configuration of the network files and tables, and `show` commands from a fixed list (`ip`, `links`, `routes`, `neighbors`, `ports`, `services`, `service NAME`, `logs`, `log UNIT`, `disk`, `memory`, `cpu`, `processes`, `version`, `firewall`, `dns`, `time`, `users`) with `include`, `exclude`, `begin`, `head`, `last` and `count` filters done here.
-- **Login**: user name with a password (through `SSH_ASKPASS`; also to `sudo -S` for privileged commands) or a PEM private key as the token; neither means the daemon's own keys and `sudo -n`. Host key learned on first use (`accept-new`) or not checked with `insecure`. Runs the system `ssh` (`NETDIR_SSH` overrides the path), so the project stays stdlib-only. Option `sudo=no`; root never uses sudo. The script travels base64-encoded, so no quoting of the remote shell matters; the host name and user name are checked so neither can be taken for an ssh option.
-- **Typed changes**: description (interface alias), shutdown, no shutdown (`ip link set`). Port grammar: `eth0`, `eth0.100`, `ens3`, `enp1s0`, `br0`, `bond0`, `wlan0`, `docker0`, `veth…`, `lo` are taken as written (eth0 is read back from the Cisco spelling when the host has it). Clearing counters is refused; `save` says there is nothing to save.
-- **Raw changes**: `lines` of shell as root through sudo, one script with `set -e`; the answer carries what the lines printed. With the lists on (`NETDIR_DEVICE_GUARDS=1`) power, disk, user and firewall-flush commands are refused; by default they are not.
-- Web UI, help and the device documentation list the platform; the default port is 22.
-- Tests with a fake runner (`linux_test.go`) and a stand-in `ssh` that records its arguments, its standard input and its environment: the password is never in the arguments, a key file is mode 600 and removed afterwards.
-
-### Not verified
-- Nothing was run against a real Linux host or a real `ssh`: the `ip -j`, `lldpctl -f json`, `free`, `df` and `journalctl` output shapes are those of current distributions, and an old iproute2 (before 4.13) has no `ip -j`.
-- `lldpctl` JSON differs between lldpd releases; two shapes are handled (the chassis keyed by the neighbor's name, or holding it).
-- A host that asks for a password for sudo on a terminal (`requiretty`) cannot be used with `sudo -S` here.
-- Raw lines have no rollback and typed changes are not persisted across a reboot.
-
-## [v172] - 2026-11-15 — An `rw` key means `rw`: the refusal lists are off
-
-### Changed
-- **No lists of refusals for `rw` callers.** Every guard that refused a write by what it touched is behind `guardsOn` (default off): the per-platform path guards of `restRaw`, the CLI line denies (EOS, NX-OS), Proxmox, PDM and Proxmox-MX body checks (`purge`, `archive`, ...), BIG-IP body check, Technitium path denies, Aviatrix key, action and gateway-delete denies, Junos `delete` and line/RPC denies, PAN-OS `mgt-config`, Entra allowed-resource and password checks, vCenter/PDM/Proxmox delete refusals via their guards, and the refusal to shut the management port. Users, tokens, keys, certificates, files, deleting infrastructure and cutting your own management access are now sent if the device allows them.
-- Still checked: the method, a path that starts with a single `/` and holds no host, space, control character, `#` or backslash, and bodies that must be JSON. Still done: the read before a change, put-back of a failed PUT or PATCH, Junos and EOS confirmed commits, the NX-OS checkpoint. `ro` keys and read-side masking are unchanged.
-- `NETDIR_DEVICE_GUARDS=1` in the daemon's environment turns the lists back on; `device.SetGuards` does the same in tests (the refusal tests run with it on).
-
-### Added
-- `guardsoff_test.go`: pass-through with the lists off, and the path sanity check.
-
-### Not verified
-- Nothing in this release was run against a real device. A change that locks you out is not undone by netdir where the platform has no rollback (POST, DELETE, most CLI platforms).
-- Every guard function is reached only through `restSpec` (now gated), so the vCenter, PDM and Proxmox structural delete refusals are off too. `nsone.go` still calls its own guard to choose a path and was not changed.
-
-## [v171] - 2026-11-15 — Typed port changes on more platforms; `save`; rw callers create, delete and resize VMs and containers
-
-### Added
-- **`save` on `device_change`** (MCP `save`, API `"save": true`, CLI `--device-save`). After a change that was made, the configuration is saved so it survives a reboot: IOS-XE (`cisco-ia:save-config`), NX-OS (`copy running-config startup-config`), EOS (`write memory`), Aruba CX (a PUT of `/fullconfigs/startup-config` from the running one) and BIG-IP (`save sys config`). Junos (commits), FortiOS and Meraki keep a change on their own, and the result says so in `note`. A plan (`dry_run`) never saves, a change that was refused or put back is not saved, a save that fails leaves the change in the running configuration and says so in `note`, and `clear_counters` has nothing to save. New `device.ConfigSaver` interface; `ChangeResult` has `saved` and `note`.
-- **Typed description, shutdown and no shutdown on Junos, NX-OS, FortiOS and F5 BIG-IP** (`device/ifacewrite.go`). Each reads what a port holds from the driver's own `Interfaces`, builds the platform's request from the validated fields and sends it through that platform's `RawChange`, so its guards, checkpoint or confirmed commit, and rollback apply; `runChange` then reads back and writes the old values when something differs. Junos: set-format lines (`set interfaces ge-0/0/1 disable`, `… description "text"`), one request; NX-OS: `interface X`, `shutdown`, `description …` as one `cli_conf` request after a checkpoint; FortiOS: `PUT /api/v2/cmdb/system/interface/NAME` with `{"status": "down"|"up"}` or `{"description": …}`; BIG-IP: `PATCH /mgmt/tm/net/interface/NAME` with `{"disabled": true}` or `{"enabled": true}` or a description (only the physical interfaces are ports, not the self IPs). A port holding the address the gateway reaches the device on is never shut down. **PAN-OS** has no typed shut or description (a link-state or description change is a configuration change and a commit that also commits other people's pending changes): counters only; `device_change_raw` for the rest. Aruba CX and Meraki were already typed; Junos and PAN-OS also take `clear_counters` (v170).
-- **Port names of those platforms** in the grammar: Junos `ge-`, `xe-`, `et-`, `ae`, `irb` (`ge-0/0/1-3`), FortiOS `port1`, `wan1`, `lan1` and bare `dmz`, `lan`, `wan`, `internal`, `ha`, `fortilink`, `modem`, BIG-IP `1.1` and `mgmt`. Anything else is still refused; every name is then matched with the device's own list.
-
-### Changed
-- **VM platforms: `rw` means creating, deleting and resizing VMs and containers.** Proxmox VE and Proxmox Datacenter Manager: `DELETE /nodes/N/qemu/ID` and `…/lxc/ID` (PDM: `DELETE /pve/remotes/R/qemu/ID`) are no longer refused, and `purge` and `destroy-unreferenced-disks` are accepted in the body of that one request (anywhere else they are still refused, with `remove-vanished` and `destroy-data`); creating (`POST /nodes/N/qemu|lxc`), `PUT …/config` (cores, memory, disks) and `PUT …/resize` were already open. vCenter: `DELETE /vcenter/vm/ID` is no longer refused; creating, cloning and changing CPU, memory and disks were already open. **Still refused:** restoring a backup (a body with `archive`), rolling back a snapshot, migrating a guest to another cluster (PDM), removing a remote, deleting a storage or its volumes, removing a disk from a machine (`unlink` on Proxmox, a disk DELETE on vCenter), deleting a vCenter host, cluster, datacenter, datastore, folder, resource pool or network, and everything else on those lists. README and help text say so.
-- `device_change` tool text and the "no typed changer" error name the platforms; the README's "Changing devices" paragraph too.
-- The test that used NX-OS as "a platform with no typed writer" uses Infoblox NIOS.
-
-### Verified
-- gofmt, go vet, go test -race -count=1 ./..., the leak test. New tests: IOS-XE, EOS and AOS-CX savers against their stubs; `save` through the MCP tool (a plan does not save, a change does once, `clear_counters` says nothing to save); Junos, NX-OS, FortiOS and BIG-IP changes through a fake device (the exact lines and bodies, plan, shutdown, already-as-asked, no shutdown, a description with quotes and a backslash, a missing port cancels, a refusal is passed up) and that a line break, a `;` or a path in a port name is refused; the port grammar for the new names; Proxmox create, resize and delete (and that `purge` is refused anywhere else), PDM guest delete, vCenter create, clone, delete, CPU, memory and disk (and that host, datastore and disk deletes are still refused).
-
-### Not verified
-- **Nothing was run against real gear or real hypervisors.** The Junos, NX-OS, FortiOS and BIG-IP changes were tested through a fake of their `RawChange`, not a stub of their APIs; the field names (`status`, `disabled`/`enabled`, Junos `disable`) are from the vendors' documentation. Whether Junos and NX-OS read back the admin state the same way after the change as before was not seen. The Aruba CX save (`PUT /fullconfigs/startup-config?from=…running-config`) is from memory of the REST documentation. Proxmox takes `purge` and `destroy-unreferenced-disks` as parameters of the DELETE; whether a DELETE body is read as such by Proxmox was not tried.
-- v170's clear-counters notes stand: untried on real devices.
-
-## [v170] - 2026-11-15 — Clear interface counters (`clear_counters`) in `device_change`
-
-### Added
-- **A fifth typed change, `clear_counters`**, for `device_change` / `--device-change` / `POST /api/devices/change`. In English: `clear all port counters`, `clear counters on gi1/0/1-4`, `reset all interface statistics` (clear, reset or zero; counters, statistics or stats; for, on, of, from or in). Typed: `action: clear_counters` with `ports` (named, or empty or `all` for every port). The plan (`dry_run`) lists the ports a clear would reach.
-- **Platforms that do it:**
-  - Cisco IOS-XE: `POST /restconf/operations/Cisco-IOS-XE-rpc:clear` with `{"Cisco-IOS-XE-rpc:input": {"count": "<interface>"}}` (an empty `count` is every port). The RPC's `interface` leaf is `clear interface`, which resets the port, and is never sent. The RPC and its leaf are from Cisco's `Cisco-IOS-XE-rpc` YANG (release 17.18.1 copy); the switch's own copy of that source cannot be read over MCP.
-  - Arista EOS: `clear counters [Interface]` over eAPI, sent as plain exec commands (no configuration session).
-  - Juniper Junos: the RPC `<clear-interfaces-statistics><all/></clear-interfaces-statistics>` over the REST API. All ports only: Junos port names (`ge-0/0/0`) are not in the typed port grammar.
-  - Palo Alto PAN-OS: the operational command `<clear><counter><interface/></counter></clear>` over the XML API. All ports only: the command takes no interface.
-- **Platforms that cannot, and say so:** Aruba CX and Meraki (no such call found in their REST APIs), FortiOS (its monitor API clears counters of policies, VIPs and ACLs, not of interfaces) and NX-OS (the driver only sends `cli_show` requests, never a command that changes anything; NX-API REST has a clear action on `sys/action` but its payload was not verified). Each answers "this platform's API has no way to clear interface counters". `device_change_raw` is still open for them where the platform has a way.
-- Counters are not configuration, so a clear is planned from the device's own port list (a port the device lacks cancels the change), sent, and **not read back and not put back**; the result says `applied` when the device accepted the request. A port holding the gateway's management address may be cleared (only a shutdown is refused there).
-- `device.AllPorts`, `device.AllPortsChange()`, `Change.All()`, the `counterClearer` interface and `runClear` in `device/change.go`; `device/junos_write.go` and `device/panos_write.go` (Junos and PAN-OS had only raw changes before; their typed `Change` accepts nothing but this action).
-
-### Changed
-- `eosCfgRE` also accepts `clear counters` with an optional interface name, nothing else new.
-- README: the `device_change` rows and the "Changing devices" paragraph.
-
-### Verified
-- gofmt, go vet, go test -race -count=1 ./... pass. New tests: the English grammar and Validate for the new action (and that "clear the description" is not shadowed), `runClear` with a fake device (named, missing port, dry run, refusal, other action), the IOS-XE stub (the `count` leaf, an empty one for all, a missing port cancels, the management port may be cleared) and the EOS stub (the exact exec lines, with no session).
-
-### Not verified
-- **Nothing was run against real gear.** The IOS-XE RPC is taken from the YANG, not seen answering on a switch (whether `clear counters` with an empty `count` asks a confirmation the RPC does not answer is unknown). The EOS, Junos and PAN-OS commands are the documented CLI commands in their API forms; Junos and PAN-OS have no stub test of their own. Run `--device-change "clear counters on …" --dry-run` first, then one port.
-- The running netdir has to be updated to this version before the MCP `device_change` tool offers `clear_counters`.
-
-## [v169] - 2026-11-15 — Ask removed from a device's right-click menu
-
-### Removed
-- **Ask ▸** (Facts, Interfaces, Ports, Neighbors, Routes, Firewall, Configuration, Show command, Look up user/computer/group) from a device's right-click menu on Topology. The menu is now: Network tools ▸, (Import / Troubleshoot / Sign in for the platforms that have them), Edit, Copy, Paste, Pause ▸, Delete. The code behind it is gone too. Asking a device is still possible from an assistant over MCP (`device_facts`, `device_show` and the rest) and the API; the web GUI no longer has a way to do it.
-
-### Verified
-- gofmt, go vet, go test -race pass; the device menu in headless Chromium.
-
-### Not verified
-- Nothing tested against real devices.
-
-## [v168] - 2026-11-15 — Device right-click menu; Pause a device on this node; copy and paste anycast addresses
-
-### Changed
-- **A device's right-click menu on Topology** is now: Ask ▸, Network tools ▸, (Import / Troubleshoot / Sign in for the platforms that have them), then Edit, Copy, Paste, Pause ▸ (This node / All nodes), and Delete. **Ask ▸** is kept because it is the only place left in the GUI to ask a device (Monitor ▸ Devices no longer has the form). **Delete** takes the device off this gateway, the same as the Delete key; it stays in the inventory. To remove it from the inventory, pick it and choose **Delete devices**, or use Configure ▸ Devices. **Copy** / **Paste** are the old Copy device / Paste device; Paste puts the copied device(s) on this gateway.
-- **Pause ▸ All nodes** is what Disable was (the inventory's switch: no node contacts the device). **Pause ▸ This node** is new: only this node leaves the device out (the saved list `paused_devices_here`, local to the node, not replicated); the drawing shows it as paused and the tooltip says "Paused on this node". A name no longer in the inventory is dropped from the list when the configuration is saved. History shows it as "paused on this node: NAME".
-- CLI: `--canvas-pause|--canvas-resume device --device NAME --scope node|all` (default all, as before).
-
-### Added
-- **Copy and paste anycast addresses**, as in dnsdir and ntpdir: right-click an anycast address ▸ Copy ▸ Anycast address or All anycast addresses (also put on the system clipboard as text); right-click another gateway ▸ Paste ▸ Anycast address or All anycast addresses. An address the gateway already has, or that is any gateway's own address, is left out; pasting on the gateway they came from is refused, with the reason as the tooltip.
-
-### Verified
-- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`; a new test (`TestCanvasDevicePauseThisNode`) covers pausing on this node, that the saved inventory is not changed, resuming and a bad scope.
-- Headless Chromium against a mocked API: the device menu reads as above; Pause ▸ This node saves `paused_devices_here: ["sw1"]` and leaves the device enabled; copying All anycast addresses on one gateway and pasting on another adds both.
-
-### Not verified
-- Not run against a real cluster or real devices: that a device paused on this node is really not contacted from here (health checks, Ask, changes, captures) rests on the code reading it as disabled and was not seen live. A device paused on this node still shows as answering on another node's pages.
-- Delete is "off this gateway" (the Delete key's meaning); the old "Delete device" (out of the inventory) is no longer in this menu.
-
-## [v167] - 2026-11-15 — Theme toggle: Light / Dark / Auto
+## [v229] - 2026-11-15 — Theme toggle: Light / Dark / Auto
 
 ### Added
 - A small icon at the right of the sidebar, just above the "Signed in as" line, switches the theme: **Auto** (half-filled circle; follows the system's light or dark setting, as before), **Light** (sun) and **Dark** (moon). Each click goes to the next one; the icon shows the current choice and its tooltip names it and what a click does. The choice is kept in this browser (localStorage); with storage blocked it lasts until the page is reloaded.
@@ -555,21 +43,18 @@
 ### Not verified
 - Not looked at with the system set to light, in a real browser, or on a phone-width layout. Charts and drawings that take their colours from the page (the topology, Statistics) were not checked in each theme by eye.
 
-## [v166] - 2026-11-15 — Monitor ▸ Devices: tiles and the Devices card only; Monitor ▸ Cluster: no subtitle
+## [v228] - 2026-11-15 — Monitor ▸ Cluster: no subtitle
 
 ### Removed
-- **Monitor ▸ Devices** keeps its tiles and the Devices card; every other card is gone: the Target / Ask for / Ask form and its answers, Change ports, Advanced change, Capture packets and Network tools. A device is still asked from its right-click menu on Topology (Ask ▸ …), and a row on this page still has the network tools on right-click. Changing ports, a raw change and packet capture are no longer in the GUI: they stay on the command line (`--device-change`, `--device-raw`, `--device-capture`), over MCP and the API. Clicking a row no longer fills in a target. Help and README say so; the three README screenshots of the old page are no longer referred to (the files are still in `snaps/`).
 - The line "Nodes sharing these settings." in the header of the Cluster members card on Monitor ▸ Cluster.
 
 ### Verified
 - `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
-- `help_fields_test.go` no longer expects Fields entries for the controls of Monitor ▸ Devices (Target, Ask for, Command, Address), which are gone.
-- Headless Chromium against a mocked API: Monitor ▸ Devices shows the five tiles and the one Devices card with no page errors, and a row's right-click menu has Ping, Traceroute, Scan, Lookup and Whois.
 
 ### Not verified
-- Not run against a real daemon.
+- Not looked at in a browser (one text line removed).
 
-## [v165] - 2026-11-15 — Monitor ▸ Gateways: VIP and AGC in the same type
+## [v227] - 2026-11-15 — Monitor ▸ Gateways: VIP and AGC in the same type
 
 ### Fixed
 - In a gateway card's header on Monitor ▸ Gateways, "VIP" and its address were both in the monospace font while "AGC" was in the normal font with only its address in monospace. Both now show the label in the normal font and the address in monospace. VIP and AGC also sit a little further right, so they no longer crowd the gateway name.
@@ -580,18 +65,23 @@
 ### Not verified
 - Not looked at in a browser after the change (a one-line markup change).
 
-## [v164] - 2026-11-15 — [Test] popup: no Run again, no scroll bar
+## [v226] - 2026-11-15 — Right-click on a server works again
+
+### Fixed
+- Right-clicking a server (or a domain) on Topology did nothing. In v225, taking Test virtual MACs out of the menu also removed the code next to it that pauses a server (and a domain), which the server's menu needs, so the menu failed to open. The code is back; the right-click menus of the circle, a server, a domain and an anycast address were opened in a headless browser, and Pause ▸ This node was clicked on a server, with no page errors.
+- v225 should not be used.
 
 ### Changed
 - The **[Test]** popup on Monitor ▸ Gateways has no **Run again** button, and no scroll bar: the result wraps in the popup, and its buttons are at the lower right (Close last); the ✕ in its corner is gone. When the gateway already uses real MAC addresses it reads just "Real MAC addresses are on for this gateway: there are no virtual MACs to test".
 
 ### Verified
-- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`; headless Chromium against a mocked API: the popup for a real-MAC gateway shows the one line, and Use real MAC addresses still saves.
+- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
+- Headless Chromium against a mocked API: right-click a server shows its menu, Pause ▸ This node / All nodes appear and can be clicked; Monitor ▸ Gateways [Test] still works.
 
 ### Not verified
-- Not run against a real daemon.
+- Not run against a real daemon. The Go tests do not cover the web page, which is how this got through; only the headless runs above did. Domain and anycast menus were not opened in the headless run.
 
-## [v163] - 2026-11-15 — Test virtual MACs is a [Test] button on Monitor ▸ Gateways
+## [v225] - 2026-11-15 — Test virtual MACs is a [Test] button on Monitor ▸ Gateways
 
 ### Changed
 - **Test virtual MACs** is no longer in the gateway's right-click menu on Topology. Each gateway's card on Monitor ▸ Gateways has a **[Test]** button at the right of its header (not shown when the gateway uses real MAC addresses). It opens the same result popup, now with **Run again**, and **Use real MAC addresses** is still offered when the test says virtual MACs are not delivered. Help is updated.
@@ -604,7 +94,7 @@
 - Not run against a real daemon (the test itself, which needs a router to ask).
 - A read-only user: the button is shown to everyone and the daemon decides whether the test may run.
 
-## [v162] - 2026-11-15 — No menu on the empty drawing
+## [v224] - 2026-11-15 — No menu on the empty drawing
 
 ### Removed
 - Right-clicking an empty part of the Topology drawing no longer opens a menu (it held New gateway and a few of the gateway's own items, all of which are on the sidebar's ＋ New gateway and the gateway's circle). The click now only clears the selection. Help, and the "No gateway yet" text, no longer mention it.
@@ -615,18 +105,7 @@
 ### Not verified
 - Not opened in a browser (the handler is one line; the browser's own right-click menu is suppressed there as before).
 
-## [v161] - 2026-11-15 — Gateway menu: Ask devices removed
-
-### Removed
-- **Ask devices** (Facts, Interfaces, Neighbors) is gone from the gateway's right-click menu on Topology: all three only opened Monitor ▸ Devices with the question pre-asked. Ask the devices on Monitor ▸ Devices, or one device at a time from its own right-click menu. The gateway menu now reads Statistics, Test virtual MACs (when the gateway does not use real MACs), Edit ▸, Add ▸, Copy ▸, Paste ▸, Pause ▸, Delete. Help is updated.
-
-### Verified
-- `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
-
-### Not verified
-- Not opened in a browser (a deletion of one menu line and its receiving code on Monitor ▸ Devices).
-
-## [v160] - 2026-11-15 — New gateways run on one node; Add ▸ Node no longer lists nodes that left
+## [v223] - 2026-11-15 — New gateways run on one node; Add ▸ Node no longer lists nodes that left
 
 ### Fixed
 - Right-click the gateway ▸ **Add ▸ Node** listed "A node that left the cluster (xxxxxxxx)" for every stale entry in the gateway's removed-nodes list (a node that was taken off the gateway, or held back when it joined, and later left the cluster). Those entries are not nodes that can be added. The submenu now lists only nodes that are still in the cluster.
@@ -646,30 +125,27 @@
 - The new-gateway rule (above) has no automated test and was not run on a real cluster: it was only compiled. Check it by creating a gateway on one node of a cluster and looking at the other nodes in Monitor ▸ Cluster / the gateway drawing.
 - Not run against a real cluster. The menu code is the same in all three programs but was only opened in netdir's headless run; the Forget click was not followed to a saved config. If the cluster view has not loaded yet (no nodes known), nothing is treated as having left.
 
-## [v159] - 2026-11-15 — Gateway menu reorganised; Statistics opens Monitor ▸ MCP
+## [v222] - 2026-11-15 — Monitor ▸ NTP: one card per server
 
 ### Changed
-- The gateway's right-click menu on Topology now reads: **Statistics**, **Ask devices** ▸ (Facts, Interfaces, Neighbors; greyed out when the gateway has no devices), **Test virtual MACs** (when the gateway does not use real MACs), then **Edit** ▸ (Gateway, MCP), **Add** ▸ (Device, Node, Anycast address), **Copy** ▸ (All devices, To all gateways), **Paste** ▸ (Device), **Pause** ▸, and **Delete**.
-- **Statistics** is new: it opens Monitor ▸ MCP.
-- Items that cannot be used are greyed out with the reason as a tooltip: Add ▸ Node when every node already serves the gateway, Paste ▸ Device when nothing is copied (or it is already there), and the Copy items. Before, the Copy and Paste reasons were not shown.
-- Menus can now open a third level beside the second (the same menu code as dnsdir), used by Add ▸ Node to list the nodes that were removed from the gateway.
-- Help names the new paths (Add ▸ Node, Add ▸ Anycast address).
+- The server table on Monitor ▸ NTP was wider than the page (the "Root dist." and "Round trip" headings ran into each other, names were cut to "time.cl…" and the columns after OK were off screen). Each server is now a card: its name, address and tags (fallback, v4/v6, NTS) on the left, the state and chrony's mark as pills under them, and Stratum, Offset, Root dist., Round trip (with the bar), Last and OK / fail in a row beside them. A failing server's last error is on a line of its own under the card. In a narrow window the six numbers wrap into two rows of three, so nothing is cut off.
+- The gateway card's header no longer has the settings line ("stratum up to 15 · root distance up to 1500 ms · …") or "answering on address:port", as on the DNS page in AnyName v653. The settings are in Configure ▸ NTP. The "every server is down" warning stays, and a gateway that answers on no address of this node shows a "not answering on this node" warning.
+- Wording: the tile "Synchronised to" is now **Time source**, and chrony's mark for the source it follows is **selected** (it was "synchronised to"); a server that is not a chrony source says "not in chrony" instead of "no". `--show-ntp`'s key line, the help panel and the README say the same. (The chrony tile still says "synchronised": that is the state of the clock.)
 
 ### Verified
 - `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
-- Headless Chromium against a mocked API: the menu shows the items above, Add ▸ Node lists a removed node, Paste ▸ Device is greyed out with nothing copied, and Statistics goes to `#mcpusage`.
 
 ### Not verified
-- Not run against a real daemon; not tried with a read-only user; the menu for an empty drawing, a device, a node and a pill is unchanged. Nothing was clicked through to completion for Edit ▸ Gateway, Edit ▸ MCP, Add ▸ Device, Add ▸ Anycast address or Ask devices (the handlers are the same as before).
+- Not run against a real daemon. The page was rendered in headless Chromium (light and dark, 1300 and 700 px wide) with a mocked `/api/ntp` holding a selected, a combined, a fallback with v4/v6 tags, an NTS and a down server: four cards, no script errors, nothing cut off.
+- The README screenshot of this page, if any, still shows the table.
 
-## [v158] - 2026-11-15 — History under Operate, plain search and page boxes
+## [v221] - 2026-11-15 — History under Operate, plain search and page boxes
 
 ### Changed
-- **History** (every saved version of the configuration: diff, restore, download, upload, snapshot) is now under **Operate**, between Scheduler and Upgrade, no longer last under Configure. The page, its address (`#history`), permissions and command-line commands are unchanged, so a bookmark still works. The help panel is titled "Operate: History"; the README, `--help` name the new place.
+- **History** (every saved version of the configuration: diff, restore, download, upload, snapshot) is now under **Operate**, between Scheduler and Upgrade, no longer last under Configure. The page, its address (`#history`), permissions and command-line commands are unchanged, so a bookmark still works. The help panel is titled "Operate: History"; the README, `--help` and QUICKSTART name the new place.
 - The filter box on the Log page was drawn in the browser's own style (square corners, no border, another height than the lists beside it) because the style rule for fields did not list `type=search`. It now looks like the other fields.
 - The page number in the pager under the long lists is a plain box: the up and down arrows are gone and the number is centred. You still type a page and press Enter or leave the box.
 - The same three changes as AnyName v651 to v656.
-- Test fix, no behaviour change: `TestMCPUsage` used a fixed date (7 November 2026) and started failing on 15 November, because the usage file it reads back is trimmed to 8 days by the real clock; it now uses the current time. It failed the same way on v157.
 
 ### Verified
 - `node --check`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...`.
@@ -679,1251 +155,78 @@
 - The README screenshot `snaps/history.png` was not retaken, so it may still show the old menu.
 - Whether a read-only user's menu shows History under Operate as it did under Configure was not tried.
 
-## [v157] - 2026-11-14 — Certificate page: "shared" tag on the certificate and key
+## [v220] - 2026-11-14 — Certificate page: no description text, equal-sized boxes, "shared" tag
 
 ### Changed
-- Web GUI ▸ Certificates ▸ "Upload your own certificate": the **Certificate** and **Private key** labels carry the same "shared" tag as the other cluster-wide fields (`sharedTag`, shown only when the node is in a multi-node cluster), because the certificate is replicated from the primary. Nothing else changed; v156 already runs on the cluster, so this is a new version to push to it.
+- Web GUI ▸ Certificates ▸ "Upload your own certificate", same change as MCP Network Director v156 and v157: the paragraph under the heading is gone (the same facts — used from the next connection, no restart, nobody signed out, copied to every cluster node — are already in the page's help topic), and the **Certificate** and **Private key** boxes are the same size (both 7 rows (the private key box was 5 rows)).
+- The **Certificate** and **Private key** labels carry the same "shared" tag as the other cluster-wide fields (`sharedTag`, shown only when the node is in a multi-node cluster), because the certificate is replicated from the primary.
+- Nothing changed in how the certificate is installed or shared. No Go change.
 
 ### Verified
-- `node --check webui/app.js`, `gofmt`, and `TestFieldHintsAreShort`, `TestEveryPageHasHelp`, `TestVersionIsPlainInteger` and the web tests. The full `go test -race` run was done for v156 (same Go code); `TestMCPUsage` fails there for the date reason given under v156.
+- `node --check webui/app.js`, `gofmt -l`, `go build`, `go vet ./...` and the full `go test -race -count=1 ./...` (native, with PAM): all pass.
 
 ### Not verified
-- The tag was not looked at in Chromium (light and dark) or in a clustered GUI.
+- The page was not looked at in Chromium (light and dark) or in a clustered GUI.
 
-## [v156] - 2026-11-14 — Certificate page: no description text, equal-sized certificate and key boxes
-
-### Changed
-- Web GUI ▸ Certificates ▸ "Upload your own certificate": the paragraph under the heading is gone (the same facts — used from the next connection, no restart, nobody signed out, copied to every cluster node — are already in the page's help topic), and the **Certificate** and **Private key** boxes are now the same size (both 7 rows; the key box was 5).
-- Nothing changed in how the certificate is shared: it is installed on the primary and copied to every member, and the MCP listeners serve the same certificate as the GUI (both use one `CertManager`).
-
-### Verified
-- `node --check webui/app.js`, `gofmt`, `go build`, `go vet ./...` and `go test -race -count=1 ./...` (native, with PAM): everything passes except `TestMCPUsage`, see below.
-
-### Not verified
-- The layout was not looked at in Chromium (light and dark).
-- `TestMCPUsage` fails here and is not related to this change: it uses a fixed timestamp (6 Nov 2026) and the 7-day report window has moved past it with the real clock. Not touched.
-
-## [v155] - 2026-11-13 — Version bump to test the primary role returning home
-
-### Changed
-- Nothing but `VERSION`: a higher version to push through a cluster update, to check that the primary role goes back to the node that had it (v154).
-
-### Verified
-- `go build`, `go vet ./...`, `TestVersionIsPlainInteger` and the primary-return tests; gofmt clean.
-
-### Not verified
-- The return itself on real daemons: that is what this version is for.
-
-## [v154] - 2026-11-13 — After a cluster update the primary role is back where it was
+## [v219] - 2026-11-13 — After a cluster update the primary role is back where it was
 
 ### Changed
 - A primary that restarts into an update still hands the primary role to another member first, but now the role is only lent: the node that was primary when the update began is remembered as its home (`primaryHome`, the file `update/primary_home` in the state directory, carried by the hand-over announcement so it follows the role from node to node in a rolling update, and a node that has to hand the role on prefers the home). When the update is over, the node that holds the role gives it back (`returnPrimaryHome`, run by every sync): nothing queued, nothing installing or restarting, with auto-update every reachable member on the same version (or failed), the home up, not paused and not failed, all for 30 seconds in a row.
-- The home is forgotten when its update failed (the role stays where it is, a warning is logged), when it is no longer a member, after 12 hours, and on any promotion by hand or by failover. A restart, shut down, power action or backup restore hands the role over as before and leaves it where it lands.
-- The announcement of a new primary has an optional `home` field; older nodes ignore it, so a cluster in the middle of the upgrade to this version works as before (the role stays where it lands until every node runs it).
-- `CLAUDE.md`, the README and the cluster help say that promotion is still never automatic, apart from this planned, administrator-started hand-over and its return.
+- The home is forgotten when its update failed (the role stays where it is, a warning is logged), when it is no longer a member, after 12 hours, and on any promotion by hand or by failover. A restart, shut down, power action, scheduled task or backup restore hands the role over as before and leaves it where it lands.
+- The announcement of a new primary has an optional `home` field; older nodes ignore it, so a cluster in the middle of the upgrade works as before (the role stays where it lands until every node runs this version).
+- `CLAUDE.md`, the README and the cluster help say that promotion is still never automatic, apart from this planned, administrator-started hand-over and its return. Same change as MCP Network Director v154.
 
 ### Verified
-- `TestPrimaryReturnsHomeAfterUpdate` (two in-process nodes: the new primary keeps the home, the role stays while an update is queued and goes back when it is over, a plain restart and a manual promotion leave nothing to return), `TestPrimaryHomeSurvivesARollingUpdate` (three nodes, two hand-overs in a row, the role ends at the first node), `TestPrimaryReturnTarget` (each condition, and the home being preferred as successor). Full `go test -race`, `gofmt`, `go vet`, no-cgo vet and tests, cross-compiles.
+- `TestPrimaryReturnsHomeAfterUpdate` (two in-process nodes), `TestPrimaryHomeSurvivesARollingUpdate` (three nodes, two hand-overs in a row, the role ends at the first node) and `TestPrimaryReturnTarget` (each condition, and the home preferred as successor). Full `go test -race`, `gofmt`, `go vet`, no-cgo vet and tests, cross-compiles.
 
 ### Not verified
-- Not run on real daemons with a real `--update-push all` (builds and re-execs), only with the in-process clusters of the tests; the 30 seconds of settling and the interaction with the canary soak were not exercised live.
+- Not run on real daemons with a real `--update-push all`, only with the in-process clusters of the tests; the 30 seconds of settling and the interaction with the canary soak were not exercised live.
 
-## [v153] - 2026-11-13 — v152 failed to build on a node whose source tree still had apiroutes.go
-
-### Fixed
-- v152 deleted `apiroutes.go` and `apiroutes_test.go`. An update whose source tree was made by copying v152 over an older tree kept the old file, which no longer compiled (`undefined: apiRoute`), so the update failed with `go build failed`. Both files are back as empty stubs (`package main` only), so any such tree overwrites them and builds. The route list itself stays removed.
-- `CLAUDE.md`: a file is never deleted from the tree in a release, only emptied (a release that has to remove a file leaves an empty stub), because trees are copied over each other.
-
-### Verified
-- A clean extract of the archive builds; the same tree with the v151 `apiroutes.go` and `apiroutes_test.go` copied over a v153 tree is overwritten by the stubs and builds. `gofmt`, `go vet`, `go test -race`, no-cgo vet and tests, cross-compiles as in v152.
-
-### Not verified
-- The GUI updater itself was not run here; its source staging (`ExtractSource`) replaces the tree whole, so the stale file must have come from the tree that was uploaded.
-
-## [v152] - 2026-11-13 — An MCP caller can only ask the gateway about its devices
-
-### Changed
-- The MCP tools are now the device tools (`device_*`, including `device_change`, `device_change_raw`, `device_capture` and `device_troubleshoot_user`), `list_devices` (the device list and each device's health), the network tools (`net_*`) and the cluster status (`list_nodes`, `get_topology`). Nothing else about netdir itself can be asked.
-- Removed: `get_gateways`, `get_alerts`, `get_lldp`, `get_host_stats`, `get_schedule`, `get_updates`, `get_node_status`, `get_config`, `list_api` and `api_get`. `api_get` and `get_config` were the way to any route of the GUI's API (configuration, versions, cluster, BGP, users ...); with them gone an MCP caller has no way to read a route other than the ones the remaining tools make.
-- No tool takes a `node` any more (`get_topology` was the last): the node that serves the endpoint answers, and a call with a `node` argument is refused ("tools take no node argument"). Device tools already ran on the serving node only.
-- A caller limited to some devices lost nothing it had before except the removed tools; `scopedOffTools` is now `device_troubleshoot_user` and the network tools.
-- Dead code removed with the tools: `apiRequest`, `apiRequestOn`, `restoreHidden`, `apiroutes.go` (the generated route list) and its test.
-- The GUI, the CLI and the GUI's API are unchanged: an administrator still reads and changes all of it there. README, the MCP help topic and the server instructions say the same.
-
-### Verified
-- `gofmt -l .` clean, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, and the cross-compiles of the release list.
-- `requireGateTools` (`mcp_test.go`), used by the read-only, rw, limited-key and barred-route tests: the tool list has the device, list and status tools and nothing else, each removed tool answers "unknown tool", and a `node` argument is refused on `list_nodes`, `get_topology` and a device tool. The tests that used `get_config`, `api_get`, `get_lldp` or `get_alerts` now check that those are gone and that no device secret, key or gateway secret reaches a caller through the tools that remain.
-
-### Not verified
-- Not run against a real MCP client; an assistant configured with the old tool names will get "unknown tool" for the removed ones.
-- `tools/leaktest.sh` was not run (no driver or masking change).
-
-## [v151] - 2026-11-13 — An MCP caller cannot read logs, accounts or keys
-
-### Changed
-- MCP callers (any key or allowed source, read-only or rw) can no longer read log content: the `get_log` tool is gone, and `api_get` refuses `/api/log`, `/api/tshoot/*` (the troubleshooting bundle, which holds the MCP content log), `/api/users*`, `/api/backup*`, `/api/mcpusage` and `/api/cluster/token*` (`mcpbar.go`, checked in `mcpWriteGuard`, so also through `/api/proxy`). `list_api` no longer lists them.
-- `get_config` and `api_get /api/config` leave out the MCP keys and allowed sources, the login groups and the LDAP and SSO settings (`mcpDropAccounts`).
-- A netdir, DNS or NTP Director device no longer answers `show log`.
-- The GUI and CLI are unchanged: a signed-in administrator keeps every one of these.
-
-### Verified
-- `mcpbar_test.go`: tools/list without `get_log`, `api_get` refusals for each barred route, `list_api` without them, the account fields dropped.
-
-## [v150] - 2026-11-13 — The troubleshooting bundle includes the MCP content log
+## [v218] - 2026-11-10 — Back up to the cluster nodes in one step; a BGP neighbor's address can be changed
 
 ### Added
-- `netdir --tshoot` and the Node menu's tshoot download now always include the MCP content log of each node as `netdir/mcp-content.log` (`tshootcontent.go`): the newest entries of `mcp-content.log` and `mcp-content.log.1`, up to 4 MB, oldest first, whole lines only. Requests and replies are in it as the callers were given them (secrets hidden and the caller's privacy level applied by the endpoint); the bundle then removes secrets again over every key (`redactJSON`) and every string, including the text of a reply (`redactText`), and counts them in the README's "secrets were removed" line. A note line says when the log is off or has no entries yet; entries kept from before it was turned off are still included. There is no switch: it is always in.
-- When the bundle is still too large for the cluster channel (3 MB compressed per node), the larger of `netdir/log.txt` and `netdir/mcp-content.log` loses its older half, until it fits; the content log then starts with a line that says older entries were cut.
-- `webui/help.js` (the tshoot topic), `netdir --help` and the README say so.
-
-### Verified
-- `gofmt -l .` (nothing), `go vet ./...`, `go test -race -count=1 ./...` (all packages pass, with the PAM headers), `CGO_ENABLED=0 go vet ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386` and `riscv64`. New tests in `tshootcontent_test.go`: secrets in keys, in nested replies and in non-JSON lines are removed while the rest stays; the off, empty and old-entries states; the newest entries are kept within the cap and no line is cut in the middle; halving; and a real `TshootNode` bundle that holds the log and lists it in its README.
-- A live run: the daemon built with PAM, a request to `/mcp` with a key and a `password` argument, then `netdir --tshoot --tshoot-file`: the bundle held `netdir/mcp-content.log` with the request and reply and neither the password nor the key.
-
-### Not verified
-- A cluster of several nodes (each node's own log in its own folder) was not run live; the cluster bundle test covers the folder per node for the other files. The size cut was tested on the helper, not with a real 3 MB bundle. `device42` was confirmed against a real server by the owner; `smax` has not been run against a real tenant.
-
-## [v149] - 2026-11-13 — MCP page text fixed, the content log's path is stated, and the checks the process asks for were run
-
-### Fixed
-- The content log's fields on Configure ▸ MCP had labels that were not plain English and one of them wrapped, so the fields were out of line. They are now **Log all MCP requests and replies**, **Log size limit** (1 to 1000 MB) and **Entry size limit** (1 to 8192 KB). The hint I had added under the switch is gone (the notes in CLAUDE.md allow a few words of hint only when asked for).
-- Nothing said where the content log is. `webui/help.js` (the MCP topic), the README and `netdir --help` now give the path, `/var/lib/netdir/mcp-content.log` (the state directory, `--state-dir`; the older half is `mcp-content.log.1`).
-- The Notes column of the allowed sources is wider (`style.css`), so a longer note is not cut off.
-
-### Added
-- `netdir --help` lists the three `mcp_log*` settings and the `#` note of an `mcp_acl` entry. `webui/help.js` describes the `device42` and `smax` drivers in the device list.
-
-### Verified
-- `gofmt -l .` (nothing), `go build`, `go vet ./...`, `go test -race -count=1 ./...` (all three packages pass, including the update build test, now that the PAM headers are installed), `CGO_ENABLED=0 go vet ./...`, `sh tools/leaktest.sh` (34 platforms, 1339 recorded answers, no leak), and cross-compiles for `linux/amd64`, `arm64`, `arm`, `386` and `riscv64`.
-- A live check: the daemon built with PAM, a real PAM user in a `netdir` group, signed in with Chromium (`playwright`) in light and dark, Configure ▸ MCP drawn with its content log fields, a source with a note, a disabled source and a key with a note. The card is 1520 px wide, the fields line up and no script error appeared. A request to `/mcp` with a key wrote a line to `mcp-content.log` (mode 0600) that holds the request and reply and not the key, and a request with a wrong key was logged with status 401.
-
-### Not verified
-- The two new drivers (`device42`, `smax`) have still not been run against a real Device42 or SMAX; they come from the vendors' documentation and a TLS stub. The content log was not checked on a cluster of several nodes. The IPv6 and multi-node checks that CLAUDE.md lists for other areas were not needed for this change and were not run.
-
-## [v148] - 2026-11-13 — Configure ▸ MCP: a wider card, and notes on allowed sources and keys
-
-### Added
-- A **Notes** column on the allowed sources and on the keys (Configure ▸ MCP). A note is up to 200 characters on one line and changes nothing. For a key it is `mcp_keys[].notes`. For a source it is written after a `#` at the end of the entry (`"10.0.0.20 rw # mike's laptop"`); every reader of an entry (`aclBody` in `mcp.go`) ignores it, so a word in a note such as `rw`, `disabled`, `until=` or `devices=` is only text, and entries of one address that are merged keep their notes joined with `; `. Tests: `mcpnotes_test.go`.
-
-### Changed
-- The Configure ▸ MCP card is wider: the page may be up to 1600 px instead of 1150 px, and its tables use the whole card instead of stopping at 63 rem (`style.css`, `.mcpcard`).
-
-### Not verified
-- The wider layout and the Notes columns were not looked at in a browser, only checked as code and by the Go tests. The browser rule uses `:has()`, which older browsers lack (they keep the old width).
-
-## [v147] - 2026-11-13 — Device42 and Micro Focus SMAX drivers, and a content log for the MCP endpoint
-
-### Added
-- **`device42`** (`device/device42.go`): Device42 over its REST API (`/api/1.0`, `/api/2.0`), user name and password. Facts, interfaces, `show devices|device|ips|subnets|vlans|racks|buildings|macs|hardwares|vendors|customers`, `device_api_get`, and `device_change_raw` (POST/PUT/PATCH/DELETE, form fields or JSON; passwords, users, keys, tokens and authentication are refused). Also an **import source** (Import ▸ Devices).
-- **`smax`** (`device/smax.go`): Micro Focus (OpenText) Service Management Automation X over its REST API, option `tenant`, user name and password of an integration or database-authenticated user. `show requests|incidents|changes|problems`, `show request ID`, `device_api_get` below `/ems/{Request,Incident,Change,Problem}`, and `device_change_raw` as `POST /ems/bulk` (CREATE or UPDATE only; no deletes, no people, groups, roles or settings).
-- **MCP content log** (`contentlog.go`): with `settings.mcp_log` on (Configure ▸ MCP ▸ Content log), everything that goes into and out of the MCP endpoint is written, one JSON line per request, to `mcp-content.log` in each node's state directory. Size limit `mcp_log_mb` (1 to 1000, default 50, two files of half), per-entry limit `mcp_log_entry_kb` (1 to 8192, default 256). Off by default. Replies are written as the caller got them; secrets in requests are hidden; the `Authorization` header is never written; refused requests are logged without a body.
-
-### Verified
-- `go vet` and `go test -race -count=1 ./device` (new stub tests for both drivers, including write guards, session renewal and import), `CGO_ENABLED=0 go test` of the main package for the content log, help and hint tests.
-
-### Not verified
-- Neither driver has been run against a real Device42 or SMAX; both were written from the vendors' documentation and a test stub. `TestUpdateBuildApplyAndRollbackGuard` could not run where PAM headers are missing. `sh tools/leaktest.sh` was not run (it needs the cgo build).
-
-## [v145] - 2026-11-12 — The Meraki lookup cache no longer hashes the API key (CodeQL alert 4)
-
-### Changed
-- The key of the Meraki lookup cache (`device/meraki.go`, `idKey`) was a SHA-256 of the device's address, port, organization and the dashboard **API key**. It stayed in memory and was never stored, shown or compared, but a fast hash of a secret is what the code scanner flags. It is now made from the login's **name** and the device's name instead, so no secret goes into it; the cache is already emptied whenever the configuration changes (`mgmt.go`), so a changed key under the same login name cannot return an old answer. Entra's cache key already held no secret.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. New test `TestMerakiCacheKeyDoesNotUseTheKey`: the same login with another key gives the same cache key, another login gives another.
-
-### Not verified
-- Whether the CodeQL alert clears is known only after the next scan on GitHub. Alerts 3 and 6 were not changed (a protocol requirement and a deliberate diagnostic) and are for dismissal in GitHub.
-
-## [v144] - 2026-11-12 — Add device ▸ Devices from inventory lists only devices that have a login
-
-### Changed
-- On the Topology page, Add device ▸ *Devices from inventory* (renamed from *Devices of the inventory*) now lists only the devices that have a login (and the network-tools device, which needs none). Devices still without one, such as freshly imported ones, are left out until a login is given in Configure ▸ Devices.
-
-### Verified
-- `node --check webui/app.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-
-### Not verified
-- The dialog itself was not driven in a browser; the change is one filter on the list it is built from.
-
-## [v143] - 2026-11-12 — The Configure page no longer drops devices that have no login (the real cause of the imported devices disappearing)
-
-### Fixed
-- **Imported devices disappeared whenever anything was saved on a Configure page.** The Devices table marks a row red when it has no login, and the page left every marked row out of what it saved, so the first save of any Configure field (they save when you leave a field) wrote the configuration without every device that had no login. Imported devices have none until you give them one, and devices you gave a login kept their place, which is why the 50-odd devices with logins stayed. The history of the cluster shows it: each removal is a save by the GUI user with an empty note (the Configure page), 35 to 60 seconds after an import, with a valid check token, so it was not a stale page. A device is now left out only when it has no name or no address; one with no login stays, still marked red.
-- Earlier fixes in v138, v140 and v141 (the check token, refusing a save without it, the primary's check of a replica's save) are real protection against stale pages but were not the cause of this.
-
-### Verified
-- `node --check webui/app.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. In headless Chromium with a mocked API holding two devices with no login (and one with): leaving the Address field saved all of them; with the previous page code the same action saved only the one with a login.
-
-### Not verified
-- Not run against the real cluster. The same mocked page raises an error in the alert-rules table that comes from the mock. The other tables of Configure (logins, access lists) still leave out their incomplete rows when saving; only Devices was changed.
-
-## [v142] - 2026-11-12 — Picked rows in a list stay coloured when the list loses the focus
-
-### Fixed
-- In a multi-pick list (Add device ▸ Devices of the inventory, and every other list where several rows can be picked), the picked rows turned black as soon as something else got the focus, for example ticking Enable. They now keep the accent colour, light and dark (`select[multiple] option:checked` in `style.css`).
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. In headless Chromium (light and dark), with two rows picked and a checkbox ticked: the picked rows stay in the accent colour.
-
-### Not verified
-- Not looked at in Firefox or Safari.
-- A report that the imported devices disappear when some are assigned to a gateway was not reproduced: a cluster test (import on a replica, then assign one device to a gateway from the replica) keeps all devices on both nodes. A case in the cluster test now keeps that path covered.
-
-## [v141] - 2026-11-12 — A replica's save can no longer overwrite what the primary has (imported devices disappearing, again)
-
-### Fixed
-- **Imported devices disappeared a fourth time, with every node on v140.** In the tshoot bundle the import (256 devices) was applied on the primary at 00:13:24 and removed again at 00:14:00, originating on the primary. A save made on a **replica** was checked against the replica's own copy of the settings, which can be a moment behind the primary's, and was then forwarded to the primary, which applied it without any check. A page on a replica that had not yet seen the import therefore wrote its old device list over it. The page's `base` now travels with the forwarded save and the primary refuses it (409, nothing written) when its own settings are not the ones the page read; the replica passes the refusal on, and the page shows what is saved.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. New case in the cluster test: the primary changes, a replica still on the old copy saves with the old base: refused, the primary keeps its change.
-
-### Not verified
-- Not run on the real cluster, and not with live daemons. The bundle holds only the replica's view (history entries say "cluster sync"), so which node and page made the 00:14:00 save is inferred from the code path, not read from a log of the primary.
-
-## [v140] - 2026-11-11 — Imported devices can no longer be wiped by an old page; SNMP (ios) devices are no longer reported unreachable
-
-### Fixed
-- **Imported devices disappeared a third time.** In the tshoot bundle the removal of 256 devices was saved with no note, so it came from the Configure page, not Topology: a Configure tab left open from before v138 still ran the old page code, which sends no `base`, and the Configure page never reloads itself. `PUT /api/config` now **refuses (409) any save that carries no `base`** ("this page is older than the daemon … reload it (Ctrl+F5)"), nothing is written, and the refusal is logged. `dry_run` is unchanged. A script that means to replace the configuration sends `"base": "force"`.
-- Every device of platform **ios** (classic IOS over SNMP) showed red, "the API port does not answer: connect: connection refused", although `snmpwalk` to it worked. The health check opened a TCP connection to the device's port first, and SNMP is UDP, so nothing ever listens there. An SNMP device is now asked over SNMP instead (the same request as its facts, one datagram), every check, with no TCP connection: an agent that answers is green; one that does not is red with "no answer over SNMP (the device is unreachable, or the community or the ACL is wrong)", because SNMP does not tell those apart. The community never appears in the text.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. `TestWebConfigSaveRefusesStaleBase` now also covers a save without `base` (409, nothing changed) and `force` (saved). New test `TestMonitorSNMPDeviceIsNotDialled` against the SNMP stand-in agent: no TCP connection is tried, the right community gives ok with the facts, the wrong one gives bad with the new text and without the community.
-
-### Not verified
-- Not run against a real IOS switch (the stand-in agent answers SNMP v2c only; v3 goes through the same request). The check now sends one SNMP request per device every check interval (default 3 minutes), so a few hundred ios devices mean a few hundred datagrams per round, five at a time.
-
-## [v139] - 2026-11-11 — Login suggestions in the Devices table
-
-### Added
-- In Configure ▸ Devices, the **Login** column of the Devices table lists the matching logins as you type (the browser's own list under the box; it filters as you type and picks with a click or the arrow keys). The names are read from the Logins table below it when the box gets the focus, so a login you have just added and not saved yet is offered too. Any name can still be typed. Help text added.
-
-### Verified
-- `node --check webui/app.js` and `help.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. In headless Chromium with a mocked API: the Login box is attached to a list holding exactly the three logins of the Logins table.
-
-### Not verified
-- The dropdown itself was not looked at (the browser draws it outside the page, so a screenshot does not show it), and the case of a login added in the Logins table and not yet saved was not driven. The same mocked page raises an error in the alert-rules table (`rules` undefined) that comes from the mock, not from this change.
-
-## [v138] - 2026-11-11 — A stale page can no longer overwrite the configuration (imported devices disappearing)
-
-### Fixed
-- **Imported devices disappeared.** The GUI saves the whole configuration, from the copy the page read when it was opened. A Topology page opened before an import therefore wrote its old copy back at its next change and removed the imported devices with it: in a tshoot bundle the import added 257 devices at 22:17 and a Topology save made from a page opened hours earlier removed 259 devices (the imports and `network_tools`) at 22:20.
-- `GET /api/config` now returns `base`, a token of the shared settings it read, and `PUT /api/config` takes it back as `base`. When the shared settings are not the ones the page read, the save is refused with **409** and nothing is written (`Mgmt.PutConfigBase`, under the same lock as the save, so two saves cannot both pass). A save with no `base` was allowed in v138; since v140 it is refused (see v140). The reply to a successful save carries the new `base`.
-- The **Topology** page keeps the token, sends it with every change, and after a 409 reads the saved configuration again and shows it (your change is dropped, and the next one goes through). The **Configure** pages send it too and show the 409 as "Not saved: …".
-- Limits: a replica compares with its own copy of the shared settings, which the primary updates within seconds, not with the primary's at that instant; and a page that is refused loses the change it was making (it is shown the saved state, nothing is merged).
-
-### Verified
-- `node --check webui/app.js` and `help.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. New test `TestWebConfigSaveRefusesStaleBase`: GET has a base; a save with it works and returns a new one; a save with the old one is 409 and leaves the devices as they were; the new one works; a save with none works. In headless Chromium with a mocked API: the Topology page sends its base, reads the configuration again after a 409 and sends the new base with the next change.
-
-### Not verified
-- Not run on a real cluster, so the replica path (a save on a replica refused because the primary's change had not arrived yet, and the forward to the primary) was not exercised. The Configure pages were not driven in a browser. Devices that were already removed are not brought back by this: run the import again (it adds only the ones missing).
-
-## [v137] - 2026-11-11 — The topology filter: in the top bar, and no longer matching tags by a plain word
-
-### Changed
-- The Topology filter box is in the top bar, at the left, level with the Node picker, and has the same look and height as it (the box and the picker are both 2.3 rem high on every page that has the bar). It was above the drawing. Its text is kept while you move between pages.
-
-### Fixed
-- Typing `observ` in the filter left every imported device on the map: an imported device carries the tag `source=observium` (the name of the server it came from), and the filter searched tags. The filter now looks at the name, address and platform only. A tag is searched with `tag:` before the word (`tag:env=prod`, `tag:source=observ`); every word must still match. The help text says so. The cluster's nodes and the anycast addresses are not devices and are always drawn.
-
-### Verified
-- `node --check webui/app.js` and `help.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. In headless Chromium (light and dark, mocked API, two nodes): the filter and the picker are the same height and on one line, the filter is in the bar and not on the page, with two devices tagged `source=observium` `observ` shows none of them and `tag:source=observ` exactly those two, and the name, address, platform and `tag:` words work together; the box keeps focus while typing.
-
-### Not verified
-- Not driven against a live daemon with the real imported devices, and not on a narrow window (the bar's layout there was not looked at).
-
-## [v136] - 2026-11-11 — A filter box on the topology map
-
-### Added
-- **Filter devices** box at the top left of the Topology map. Typing hides every device of the gateway that does not match; a device matches when its name, address, platform or a tag holds every word typed (case ignored). Clearing the box shows them all. The text is kept while you move between pages. While a filter is on, devices cannot be dragged to a new place (the order shown is not the saved order). The filter changes only what is drawn: nothing is saved or sent. The help page of Topology says so (`webui/help.js`).
-
-### Verified
-- `node --check webui/app.js` and `help.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-- In headless Chromium (light and dark, API answers mocked, no page errors): five devices; `prod` leaves fw1, `dc1 fw` fw1, `10.0.5` switch1 and ns1, `PROXMOX` the two Proxmox platforms, `zzz` none, and clearing the box brings all five back; the box keeps focus while typing.
-
-### Not verified
-- Not driven against a live daemon, and not with a long list of devices on several rows. Shift-click selection while a filter is on picks from the devices shown.
-
-## [v135] - 2026-11-11 — The network tools reach a gateway this node does not serve
-
-### Fixed
-- `net_ping`, `net_mtr`, `net_scan` and the other tools failed with "no node that serves gateway … can be reached" for every gateway this node does not serve; only the gateways it serves worked. Two causes: the node was looked for by matching the gateway's member addresses against the cluster nodes' addresses, which this node's own view of such a gateway does not carry, and a read-only key's POST through `/api/proxy` was refused as a change. The node is now chosen as the Topology page chooses it (`servingPeers`: a reachable node that serves the gateway well, then one that serves it degraded) and the node's own cluster address is used. When no other node reports the gateway as running, the error says so.
-- A read-only caller (an MCP key or a node relaying one) may start the two look jobs (`/api/nettool`, `/api/scan`) through `/api/proxy` too, judged by the path it carries; every other relayed POST is still refused for it, and so is a read-only GUI user.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`. New tests: `TestToolsNodeFor` (served here, degraded here, by a peer, paused here, nobody, single node) and `TestReadOnlyJob` (the allowed and refused paths, direct and through the proxy).
-
-### Not verified
-- Not run on a real cluster: the relay of a job to a second node, and the polling of its result through it, were not exercised end to end (the sandbox has one node). The choice of node is tested on node lists, not on a live cluster.
-
-## [v134] - 2026-11-11 — nmap scans accept a host name; ping options, port, TLS, ARP and Wake-on-LAN tools, dig without dig
-
-### Fixed
-- `net_scan` (and `POST /api/scan`, `--scan`) refused a host name such as `ns1.cush.local` ("not an IP address"). The scan takes an address or a host name now; the name is checked label by label (no spaces, no leading `-`, not a range) and nmap looks it up on the node that runs the scan, so it uses that node's DNS. Addresses are checked as before. The job is remembered under the lower-case name.
-
-### Added
-All of these are used with a `gateway` argument as the other `net_*` tools are, run on a node that serves the gateway, and are not offered to a key limited to some devices.
-- **`net_ping` options** `count` (1 to 20, default 4), `size` (payload 8 to 65500) and `df` (don't fragment, `-M do`): find a path's MTU for VPN and tunnel problems (the largest size that passes is the path MTU less 28 bytes, 48 for IPv6). The time allowed grows with the count. A job with options is its own job, not the plain one.
-- **IPv6 / IPv4 choice** `family` (4 or 6) for `net_ping`, `net_mtr`, `net_port` and `net_tls`: a name is looked up for that family only, an address of the other family is refused. A ping to a name now begins with `name → address (IPv4|IPv6)` so the family used is visible.
-- **`net_port`** (`GET /api/portcheck`): TCP connect to up to ten ports, each open, closed (refused) or filtered (no answer in 4 s), with the connect time. Written in Go, no program needed.
-- **`net_tls`** (`GET /api/tlscheck`): TLS handshake with a host and port (optional `sni`): protocol, cipher, ALPN, the chain with subject, issuer, valid from/to, days left, names, key and signature, whether this node's roots trust it for the name (`trusted`, `verify_error`), and a `warning` when it has expired or expires within 30 days. Any certificate is accepted for the look. Go, no program.
-- **`net_arp`** (`GET /api/arp`): the MAC the node has for an IP on its own segment, with the interface and subnet (IPv4 from `/proc/net/arp`, IPv6 from `ip -6 neigh`). An address on a subnet of the node that is not in the table is asked for with one UDP datagram first; an address on another segment is reported as not on a segment of the node.
-- **`net_wake`** (`POST /api/wake`): a Wake-on-LAN magic packet (UDP port 9) to 255.255.255.255 or a given IPv4 broadcast address. It powers a machine on, so unlike the others it is a write tool: a read-only key is refused, and a read-only GUI account cannot POST it.
-- **dig without dig**: when `dig` is not installed, `net_dig` answers an address's name (reverse DNS, PTR) and A, AAAA, MX, NS, TXT, CNAME with the node's resolver (or the given server on port 53), marked with a note; the other types still need dig.
-- Routes `/api/portcheck`, `/api/tlscheck`, `/api/arp`, `/api/wake` are relayable to another node; `POST /api/wake` joins `/api/nettool` and `/api/scan` in the MCP write guard.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-- Tests: a scan of `NS1.cush.local.` with a stand-in `nmap` receives `-- ns1.cush.local`; ping's exact arguments for count, size, df and family (stand-in `ping`, through the MCP tool and the node's API); every bad count, size, family, port, SNI, IP, MAC and broadcast value is refused; the port check against a real listener (open) and a closed port; the TLS check against a Go TLS test server (TLS 1.3, not trusted, no warning) and a plain-text port (handshake error); `net_wake` refused for a read-only key; reverse DNS through the resolver with no `dig` on the PATH.
-
-### Not verified
-- Never run with the real `ping` options (`-M do`, `-s`), `mtr`, `nmap`, `dig` or `curl`, nor across a cluster. Not sent: a Wake-on-LAN packet to a real machine (the sandbox has no peer; only the argument checks and a built packet are covered), and an ARP lookup that finds a neighbour (the sandbox's table is empty) or the IPv6 neighbour read (`ip -6 neigh`, no IPv6 in the sandbox). A TLS chain with an intermediate, and the expiry warning, were not exercised. The GUI has no pages for these tools.
-
-## [v133] - 2026-11-11 — A "tools" device: ping, mtr, dig, curl, whois and nmap for the assistant
-
-### Added
-- **Platform `tools`** (`device/tools.go`): one device, no address and no login (Devices ▸ Add ▸ *Network tools*). Adding it to a gateway's devices enables the network tools for that gateway. Its health shows which of `ping`, `mtr`, `nmap`, `dig`, `curl` are installed on the node.
-- **MCP tools `net_ping`, `net_mtr`, `net_dig`, `net_curl`, `net_whois`, `net_scan`** (`mcpnettools.go`) with a `gateway` argument (label or number): "scan 10.1.1.1 from paris" is `net_scan` with `host` and `gateway` `paris`. The job runs on a netdir node that serves that gateway (this node when it does, otherwise a peer through the cluster relay). `gateway` may be left out when only one gateway has the tools; a gateway without the device is an error that names the ones that have it. Ping 15 s, mtr up to 2 min, nmap up to 2.5 min; a longer job is returned as running with a note.
-- **All six work with a read-only key** (none changes configuration) and none is offered to a key limited to some devices. `POST /api/nettool` and `POST /api/scan` are let through for in-process (MCP and relayed) read-only requests only; a read-only GUI user is still refused every POST.
-- **dig** (`dig.go`, `GET /api/dig`): one query with `+time=3 +tries=1`, no shell; name checked label by label (or an address, asked with `-x`); type one of A, AAAA, MX, NS, TXT, CNAME, SOA, PTR, SRV, CAA, DS, DNSKEY, NAPTR, TLSA, SPF (not ANY); optional DNS server address; output cut at 8 KB.
-- **curl** (`curl.go`, `GET /api/curl`): http/https only, no user info in the URL, HEAD (default) or GET, optional follow (at most 3 redirects) and optional skip of certificate checks; 15 s, 1 MB, output cut at 16 KB, timings appended. No shell.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-- `TestMCPNetTools*`: read-only and read-write keys are offered all six, a limited key none; refused hosts, names, types, servers and URLs never reach a program; gateway resolution (only one, none, wrong one); with stand-in programs first in PATH the exact arguments passed to `dig` and `curl` are asserted and a public address in the answer is masked.
-
-### Not verified
-- Not run with the real `ping`, `mtr`, `nmap`, `dig` or `curl` (none installed in the sandbox; only stand-ins), not across a real cluster (the gateway-to-node mapping and the relay of the POSTs), and the GUI was not opened in a browser. dig and curl have no GUI; the Network tools page is unchanged.
-
-## [v132] - 2026-11-10 — Active Directory lookups under Ask
-
-### Changed
-- On an Active Directory device the right-click menu has **Ask ▸ Look up user / Look up computer / Look up group** (they were beside Ask), and **Troubleshoot user or host** is gone from that device's menu. The troubleshooting itself is unchanged (it still adds the directory record when an Active Directory device exists; it is started from the Entra or Panorama device, the CLI, or MCP).
-
-### Verified
-- `node --check webui/app.js` and `help.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-
-### Not verified
-- Not opened in a browser.
-
-## [v131] - 2026-11-10 — Active Directory fills in port 636; the port hint is gone
-
-### Changed
-- Picking **Active Directory** in the device form fills the port with 636 (LDAPS), as the other platforms fill theirs; a port typed by hand is kept, and 636 is the default so it is not written to the configuration.
-- The line under the Port field ("Default 443 (Proxmox VE 8006).") is removed; the defaults are in `webui/help.js`.
-
-### Verified
-- `node --check webui/app.js`, `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-
-### Not verified
-- Not opened in a browser. With the option `starttls=true` the driver uses 389 when no port is written, so a StartTLS device must have its port set to 389 by hand (the form fills 636 for the platform).
-
-## [v130] - 2026-11-10 — Active Directory in tshoot, and searches for accounts that need a look
-
-### Added
-- **tshoot adds the Active Directory account.** With an `ad` device in the inventory, `tshoot user` (and `device_troubleshoot_user`) adds `directory`: the account the name matches (sign-in name, mail address or display name; the account name Entra gave is tried when the name as typed finds nothing; up to 3, best match first) with enabled, locked out, when the password last changed, last sign-in, groups, manager, title. `tshoot host` adds the computer account (DNS name, operating system, last sign-in, manager). `directory_device` names the device. No device is not an error and adds no note; no match is a note; `ad=NAME` (MCP `ad`, GUI right-click ▸ Troubleshoot user or host on an Active Directory device) picks one when there are several, and a name that is not there is an error. It reports the account, not where the user is signed in: the directory does not hold that.
-- **Active Directory searches** (Show on an `ad` device): `show locked` (users with a lockout time; one older than the lockout duration has expired), `show disabled` (disabled users that are still members of groups), `show stale users|computers [DAYS]` (enabled accounts with no sign-in for DAYS days, 1 to 3650, default 90, or never, created before that). Up to 50 lines, the longest without a sign-in first, and a line when there are more. The LDAP filter got `not`, `>=`, `<=` and the bit-and matching rule for this.
-- `device.DirectoryLooker` (`DirUsers`, `DirComputers`) is the interface the troubleshooting asks.
-
-### Changed
-- Skipping the LDAPS certificate check needed nothing new: an Active Directory device takes the same **Certificate: skip check** (`insecure`) or CA PEM as every device; README says so under the driver.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`; `node --check` on `app.js` and `help.js`.
-- `TestADLookups` (the test directory now evaluates `not`, `>=`, `<=` and bit-and): `show locked`, `show disabled` (one without groups is not listed), `show stale computers` and `users 30` (an old account is listed; a recent, a disabled and a brand-new one are not), refused day counts, and the records `DirUsers` and `DirComputers` give.
-- `TestTroubleshootWithActiveDirectory`: no `ad` device means no `directory`; with one, a user's record (disabled, locked out, groups) and a host's computer record are added next to Entra and Meraki, which are still asked; a named device that does not exist is an error.
-
-### Not verified
-- Not run against a real domain controller: the bit-and rule and the time filters follow Active Directory's documentation but only the test directory has answered them. `lastLogonTimestamp` is replicated every 9 to 14 days, so "stale" means at least that long; accounts are not checked against the lockout duration. A search that matches more than the controller's size limit is cut and says so; the order inside a cut result is the controller's.
-- GUI: the new menu item was not opened in a browser.
-
-## [v129] - 2026-11-10 — Active Directory device: look up users, computers and groups
-
-### Added
-- **Platform `ad` (Microsoft Active Directory)**, `device/ad.go`, standard library only (a small LDAP client: BER from `snmp.go`, RFC 4511). The device is a domain controller; the login is `user@domain`, `DOMAIN\user` or a DN with its password. Always TLS: LDAPS on 636, or StartTLS on 389 with the option `starttls=true`; there is no clear-text bind, and a login without a password is refused (no anonymous bind). Certificate as for every device (skip check or CA PEM). Option `base` is the search base, by default the controller's `defaultNamingContext`.
-- **Show:** `show user NAME`, `show computer NAME`, `show group NAME` (up to 10, in detail; exact match first), `show users NAME` and `show computers NAME` (up to 50, one line each), `show domain`. NAME is a sign-in name (`jsmith`, `CORP\jsmith`, `jsmith@corp.example.com`), a mail address, a display name or a computer name or DNS name, or the start of one. The answer is plain text. A user: name, account, sign-in name, mail, enabled, locked out, title, department, company, office, phone, manager, employee ID, when the password was last changed (labelled "Sign-in changed", because the secret-word filter hides any line that says "password"), whether it never expires, last sign-in, bad sign-ins, expiry, groups. A computer: DNS name, enabled, operating system, last sign-in, location, manager, groups. A group: members (count and the first 30). Facts are the controller's DNS name and the domain level.
-- GUI: right-click an Active Directory device ▸ **Look up user**, **Look up computer**, **Look up group** (a name box; the answer is the text popup). The platform is named "Active Directory". README, `webui/help.js` and `main.go` usage updated.
-- It is also the answer to every device read tool (`device_show` with the commands above, `device_facts`).
-
-### Security
-- The filter is built as a structure (BER: equality, prefix, and, or), never as text, so a name cannot add to it; names are also limited to letters, digits and a few punctuation marks (no `*`, `(`-filters, `|`, `;`).
-- Only a fixed list of attributes is asked for. Passwords and hashes (`unicodePwd`, `userPassword`), LAPS (`ms-Mcs-AdmPwd`, `msLAPS-*`), security descriptors and SIDs are not on it, so the controller cannot return them; the test checks that no search asks for one. Show output also goes through the usual secret filter, and over MCP the usual masking (a mail address shows its name part only).
-- Nothing is changed: `device_change_raw` on an Active Directory device is refused.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`; `node --check` on `app.js` and `help.js`.
-- `TestADLookups` (against an LDAP directory written from RFC 4511 over TLS, that evaluates the filters it receives; once with LDAPS and once with StartTLS): facts; a user with its groups and manager, an exact match before a prefix match, `DOMAIN\name`, a disabled and locked-out user, the list form, a computer by DNS name and by account name, a group and its members, `show domain`, no match, names that are refused do not reach the directory, no secret attribute is asked for and none is shown, one bind per driver, a change is refused. `TestADLogin`: no password is refused, a wrong one is a clean error without the password, and a directory that does not speak TLS gets no password.
-
-### Not verified
-- Not run against a real domain controller: the LDAP messages follow RFC 4511 and the attribute names are Active Directory's schema, but only the test directory has answered. Paged results are not used: a search is cut at the controller's or the driver's limit (the answer says there are more matches). Referrals to other domains are not followed, so a user of a child domain is found only when its domain controller is added as a device.
-- "Last sign-in" is `lastLogonTimestamp`, which Active Directory replicates only every 9 to 14 days; "locked out" is the lockout time being set, not checked against the lockout duration. Nested group membership is not expanded.
-- `tshoot` does not use it: Active Directory has no record of which computer a user is on, so it is a lookup device only.
-- GUI: the menu items and the form were not opened in a browser.
-
-## [v128] - 2026-11-10 — Right-click ▸ Ask shows text, not JSON
-
-### Changed
-- The answers of a device's right-click **Ask** menu (and the text card of Monitor ▸ Devices) that came as JSON are now plain text: **Ports**, **Routes** and **VLANs** are aligned tables like Interfaces and Neighbors already were; **LLDP and CDP details**, **Routing protocols**, **Firewall**, **API catalog** and the troubleshooting answer are laid out by one function (`plainText` in `webui/app.js`): a list of records is a table with a header, a record is `Name  value` lines, a nested part is indented, empty values are left out. **Configuration** and **Show** were text already. Copy and Download give the same text.
-
-### Verified
-- `node --check webui/app.js`; `plainText` run in node on a list of records, a nested record and an empty list; `gofmt -l .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-
-### Not verified
-- Not opened in a browser (light or dark) and no jsdom run of the popup; no real device answer was formatted, only made-up ones, so a platform whose answer is deeply nested may still read long. Nothing else in the GUI changed.
-
-## [v127] - 2026-11-10 — device_facts from the health monitor
-
-### Added
-- **A facts read can come from the health monitor.** The monitor already asks every device for its facts in the background (every 5 minutes while someone is looking). When an MCP caller asks `device_facts` and the monitor's copy is at most 5 minutes old and good, that copy is the answer: no login, no request, instant. The result says `"from_monitor": true` and `"cached_s"` (the age), and the uptime is advanced by the age. A copy that is older, a facts request that failed last time, a device that is down or paused, and a device the monitor has not asked yet are asked live, as before. `fresh: true` asks the device, as for every read; the GUI always asks the device; `NETDIR_DEVICE_CACHE=0` switches it off. On a replica the primary's copy is used.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -race -count=1 ./...`, no-cgo suite, `sh tools/leaktest.sh`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`.
-- `TestFactsFromMonitor`: a recent good copy is the answer, with the uptime advanced and the monitor's own copy untouched; an old copy, a failed facts request, a down or paused device, a device never asked and no data at all are not.
-
-### Not verified
-- Not run against real devices, and the monitor's timing was not watched live; a facts read of a device the monitor does not watch (idle for hours) is asked live, since its copy can be six hours old.
-- Only the unit test covers the route: the HTTP path was not driven with a seeded monitor.
-- GUI: nothing changed; not opened.
-
-## [v126] - 2026-11-10 — Short memory for repeated reads and for tshoot's lookups
-
-### Added
-- **Repeated reads come from memory.** An MCP caller that asks a device the same read again within 30 seconds gets the first answer again, with `"cached_s": N` (its age in seconds) on that device's result and no time spent (`answercache.go`, `device/cache.go`). The key is the device with its login, the question (op and path) and the caller's privilege (read-only or not), so another login, another path or a read-only key never shares an answer. Only what holds no secret and is no search is kept: `facts`, `interfaces`, `neighbors`, `neighbor_details`, `ports`, `routes`, `routing`, `firewall`, `resources`, `vlans`, `api_catalog` and `api` paths that do not name a log, a job or a capture. Never kept: `config` and `show` (secrets, and a CLI command may be anything), log searches, changes, a failed answer, a caller whose privacy level is none, and the GUI (it always asks the device). A device below a Network Director is not kept either.
-- Every read tool has `fresh` (true: ask the devices again, nothing from memory); the HTTP route takes `fresh=1`.
-- **tshoot: the Meraki network list is kept 5 minutes,** so a second run does not list the networks again.
-- **tshoot: where a machine was found is kept 30 minutes.** A repeat for the same host name, MAC or account asks the networks it was found in first; when it is found there, only those were searched and the answer's `notes` say so (`searched the N network(s) it was seen in M minutes ago, not all K`), and `networks_searched` is the number asked. When it is not found there, every network is asked as before. A search with a named network never uses it.
-- **tshoot: the Entra lookups are kept 90 seconds:** who a user is and the devices of the user, and a device name and its users. A failed lookup is not kept.
-- The configuration being loaded empties all of it (a login or a device may have changed). `NETDIR_DEVICE_CACHE=0` in the daemon's environment switches it all off. What is returned from memory is a copy: a caller that changes an answer does not change the kept one.
-
-### Changed
-- `TestDeviceReadsShareOneSignIn` reads with `fresh`, or the second read would be from memory instead of over the kept driver.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64`, `sh tools/leaktest.sh`.
-- `TestDeviceAnswerCache`: the first read asks the stub, the repeat does not and says `cached_s`, `fresh` asks again; which operations may be kept (a configuration, `show`, a log path and a job are not) and that the GUI, a raw caller and a fresh read never are.
-- `TestEntraLookupsAreKept`: the repeat does not reach Graph, a caller's change to an answer does not reach the kept one, a flush asks again, a refused name is not kept.
-- `TestMerakiClientMemory`: the list of networks is read once; the repeat of a search asks only the network the client was found in and says so; a wrong memory (the machine is no longer there) falls back to every network without claiming less; a named network ignores the memory.
-
-### Not verified
-- Not run against real devices; no time was measured. Lifetimes (30 s, 90 s, 5 min, 30 min) are guesses at what is safe: a read can be up to 30 seconds old, and a client that moved to another network within 30 minutes is not found by the short search when it is also still seen where it was (the first network answers, the others are not asked): ask with `fresh`-style certainty by naming no network and changing the host spelling, or switch the cache off. A machine that connects to two networks at once is reported only where it was found before.
-- GUI: nothing changed; not opened.
-
-## [v125] - 2026-11-10 — Reads keep their login; tshoot gets the Wi-Fi
-
-### Added
-- **Reads reuse the driver.** A read of a device used to cost a TLS handshake and, on most platforms, a login before the question and a logout after it. The driver a read used (its connections and its session or token) is now kept for the next read of the same device (`device/pool.go`, `FanoutReuse`): for two minutes without use and never longer than ten minutes, one request at a time per driver (two reads at once use two), at most two idle per device and 512 in all. Every `device_*` read (`/api/devices/query`) and `tshoot` use it. What the device answers is asked anew each time: nothing a device said is kept (the PAN-OS and Observium drivers, which remembered something for the length of a request, forget it before they are used again).
-- An answer that came over a kept driver says `"reused": true`.
-- A kept driver whose session the device has ended (401, 403) or whose connection has gone fails the first read it is used for; that read is then made once more with a new driver, so the caller sees no error. A driver that failed in any way is closed, not kept.
-- Changes (`device_change`, `device_change_raw`), captures and the health check do not use it: each has a driver and a login of its own, as before.
-- The kept drivers are closed, and their sessions logged out, when the configuration is loaded (a device or login may have changed; the key of a kept driver is everything it was opened with, the login included) and when the daemon stops.
-- `NETDIR_DEVICE_REUSE=0` in the daemon's environment switches it off.
-- **tshoot: the Wi-Fi.** A wireless client's `connection` now starts with `now` (SSID, AP, VLAN, address, the newest RSSI in dBm and SNR in dB) and has `signal_quality`, `data_rate` and `latency_history` over the window (only the intervals that have a value), beside the connection statistics, latency, connectivity events and failed connections it had.
-- **tshoot user: the clients that signed in with the account.** Besides the machines Entra and the VPN log name, every Meraki client that signed in to the network as the user (802.1X; `CORP\jsmith`, `jsmith@…` and `jsmith` are one) is reported, as one more entry of `devices` with `found_by`: a phone on the Wi-Fi has a host name no directory knows. Their addresses go into the firewall log search too.
-
-### Fixed
-- tshoot searched only the first 60 Meraki networks, one after the other, and one network the dashboard failed on (a 502) ended the whole search with an error. It now asks every network that has an AP, a switch or an appliance (at most 400; camera, sensor and systems manager networks are skipped), five at a time, and a network that fails is named in `notes` while the others answer. In an organization with more than 60 networks a client beyond the first 60 was reported as not seen, and with it its Wi-Fi.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `sh tools/leaktest.sh`.
-- The pool (`device/pool_test.go`, with the race detector): three reads are one login and no logout; a change has a driver of its own; another password or address is another driver; the idle time and the age limit, also for a driver in steady use; a 401 on a kept driver is asked again and the caller gets the answer, a 404 is the answer and the driver is closed; 40 reads at once never share a driver, none is lost, at most two stay; a driver that panics is closed; switched off, nothing is kept.
-- `TestDeviceReadsShareOneSignIn`: against the Entra and Meraki stubs four troubleshootings and four MCP reads make one sign-in to Entra, the second MCP read says `reused`, and after the configuration is saved nothing is kept and the next read signs in again.
-- `TestMerakiClientReport`: the signal history without its empty intervals, `now` with the newest reading, the data rate, a history the dashboard does not have said as unavailable; the camera network is not asked; the network that answers 502 is named and the others are searched; by the account (`CORP\jsmith`) the phone is found, and the laptop is left out when it is reported under its name. The troubleshooting tests have the phone as a third entry with its signal.
-
-### Not verified
-- No speed was measured: there is no real device in the sandbox. What is saved per read is one TLS handshake and one login (and a logout), which on a switch or a firewall is usually most of a short read; the tests count logins, not milliseconds.
-- Not run against real devices. The risk of keeping sessions is on platforms that limit them (ArubaOS-CX allows a few sessions per user): netdir now holds up to two sessions per device for up to two idle minutes where it held one for the length of a read; the health check's own login comes on top, as before. If a platform objects, `NETDIR_DEVICE_REUSE=0` restores the old way.
-- The connections of a kept driver still close after 30 seconds without use (unchanged), so a read after a longer pause saves the login but not the handshake.
-- The Wi-Fi history paths (`/networks/{id}/wireless/signalQualityHistory`, `dataRateHistory`, `latencyHistory` with `clientId`, `timespan`, `autoResolution`) and the `user` and `productTypes` fields are Meraki's dashboard API as documented, seen only in the stub, like the rest of the client report. A part the dashboard refuses is shown as `unavailable` with its reason.
-- Why the Wi-Fi was missing on your gateway was not seen (no access to that answer): the network limit and the single failing network are the two causes found in the code. If it is still missing, the `notes` and the `network` part of the answer say what was searched and found.
-- GUI: nothing changed; not opened.
-
-## [v124] - 2026-11-10 — tshoot user and tshoot host, with the firewall's logs; troubleshoot is tshoot
-
-### Added
-- `netdir tshoot host NAME [HOURS]` (`--troubleshoot-host NAME`, `GET /api/devices/troubleshoot?host=NAME`, `device_troubleshoot_user` with `host`): start from a machine. The VPN (GlobalProtect) log of the Panorama says which user last connected with it and from where, Entra says which users are registered on a device of that name; the answer's `last_user` is the newest VPN event's user, or the user registered on the Entra device when the log has none. The machine is then followed like a user's.
-- `netdir tshoot user NAME [HOURS]` now also asks the firewall: the VPN log is searched for the account (`(srcuser contains 'msmith')`), which names the machine the user connected with and its addresses, so a user who is only on the VPN is found too and a machine Entra does not list is followed (at most 3 machines).
-- Both add `firewall`: the newest 50 traffic and 20 threat log entries for the addresses found (the VPN address and the address the Meraki client had, at most 4; `(addr in 10.1.2.3) or …`), and `vpn`: the query, the newest event as `last` and the newest 20 events.
-- `troubleshoot` is the same word as `tshoot`: `netdir troubleshoot user msmith`, `netdir troubleshoot host PC-123 12`. `tshoot NAME` without `user` is still a user.
-- `panorama=NAME` (MCP: `panorama`) picks the device whose logs are searched when there are several; without it the Panorama of the inventory is used, else the one PAN-OS firewall.
-- GUI: the form has a **Host** box beside **User** (one of the two), and the menu item, now **Troubleshoot user or host**, is also on a Panorama and a PAN-OS firewall.
-- Drivers: `LogSearch` on PAN-OS (the log search of v121 as a list of entries) and `DeviceUsers` on Entra (`/devices?$filter=displayName eq '…'`, then each device's `registeredUsers` and `registeredOwners`).
-
-### Changed
-- None of the three systems is required any more. Each is asked when it is in the inventory and enabled; one that is missing, or fails, is left out and `notes` says why. A user with no Entra device in the inventory is an error only when there is no Panorama or firewall to ask instead. A system that is named (`entra=`, `panorama=`) and cannot be used is still an error.
-- The answer keeps its shape (`user`, `devices` with `entra` and `network`, `notes`, `window_hours`) and gains `name` on each device, `host`, `last_user`, `vpn`, `firewall` and `panorama_device`. A user without devices in Entra no longer ends the lookup: the VPN log may still name a machine.
-- The names that go into a log filter are checked first (letters, digits and `. _ -`): a host with a quote or a bracket is refused, and a user typed as a name with spaces or an object ID is searched in the logs by the account name Entra gave.
-- `hours` bounds the Meraki part as before. The log entries are the newest ones whatever their age: the firewall's clock and time zone are its own, so no time is put into the filter.
-- Usage text, the MCP tool's description, the help and the README say all this.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `app.js` and `help.js`, `sh tools/leaktest.sh`.
-- The tests of v123 for the user lookup pass unchanged (same answers without a Panorama).
-- New tests against one stub that is Entra, Meraki and a Panorama: `TestTroubleshootUserWithFirewallLogs` (the three searches the firewall got, the machine of the VPN log joined with the Entra device by name, a second machine only the VPN log knows, the addresses and the traffic entry), `TestTroubleshootHost` (last user from the VPN log; from Entra's registered users without a Panorama; an unknown host is an answer with notes; a user and a host together, a quote, a space, a filter typed as a host, a wrong `panorama=` are refused), `TestTroubleshootHostOverMCPReadOnly` (a read-only caller gets it, the public address of the VPN event is hidden), `TestTroubleshootNames`, more cases in `TestShortCommand`; in the drivers `TestEntraDeviceUsers` and `LogSearch` in `TestPANOSLogSearch`.
-- Live CLI against a real daemon with a Panorama that refuses the connection: `netdir troubleshoot host pc-1`, `netdir tshoot user msmith 3` and `netdir tshoot msmith` answer with the query, the error of the search and the notes; a host with a quote is refused; the audit line is logged for each.
-
-### Not verified
-- Not run against a real Panorama, Entra or Meraki. The filters rest on PAN-OS's log field names as documented, not on a device: `srcuser` and `machinename` with `contains` in the GlobalProtect log, `addr in` in the traffic and threat logs, and `private_ip` as the VPN address of an entry. If your Panorama names one differently the search answers an error or nothing, `vpn.query` and `firewall.query` in the answer show exactly what was asked, and `device_api_get` with `type=log` takes any filter by hand.
-- Entra: reading `/devices` and a device's registered users needs the application to be allowed to read devices and users (it already reads a user's devices; whether your registration covers this direction was not tried). A refusal is shown on the device as `registered_users_error`.
-- `contains` matches part of a name: `joe` also finds `joey`. The account name is used whole, but a short one can match others; the events show the names found.
-- The GUI form and menu were not opened in a browser (`node --check` only).
-- Log entries name users and machines; masking for MCP callers is as for every answer (addresses, serial numbers; not names).
-
-## [v123] - 2026-11-10 — Privacy: an e-mail address is shown by its name only
-
-### Changed
-- An e-mail address in an answer to an MCP caller is now the name before the `@` and nothing else: `jo.doe@example.com` is `jo.doe`. v122 wrote `jo.doe@MASKED-EMAIL-3fa91c`; the `@` and the token are gone. Nothing of the domain is shown and nothing stands in for it.
-- So an answer no longer says that a name was an e-mail address, or which addresses share a domain. The `MASKED-EMAIL` token is no longer made.
-- **E-mail addresses** on Configure ▸ Privacy, its default (on for standard and strict) and the setting are unchanged; with the box off an address is shown whole.
-- The tool instructions an MCP caller reads, the help (MCP) and the README say so.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `help.js`.
-- Test `TestMaskEmailShowsOnlyTheName` (it replaces v122's): three addresses in a sentence become their names as written, the text around them is untouched, and masking the result again changes nothing.
-- `sh tools/leaktest.sh` passes: no whole e-mail address of the drivers' test data gets through the strict level.
-
-### Not verified
-- The name before the `@` reaches the caller by design; a name that is itself sensitive is shown unless it is a word of yours on Configure ▸ Privacy.
-- A domain that appears on its own in an answer (a host name, a DNS zone) is not hidden by this box, as before.
-- Not looked at through a live MCP caller.
-
-## [v122] - 2026-11-10 — Privacy: an e-mail address keeps its name, only the domain is hidden
-
-### Changed
-- An e-mail address in an answer to an MCP caller is no longer replaced whole. The name before the `@` stays and the domain becomes the token: `jo.doe@example.com` is now `jo.doe@MASKED-EMAIL-3fa91c` (was `MASKED-EMAIL-3fa91c`). So an assistant can tell users apart and name them, without learning whose domain it is.
-- The token is made from the domain alone (lower case), so every address of one domain carries the same token and another domain another. As before it is a keyed hash that changes at a restart and between nodes and cannot be turned back.
-- This is what **E-mail addresses** on Configure ▸ Privacy does at both levels; the box, its default (on for standard and strict) and the setting are unchanged. With the box off an address is shown whole, as before.
-- The tool instructions an MCP caller reads, the help (MCP) and the README say so.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `help.js`.
-- New test `TestMaskEmailHidesOnlyTheDomain`: the name is kept as written (with its capitals, dots and `+tag`), two addresses of one domain get one token whatever the case of the domain, another domain another token, no part of a domain is left, and masking the result again changes nothing.
-- `sh tools/leaktest.sh` passes: no whole e-mail address of the drivers' test data gets through the strict level.
-
-### Not verified
-- The name before the `@` now reaches the caller by design. The leak test looks for whole addresses (name, `@`, domain), so it says nothing about names; a name that is itself sensitive (a person's full name) is shown. A word of yours on Configure ▸ Privacy still hides it.
-- A domain that also appears on its own in an answer (a host name, a DNS zone) is not hidden by this box: that was so before and is unchanged.
-- Not looked at through a live MCP caller; the change is one function in `mcpmask.go`.
-
-## [v121] - 2026-11-10 — PAN-OS and Panorama: search the logs
-
-### Added
-- `device_api_get` (the `api` read of a device, `op=api`) reads the logs of a PAN-OS firewall or a Panorama: `/api/?type=log&log-type=globalprotect&nlogs=50&query=(machinename%20eq%20'PC-1')`. Until now the driver took only `type=op` (show commands) and `type=config`, so an assistant asked "when did this machine last connect" had to answer that it could not search the logs.
-- Parameters: `log-type` (traffic, threat, url, wildfire, data, config, system, hipmatch, globalprotect, userid, auth, tunnel, decryption, gtp, sctp, iptag, corr, corr-detail, corr-categ), `query` (the filter of the Monitor tab, one line, at most 2000 characters), `nlogs` (1 to 5000; PAN-OS gives 20 when it is left out), `skip` and `dir` (backward, the default, or forward). Anything else is refused before the device is asked.
-- PAN-OS answers a log search with a job. The driver starts it, reads it until it has finished (every half second, for at most 90 seconds) and removes it, so the caller makes one read and gets the entries; nothing matched is an empty list. The job requests (`action=get`, `action=finish`, `job-id`) are not taken from a caller.
-- Over MCP every log type is read but `config`: the entries of the configuration log carry the changed configuration, secrets included.
-- `device_api_catalog` explains the log search and gives an example for a firewall and for a Panorama; the tool description of `device_api_get`, the README and the help say so too.
-
-### Changed
-- The admin's XML API role needs **Log** as well as Operational Requests and Configuration for this. Without it PAN-OS refuses the search and that refusal is the answer; show commands and configuration reads work as before.
-- "Only GET is ever sent" still holds: the three requests of a search are GETs. The removal of the job is the one request that is not a pure read; it removes only the job the search itself made.
-
-### Fixed
-- `sh tools/leaktest.sh` failed before it checked anything: `TestUnimusFallsBackToV2` asked the driver for its own type, which under the leak test is the recording wrapper (it failed the same way in v116). The test now asks through `bareDriver`.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub).
-- New tests against the TLS stub of the XML API (`TestPANOSLogSearch`, `TestPANOSLogSearchGivesUp`): the search reaches the device with the query decoded, the job is read until `FIN` and then removed, the entries come back; an empty result; a refusal by the device; fifteen paths that are refused without a request (no or unknown log type, bad numbers, the job requests, a key, a second log type, a control character, `type=report`, `type=export`); a job that never finishes gives "did not finish in time" and is still removed; the MCP gate allows the log types and refuses `config` and the job requests.
-- `sh tools/leaktest.sh`: passes (1265 recorded answers, 31 platforms), with the log entries of the new test (addresses, a serial number) among them.
-
-### Not verified
-- Not run against a real firewall or Panorama. The requests and the shape of the answers (`<job>`, `<job><status>FIN`, `<log><logs><entry>`) are PAN-OS's documented XML API as only seen in the stub; the field names of a GlobalProtect entry in the test are examples.
-- A Panorama searches the logs it holds (its log collectors); logs kept only on a firewall are asked of that firewall.
-- Log entries name users and machines. The strict privacy level hides addresses, serial numbers and the like in them as in every answer (the leak test covers those); user and machine names are not something the leak test looks for.
-- GUI unchanged apart from one sentence in the help; not opened in a browser.
-
-## [v120] - 2026-11-10 — Download as CSV on Monitor ▸ MCP and Monitor ▸ Node; MCP first in the Monitor menu
-
-### Added
-- Monitor ▸ Node: the small download icon of the DNS Director in the corner of each chart (CPU, Memory, Disk, Network utilization), the Filesystems table, the Network interfaces table and the LLDP neighbors card. It saves that card's numbers as a CSV file (`netdir-<card>.csv`), built in the browser from what the page holds. A chart gives one row per sample for the picked range, times in UTC, with the busiest sample of each interval beside the average for CPU, disk I/O and network; a gap is an empty cell.
-- Monitor ▸ MCP: the same icon on Calls per hour, Data returned per hour, By key, By source address, By tool, By device and Newest calls, for the picked time range. Sizes are in bytes and times in UTC. A table with no calls has no icon. The tiles have none: they are the totals of the tables.
-- A text cell that starts with `=`, `+`, `-` or `@` is written with a leading apostrophe, so a key or device name cannot be read as a formula by a spreadsheet (as in the DNS Director).
-- Help (Monitor ▸ Node, Monitor ▸ MCP): a "Download as CSV" paragraph each.
-
-### Changed
-- The Monitor menu starts MCP, Node, Devices; the rest is as it was (Gateways, Cluster, Anycast, Alerts, Capture, Log).
-- Monitor ▸ Devices has no download: the page asks devices questions and shows their answers as text, and an answer already has its own Download button.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `app.js` and `help.js`.
-- Headless Chromium against a real daemon with a real PAM login, light and dark: the menu order; on Node the six icons shown (no LLDP on the sandbox) and the CPU, Network, Filesystems and Network interfaces files downloaded and read (headers, one row per sample, empty cells for the gap before the daemon started); on MCP the two chart files. No script errors.
-- The MCP tables with calls in them: the same page with `/api/mcpusage` answered by sample data (the sandbox has no MCP caller): all seven icons, and By key, By device, Newest calls and Calls per hour downloaded and read, including a key named `=claude, "desk"` (written `'=claude, ""desk""` in quotes).
-
-### Not verified
-- The LLDP neighbors download (no lldpd in the sandbox; the code is the DNS Director's). The cluster view of Monitor ▸ Node. Opening the files in Excel or LibreOffice.
-
-## [v119] - 2026-11-10 — A BGP neighbor's address can be changed
+- Configure ▸ Backup ▸ Servers ▸ **Use the cluster nodes** (shown in a cluster) and `ntpdir --backup-cluster` (`POST /api/backup/cluster`), as in MCP Network Director v118. One press replaces doing this by hand on every node: each node makes itself a local account `ntpdirbackup` (no password, key only), a directory `backups` in its home, and an `authorized_keys` with the backup keys of all the nodes; every node is then added to the shared list of servers. No password is typed or kept.
+- The keys are added as `restrict,command="internal-sftp"`: file transfer only, no shell command. The account has a real shell (`/bin/sh`) because many SSH servers start SFTP through the account's shell.
+- It can be pressed again: what is already there is left alone. A node that does not answer is named in red beside the button (and by the CLI, which then exits 1).
+- `POST /api/backup/provision` is what a node sends the others (the keys to authorize), through the cluster's signed relay; refused for read-only users like every other change.
+- Help (Configure ▸ Backup): a step-by-step for it. Usage text: `--backup-cluster`.
 
 ### Changed
 - Configure ▸ Anycast ▸ Neighbors: the address of a neighbor can be changed after it is added. The first column of a row is now a box like the others: type the new address and leave it. Until now the address was plain text and the only way was to remove the neighbor and add it again.
 - The neighbor stays the same neighbor: its AS, description, password and multihop are kept, and one that was switched off stays off. The page sends the old address along (`was`) with `PUT /api/bgp`; it is used to carry the on/off state over and is never saved. A bad address or one another neighbor already has is refused and the old one comes back.
 - Help (Configure ▸ Anycast) says so. From the command line the way is unchanged: remove the neighbor and add it with the new address.
 
+### Fixed
+- Configure ▸ Backup ▸ Servers ▸ Install key: clicking the eye beside the password made the box narrower. Its width was set by a rule for `input[type=password]` only, and the eye turns the box into `type=text`. Test `TestPasswordBoxKeepsItsSizeWhenRevealed` fails for any such rule.
+
 ### Verified
 - `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `app.js` and `help.js`.
+- New tests (`backupcluster_test.go`): the account is made once, the keys are written once with the SFTP-only options, modes 700/600, a second run changes nothing, uid 0 is refused, a linked `.ssh` is not followed, no cluster is an error.
 - New test `TestBGPNeighborAddressCanBeChanged`: the address changes, the neighbor stays switched off, the old address is in neither the answer nor the file, a neighbor added without `was` starts switched on, a duplicate or bad address is refused.
-- Headless Chromium against a real daemon with a real PAM login (dark): set an AS, added neighbor 192.0.2.1, changed its address to 192.0.2.9 in the row: `GET /api/bgp` and the row show 192.0.2.9 and one neighbor; typing `nonsense` was refused and 192.0.2.9 came back. No script errors.
+- Live, as root in the sandbox: a real `sshd`, two real daemons clustered on 127.0.0.1 and 127.0.0.2. `--backup-cluster` on the replica: the account was made with password field `*`, `.ssh` 700, `authorized_keys` 600 with both nodes' keys, `backups` 700; both nodes' config files got the two servers. `--backup-now` on both: each archive arrived and `--backup-status` shows success on both servers. `ssh … id` with a node's key answers "This service allows sftp connections only".
 
 ### Not verified
-- FRR was not installed for this run, so no session was watched moving from the old address to the new one; `frr.conf` is written from the saved settings as before.
-- The switched-off state carried over is covered by the Go test, not clicked in the browser. Light theme not looked at for this change (a text box replaced text in one column).
-
-## [v118] - 2026-11-10 — Back up to the cluster nodes in one step
-
-### Added
-- Configure ▸ Backup ▸ Servers ▸ **Use the cluster nodes** (shown in a cluster) and `netdir --backup-cluster` (`POST /api/backup/cluster`). One press replaces doing this by hand on every node: each node makes itself a local account `netdirbackup` (no password, key only), a directory `backups` in its home, and an `authorized_keys` with the backup keys of all the nodes; every node is then added to the shared list of servers. No password is typed or kept.
-- The keys are added as `restrict,command="internal-sftp"`: file transfer only, no shell command. The account has a real shell (`/bin/sh`) because many SSH servers start SFTP through the account's shell, and a `nologin` shell is what made "Ensure the remote shell produces no output" appear when this was set up by hand.
-- It can be pressed again: an account, key or server that is already there is left alone. A node that does not answer is named in red beside the button (and by the CLI, which then exits 1); press again when it is back.
-- `POST /api/backup/provision` is what a node sends the others (the keys to authorize); it goes through the cluster's signed relay and is refused for read-only users like every other change.
-- Help (Configure ▸ Backup): a step-by-step for it. Usage text: `--backup-cluster`.
-
-### Changed
-- Nothing in the existing servers, Install key or restore. The list still holds at most 8 servers: in a larger cluster the first 8 nodes are added and the rest are reported.
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-compiles for `linux/amd64`, `arm64`, `arm`, `386`, `riscv64` (cgo off: the PAM stub), `node --check` on `app.js` and `help.js`.
-- New tests (`backupcluster_test.go`): the account is made once (`useradd --password *`), the keys are written once with the SFTP-only options, modes 700/600, a second run changes nothing, a line that is no key is dropped, an account with uid 0 is refused, a `.ssh` that is a symbolic link is not followed, and no cluster is an error.
-- Live, as root in the sandbox: a real `sshd`, two real daemons clustered on 127.0.0.1 and 127.0.0.2. `--backup-cluster` on the replica: the account was made with password field `*`, `.ssh` 700, `authorized_keys` 600 with both nodes' keys, `backups` 700; both nodes' `netdir.conf` got the two servers (the change went through the primary). `--backup-now` on both: each node's archive arrived in `~netdirbackup/backups` and `--backup-status` shows success on both servers. `ssh … id` with a node's key answers "This service allows sftp connections only".
-- Headless Chromium against those daemons with a real PAM login, light and dark: removed a server row, pressed **Use the cluster nodes**, the row came back, both config files hold both servers, no red text, no script errors.
-
-### Not verified
-- The two daemons ran on one host, so they shared one `/etc` and one account: the second node found the account the first had made. Making the account on a separate machine through the relay was not run (the per-node mount namespace check of the Users page was not repeated for this).
-- Only Ubuntu's OpenSSH and `useradd` were used. RHEL-family hosts (SELinux contexts on a new `~/.ssh`, `sshd` settings such as `AllowUsers`/`AllowGroups` that would keep `netdirbackup` out) were not tried; **Test** on the row says so if a node refuses the login.
-- A node that is down during the run, and a cluster of more than 8 nodes, were only read in the code, not run.
-- A node also backs up to itself (it is in the shared list); that copy is of no use if the node is lost.
-
-## [v117] - 2026-11-10 — The Install key password box keeps its width when shown
-
-### Fixed
-- Configure ▸ Backup ▸ Servers ▸ Install key: clicking the eye beside the password made the box narrower (288 px to 261 px). The width was set by a rule for `input[type=password]` only, and the eye turns the box into `type=text`. The width is now set by where the box is, not by its type (`style.css`).
-
-### Added
-- Test `TestPasswordBoxKeepsItsSizeWhenRevealed`: fails for any rule in `style.css` that sizes a password box without also naming the text type.
-
-### Verified
-- The new test passes, and fails with the old rule put back. `gofmt -l .` prints nothing.
-- Real daemon (PAM build, amd64) with a throwaway PAM user, headless Chromium, light and dark: the box is 288 px wide hidden, shown and hidden again; with the old stylesheet the same run measured 288, 261, 288. No script errors.
-- PAM login over HTTPS: the group member got in; a wrong password and a valid user outside the group were refused with the same message.
-
-### Not verified
-- The owner asked for the change without the full process, so these were not run for this version: `go vet ./...`, `go test -race -count=1 ./...`, the `CGO_ENABLED=0` vet and tests, and the cross-compiles (`linux/amd64`, `arm64`, `arm`, `386`, `riscv64`). The change is one CSS rule and one new test file.
-- The root login in the PAM check was answered by the lockout ("Too many failed attempts") after the two refusals before it, not by the generic message; it was not repeated on its own.
-- Other password boxes were not measured. No other rule sizes only the password type, but a few size only `input[type=text]` (`.bgprow`, `.devask`, `table.policy`), which could change a box there when it is shown.
-
-## [v116] - 2026-11-09 — Clear unused join codes
-
-### Added
-- `netdir --cluster-token-clear` and **Clear join codes** on Operate ▸ Cluster (`POST /api/cluster/token/clear`): withdraws every join code this node has handed out that nobody used. A code created before no longer works. A node keeps at most 20 unused codes for an hour each, and until now the only way out of "too many" was to wait.
-- The button is greyed out when there are none and its tooltip says how many there are (`join_codes` in the cluster status). Clearing also takes the code shown on the page away.
-
-### Changed
-- The refusal at 20 says what to do: `20 unused join codes: clear them (Operate ▸ Cluster ▸ Clear join codes, or netdir --cluster-token-clear) or wait for them to expire` (was "too many unused join tokens; wait for them to expire").
-
-### Verified
-- `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, `node --check` on `app.js` and `help.js`.
-- New test `TestClearJoinCodes`: 20 codes, the 21st refused with the new text, the status counts 20, the op clears 20, a cleared code no longer joins, clearing none is no error, and a new code joins. The new route is in the lists the auth and CSRF tests walk.
-- Headless Chromium against the real `webui/` with the API mocked (scratchpad, not in the tree), light and dark: at 20 codes the button is enabled ("20 unused") and Create join code shows the refusal; Clear join codes asks, posts, and is then greyed ("No unused join codes"); a new code can be created and the button counts it.
-
-### Not verified
-- Against a running daemon: the CLI flag was not run against a live socket and the GUI was driven with mocked API answers.
-- The clearing is per node: the codes of another member are cleared on that member (pick it in the Node menu). Not tried on a real cluster.
-
-## [v115] - 2026-11-09 — MCP on a gateway's right-click menu
-
-### Added
-- Topology: right-click a gateway ▸ **MCP** opens Configure ▸ MCP. The item is on the circle's menu (after Edit) and on the gateway's entry in the sidebar (between Rename and Delete).
-- Help (Topology ▸ The sidebar) mentions it.
-
-### Verified
-- `node --check` on `app.js` and `help.js`; `gofmt -l .`, `go build`, `go vet ./...`, `go test -race -count=1 ./...` (with PAM, amd64), and `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`.
-- Headless Chromium against the real `webui/` with the API mocked (scratchpad, not in the tree), one gateway: right-clicked the gateway in the sidebar (menu: Rename, MCP, Delete) and the circle on the drawing (Edit, MCP, Add device, …), chose MCP each time, and the page changed to Configure ▸ MCP (`#cfg_mcp`, MCP marked in the sidebar). No script errors.
-
-### Not verified
-- Against a running daemon: the API answers were mocked. Light theme only.
-
-## [v114] - 2026-11-09 — MCP keys table fits
-
-### Fixed
-- Configure ▸ MCP ▸ Keys: with the new Expires column the fixed column widths were wider than the box, which pushed the Key column out and made the table scroll sideways. The columns are narrower (name, access, privacy, devices, added, expires) and the key takes what is left.
-
-### Not verified
-- Looked at in no browser: the widths were worked out from the stylesheet and the screenshot, not rendered here.
-
-## [v113] - 2026-11-09 — Expiry for MCP keys and allowed sources
-
-### Added
-- **Expires (UTC)** on every MCP key (Configure ▸ MCP ▸ Keys, a column; empty is never) and on every allowed source (Configure ▸ MCP ▸ Allowed sources). From that time a key is refused with "this key has expired" and a source allows nothing; the row stays in the list, greyed, until it is deleted or given a new time.
-- Written `2026-12-31` (the end of that day), `2026-12-31 17:00` or `2026-12-31T17:00Z`, always UTC. In the configuration file: `"expires": <unix time>` on a key; `until=2026-12-31T17:00Z` in an access-list entry (`10.1.1.50 rw until=2026-12-31T17:00Z`).
-- An entry with an expiry is not merged with the others of its address (like a disabled one).
-
-### Verified
-- Tests: a key before and after its time (200, then 401, still listed), a source before and after its end, normalising and bad times, an access-list entry that has just ended changes the answer at once (not after the minute the host-name cache lasts).
-
-### Not verified
-- The GUI columns were not looked at in a browser; only the script syntax and the tests were run.
-
-## [v112] - 2026-11-09 — Privacy none means none
-
-### Changed
-- A caller whose privacy level is **none** (its key's, its source's, or the default) now gets what a **device** answers as the device has it: `device_config`, `device_show` (including `show backup` on Unimus), `device_api_get` and the other device tools no longer have secrets removed (passwords, hashes, SNMP communities, keys). Before, **none** hid addresses no more but the secret filter still ran.
-- Not changed at none: netdir's own settings (`get_config`, `api_get`, `list_devices`): device logins, MCP keys and tokens stay hidden. The login netdir uses to reach a device is still kept out of answers by leak capture.
-- Every such answer is logged (`mcp: KEY was given device_config unfiltered (privacy none)`).
-- Standard and strict are as before.
-
-### Implementation
-- `device.RunRaw` marks the goroutine that runs the request, and `Redact`, `RedactText`, `RedactConfig`, `RedactConfigValue` and the DNS filter leave the answer alone while it runs (`device/rawsecrets.go`). A goroutine a driver starts itself is not marked, so what it reads is still filtered: on the safe side.
-
-### Verified
-- Tests: the filters under and outside the mark, another goroutine, `show backup` raw, and through MCP: `device_config` at none shows the hash, at standard not, `get_config` and `list_devices` never show a device login.
-
-### Not verified
-- Not every driver was run raw against a real device; drivers that read in goroutines of their own may still filter part of an answer.
-
-## [v111] - 2026-11-09 — Unimus: names that are a host name's first label
-
-### Fixed
-- `show backup nphxdcswi101` finds a device whose Unimus address is `nphxdcswi101-m.net.axway.int` (the first label of the address or name, with or without `-m` or `-new`), as the import names devices.
-- On v2, when the backup record holds no text, the single backup (`/devices/<id>/backups/<backup id>`) is read; the text is looked for under `bytes`, `content`, `text` and `config`.
-- When there is still no text the error lists the field names of the record (not their values), so the right one can be added.
-
-## [v110] - 2026-11-09 — Unimus v2: the numeric ID
-
-### Fixed
-- On API v2 a device row can hold both `id` (776) and `uuid`; the driver put the `uuid` in the path and Unimus answered 400 "Argument deviceId type mismatch" for every backup read, whatever the device was called. v2 paths now use the numeric `id`, v3 the `uuid`.
-- When both backup paths on v2 fail, the error names both requests and what each answered (the fallback hid its own error before) and the fallback no longer sends paging parameters.
-
-## [v109] - 2026-11-09 — Unimus v2: backup list form, catalog
-
-### Fixed
-- `device_api_catalog` listed the v3 path `/devices/backups?deviceUuids=…` on a server speaking v2, where Unimus read `backups` as a device ID (HTTP 400 "Argument deviceId type mismatch"). The catalog now lists the paths of the version the server speaks.
-- On v2, a 4xx from `/devices/<id>/backups/latest` falls back to `/devices/<id>/backups?latest=true` (the form seen working on Unimus 2.9.1).
-
-## [v108] - 2026-11-09 — Unimus: read a backup by name
-
-### Added
-- **`show backup <name|address|id>`** on the Unimus server device: the text of the latest backup of that device, filtered like any configuration (secrets hidden). Before, the text was reachable only through a second device entry with the option `device`, so an MCP client asking the server device for "the backup of nphxdcswi101" got metadata only.
-- Devices are found by address, by the name Unimus shows (exact, or the one device whose name starts with it) or by ID.
-
-### Changed
-- `show backups device=<name|address|id>` takes a name too; on API v2 it lists the backups of that device (`/devices/<id>/backups`).
-
-## [v107] - 2026-11-09 — Unimus: older releases
-
-### Fixed
-- **`unimus`** answered HTTP 404 ("URL is not supported by the API") on a Unimus before 2.2, which has no `/api/v3`. Without the option `api_version` the driver now tries `/api/v3/health`, and on a 404 uses `/api/v2` (the choice is kept for the connection). `api_version=v2` or `v3` still forces one.
-
-### Verified
-- A stub server that answers only `/api/v2` (data wrapper, `paging`, numeric IDs, `findByAddress`, `backups/latest`): facts, show, config and import rows.
-
-### Not verified
-- Not run against a real Unimus; the v2 field names (`vendor`, `type`, `bytes`) are from its documentation.
-
-## [v106] - 2026-11-09 — Unimus
-
-### Added
-- **`unimus`** (Unimus configuration backup, REST API v3, v2 by option): facts, `show`, `device_api_get`/`device_api_catalog`, changes with `device_change_raw` (guarded: no push, credentials, connections, backup uploads or deletes). With the option `device` the configuration is that device's latest backup (filtered over MCP).
-- **Import ▸ Devices** from a Unimus server: platform picked from vendor, type and model, disabled, tagged `source=unimus`.
-- GUI: platform label, import menu, help; README section.
-
-### Verified
-- Tests with a stub server: health and counts, paging, address lookup, latest backup decoded and filtered, API reads that name credentials refused, the backup text kept out of API answers, the change guard, import, platform mapping.
-
-### Not verified
-- Not run against a real Unimus; the v3 API is a draft and field names come from its OpenAPI file.
-
-## [v105] - 2026-11-08 — Copy ▸ To all gateways
-
-### Added
-- **Right-click a gateway ▸ Copy ▸ To all gateways:** adds the devices of this gateway that another gateway lacks to every other gateway, after a confirmation that lists how many each gateway gets. Nothing is removed; run it again after changing the source. It is greyed out, with the reason, when the gateway has no devices, there is no other gateway, or every other gateway has them all.
-
-### Changed
-- **Copy all devices** moved into the same menu as **Copy ▸ All devices** (it fills the clipboard that **Paste N devices** uses, as before).
-
-### Not verified
-- The menu was not looked at in a browser; only the script syntax and the tests were run.
-
-## [v104] - 2026-11-08 — Cisco IOS, Catalyst SD-WAN, NSX-T and ACI
-
-### Added
-- **`ios`** (classic Cisco IOS, SNMP v2c and v3, read only): facts, interfaces, ports, LLDP and CDP neighbors, routes, `show oid`, `/oid/…`. A minimal SNMP client in the standard library (`device/snmp.go`): BER, GET and GETBULK, USM with MD5 and SHA-1/2 authentication and AES-128 or DES privacy, time-window and engine-ID resynchronisation. No configuration (SNMP cannot hand it over) and no SSH (none exists in the standard library).
-- **`sdwan`** (Catalyst SD-WAN Manager), **`nsxt`** (NSX Manager) and **`aci`** (APIC): facts, `show`, `device_api_get` and `device_api_catalog`, changes with `device_change_raw` (guarded, no accounts, keys, certificates, upgrades or restarts); ACI also interfaces, LLDP and CDP neighbors and the tenants' configuration.
-- GUI: the four platforms in the device list (default port 161 for `ios`), help and README sections.
-
-### Changed
-- Observium's OS `ios` and IP Fabric's Cisco IOS (not IOS-XE) are imported as `ios`, no longer as `iosxe`.
-
-### Verified
-- Tests: the RFC 3414 key-localization examples; BER round trips; an SNMP agent in the tests serving v2c and v3 (authNoPriv SHA, authPriv SHA-256/AES, MD5/DES, SHA-512/AES); the three REST drivers against TLS stubs (login, expiry and renewal, logout, reads, refusals of accounts, keys and certificates, changes and refused changes).
-
-### Not verified
-- None of the four has run against a real device. The OIDs, paths, class names and fields are from the standards and the vendors' documentation. SNMPv3 against a real IOS agent (the stub is written from the same RFCs as the client) is the most likely to need a fix.
-- An unattended SNMP read of a large switch is many UDP requests (a walk of 25 rows at a time).
-- Not done: SNMP over IPv6 was not tried, SSH and telnet CLI, SD-WAN per-device interfaces and neighbors, NSX interfaces, import from these platforms.
-
-## [v103] - 2026-11-08 — version bump only
-
-No code change since v102.
-
-## [v102] - 2026-11-08 — hidden values are written with x
-
-### Changed
-- **IP addresses** hidden from an MCP caller are written with an `x` for each hidden part instead of a token: `x.x.x.x`, `203.0.x.x`, `x.x.114.7`; IPv6 the same, with the longest run of shown zero groups as `::` (`x:x:x:x:x:x:0:8888`).
-- **MAC addresses**: `xx:xx:xx:3c:4d:5e` (NIC part shown), `00:1a:2b:xx:xx:xx` (OUI part shown), `xx:xx:xx:xx:xx:xx` (hidden), in the notation the address was written in.
-- **AS numbers** show their last three digits (`xx169`, `AS` kept: `ASxx169`); **route distinguishers** (a key named rd or route-distinguisher, or `rd A:B` in a command) hide their AS number or address as the rules say and show the last three digits of the number after it (`xx000:x00`).
-- E-mail addresses, serial numbers, ids and your own words are still hashed tokens (`MASKED-EMAIL-3fa91c`).
-- A value written with x, sent back in a change, is restored from the configuration like the old tokens (a real value without an x is never taken for one).
-- The privacy form's labels show the new forms. README, help and the MCP instructions are updated.
-- The refusals of whole-configuration paths and `show config` name `device_config` (v101).
-
-### Fixed
-- Two addresses used as keys of one JSON object that now read alike (`x.x.x.x`) stay two keys (the second is `x.x.x.x#2`).
-
-### Not verified
-- Two addresses that differ only in hidden parts can no longer be told apart by the assistant; that is the price of the shorter form.
-- Route distinguishers are found by key name and by `rd` in text, not wherever an `A:B` stands.
-
-## [v101] - 2026-11-08 — refusals name device_config
-
-### Changed
-- The refusals of `fullconfigs`, `running-config`, `startup-config`, `show config` and a whole-configuration path, and the "this platform runs no CLI commands" error, now say to use `device_config` (secrets hidden), so a client that is refused knows where to go.
-
-### Not verified
-- An MCP client that still reports no such tool is talking to an older build or holds a cached tool list: check Monitor ▸ About for the version on every node it can reach, and reconnect the client.
-
-## [v100] - 2026-11-08 — config filter checked against every platform's format; shorter MAC label
-
-### Changed
-- Privacy ▸ MAC addresses: the option reads "NIC part shown (…:3c:4d:5e)".
-- The configuration filter was run over a sample in each platform's own format (IOS-XE JSON, NX-OS, EOS, FortiOS, PAN-OS XML, Junos) and leaked in five places; all are fixed:
-  - SNMP community names in a JSON configuration (IOS-XE `snmp-server` ▸ `community`, `community-or-user` of a host): every key naming a community under an SNMP key is hidden (a BGP community elsewhere is not).
-  - `snmp-server host … version 2c COMMUNITY` (NX-OS, EOS, IOS): the community is hidden.
-  - `snmp-server user … auth sha KEY priv aes KEY` (EOS): both keys are hidden.
-  - FortiOS `config system snmp community`: the `set name` of each community is hidden.
-  - PAN-OS XML (one line or many): the text of every element, and the value of every attribute, with a secret's name (`phash`, `secret`, `key`, `snmp-community-string`, ...) is hidden and the rest of the XML kept. Before, the first secret word hid the rest of the line, so a one-line answer showed what came before it.
-
-### Verified
-- `TestConfigFilterEveryPlatform`: invented configurations in the six formats lose every listed secret, keep their readable parts and filter the same way twice.
-
-### Not verified
-- The samples are written from memory of each platform's syntax, not taken from real devices. Junos still hides a `community NAME {` line whole, so its brace is lost. A secret under a name on no list still passes.
-
-## [v99] - 2026-11-08 — a device's running configuration over MCP, secrets hidden
-
-### Added
-- **`device_config`** MCP tool: the running configuration of each device picked. Every answer goes through the shared secret filter (key names, text lines, certificates, the list under Configure ▸ Privacy ▸ Secret words); `device.RedactConfig` / `RedactConfigValue`. JSON configurations (ArubaOS-CX) stay valid JSON.
-
-### Changed
-- `GET /api/devices/query?op=config` is answered to MCP callers (read-only or read-write), filtered; it is still refused to a read-only GUI account. Answers relayed from a gateway below are filtered again here.
-- README, help and the MCP instructions no longer say the configuration is never offered. The generic `device_api_get` still refuses `fullconfigs`, `running-config` and `startup-config`.
-
-### Verified
-- Tests: stub IOS-XE switch answers `device_config` and `api_get op=config` with its secret hidden to read-only and read-write callers; JSON stays valid and filtering is idempotent.
-
-### Not verified
-- A secret kept under a name that is on no list (built in or yours) is not recognised: add such words under Privacy ▸ Secret words. Never run against a real ArubaOS-CX switch; the field names in the tests are my reading of the schema.
-- The GUI read-only refusal of `op=config` has no new test.
-
-## [v98] - 2026-11-08 — one list of secret words; more built-in ones; JSON no longer broken
-
-### Added
-- **Configure ▸ Privacy ▸ Secret words** (`settings.privacy.secret_words`): words of your own that mark a secret. One list for every filter: a key name that holds one has its value hidden, a line or a JSON member is hidden from that word on, and a path, XPath or command word that holds one is refused. Applies at every level, `none` included.
-- Built-in secret words: `passkey`, `auth_pass`, `priv_pass`, `authentication_key`, `keepalive_key`, `ciphertext`, `keystring`, `shared_key` (and their `-` forms). RADIUS and TACACS+ keys, SNMPv3 passwords, OSPF and MC-LAG keys of an ArubaOS-CX configuration were not hidden before.
-- A list of texts that is a public key (`ssh-rsa …`), or holds a secret word, is hidden whole.
-
-### Fixed
-- **The text filter broke JSON.** A line that opens an object (`"SNMP_Community": {`) was cut at the secret word, and a value already hidden (a certificate) was cut again (`"(hidden: key (hidden)"`). Both stay valid JSON now. An object or list named `snmp…community` is hidden whole, since its keys are the community names.
-
-### Verified
-- `TestConfigFilterHidesSecrets` (a representative AOS-CX running config: nothing secret left, still JSON, hostname and addresses kept), `TestSecretWordsOfYourOwn`, `TestNormPrivacySecretWords`; the full checklist.
-
-### Not verified
-- The AOS-CX field names in that test are my reading of its schema, not a real `fullconfigs` dump. A secret under a name nobody listed gets through: add the word.
-- A device's configuration is still not offered over MCP (`config` is refused, and so is the `fullconfigs` path). This release makes the filters safer; it does not open that.
-- The Privacy page's new box has not been looked at in a browser.
-
-## [v97] - 2026-11-08 — the checkbox is called Enable
-
-### Changed
-- The checkbox under the list in *Add ▸ Devices of the inventory* is labelled **Enable**, not "Enable them …".
-
-## [v96] - 2026-11-08 — Add device: an Enable checkbox
-
-### Added
-- *Add ▸ Devices of the inventory* has a checkbox under the list, **Enable**: ticked, the devices picked are enabled as they are added (imported devices come in disabled). Unticked (the default) leaves each as it is. *＋ new device* is still what the dialog opens on.
-
-### Verified
-- `node --check` only; nothing in Go changed.
-
-### Not verified
-- Not looked at in the running app.
-
-## [v95] - 2026-11-08 — Add device: a plain choice, then the list
-
-### Changed
-- **Add device on a gateway is two steps again, not one tall list beside the new-device fields.** *Add* is a short choice: *＋ new device* (the form as before) or *Devices of the inventory*, which hides the new-device fields and shows one full-width list where Shift-click and Ctrl-click pick several. v92 put the list and the fields together, which looked wrong.
-
-### Verified
-- `node --check` only; nothing in Go changed.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v94] - 2026-11-08 — topology: remove or delete the picked devices
-
-### Added
-- With several devices picked on the map, right-click ▸ **Remove from this gateway** (they stay in the inventory) and **Delete devices** (out of the inventory and every gateway, after a confirmation). The Delete key takes every picked device off the gateway.
-
-### Verified
-- `node --check` of `app.js` only; nothing in Go changed.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v93] - 2026-11-08 — topology: pick several devices
-
-### Added
-- **On the topology map, Shift-click picks a run of devices and Ctrl-click (Cmd-click) adds or removes one.** Right-click one of the picked devices: **Enable**, **Disable** or **Copy devices** for all of them at once (then **Paste N devices** on another gateway). A plain click, a click on the empty drawing, or a right-click on a device that is not picked goes back to one.
-
-### Verified
-- `node --check` of `app.js` and `help.js` only; nothing in Go changed.
-
-### Not verified
-- Not looked at in a browser. Delete and drag still act on the one device last clicked, not on the picked set.
-
-## [v92] - 2026-11-08 — Add device: pick several at once
-
-### Changed
-- **Add device on a gateway:** the Device list is now a multi-select. Shift-click or Ctrl-click picks several inventory devices and all are added to the gateway (ones already on it are left out). *＋ new device* still stands alone: picking it with others is refused.
-
-### Verified
-- `node --check` of `app.js` and `help.js` only; the Go tests were not run for this change (nothing in Go changed).
-
-### Not verified
-- Not looked at in a browser: the list's height and the new-device fields hiding and showing as the selection changes.
-
-## [v91] - 2026-11-08 — version bump
-
-### Changed
-- No code change from v90. The version moves so a tree updated over v86–v89 can be told apart from one that still holds the old `device/obsimport.go` and `device/obsimport_test.go`: those two files were replaced by `device/import.go` and `device/import_test.go` in v87, and unpacking a tarball over an old tree does not delete them. If a build fails with `obsPlatforms redeclared`, delete the two old files.
-
-### Verified
-- The full checklist, unchanged.
-
-## [v90] - 2026-11-08 — import from Proxmox Datacenter Manager and Aruba Fabric Composer
-
-### Added
-- **Import Devices from a Proxmox Datacenter Manager:** the nodes of each remote it manages, a Proxmox VE remote's as `proxmox` and a Backup Server remote's as `pbs`, disabled, with no login, tagged `source=pdm` and `remote=ID`. A node listed by IP address is named `ID-N`.
-- **Import Devices from an Aruba Fabric Composer:** its switches as `aoscx`, tagged `source=afc` and `fabric=NAME`, by management address (else the switch name).
-
-### Changed
-- The GUI menu is **Import ▸ Devices** and **Import ▸ Preview** (one submenu) on every import source.
-
-### Verified
-- `TestImportFromPDMAndAFC` (names, platforms, tags, the AFC stub); the full checklist.
-
-### Not verified
-- Not run against a real PDM or AFC. PDM's `/remotes/remote` is assumed to list each remote's `nodes` with a `hostname` (the test stub lists none); a PDM that does otherwise falls back to the remote's own `server`/`host`, or skips. AFC's switch fields (`ip_address`, `name`, `fabric_name`) are my reading of its API Explorer, not checked: a switch without an address is imported by its name, so it must resolve in DNS.
-- The Proxmox `node` option is not set on imported hosts.
-
-## [v89] - 2026-11-08 — import from Panorama; copy all devices of a gateway
-
-### Added
-- **Import Devices from a Panorama:** the firewalls it manages (`show devices all`) are added as `panos` devices, disabled and with no login, tagged `source=panorama` and `dg=DEVICE_GROUP`, named by host name (the same rules as the other imports; one already there is skipped).
-- **Right-click a gateway ▸ Copy all devices,** then **Paste N devices** on another gateway (circle or empty drawing). Paste leaves out the ones already there and any no longer in the inventory. **Copy device** still copies one.
-
-### Verified
-- `TestImportFromPanorama` (against the Panorama stub); the full checklist.
-
-### Not verified
-- Not run against a real Panorama: the shape of `show devices all` is the one in the driver's test stub. A Panorama that names the fields otherwise would skip devices as having no address.
-- The copy and paste menu has not been looked at in a browser.
-
-## [v88] - 2026-11-08 — import: Infoblox and Proxmox, shorter names, existing devices skipped
-
-### Changed
-- Observium's OS `infoblox` imports as `nios` and `pve` (and `proxmox`) as `proxmox`.
-- The inventory name is the first label of the host name, without a trailing `-m` or `-new` (`aptxipm02-m.net.axway.int` becomes `aptxipm02`).
-- A device whose name is already in the inventory is **skipped** ("already in the inventory (same name …)"), as one with the same address already was. Before, it was imported as `NAME-2`. Two hosts that shorten to the same name (`x` and `x-m`) import once, the first.
-
-### Verified
-- `TestObserviumImportRows` now covers the new OS names, the suffixes and the same-name skip; the full checklist.
-
-### Not verified
-- Not run against your Observium: the OS names `infoblox` and `pve` are the ones from your list.
-
-## [v87] - 2026-11-08 — import devices from IP Fabric and Centreon too
-
-### Added
-- **Import Devices works from IP Fabric and Centreon as well as Observium** (same right-click item, `netdir --device-import`, `POST /api/devices/import`). Devices are added disabled, with no login, tagged `source=ipfabric|centreon`; IP Fabric adds `site=` from its site name, Centreon `poller=` from the monitoring server. The driver comes from IP Fabric's vendor/family/platform, or from the names of a Centreon host's templates, categories and groups; one that does not say is skipped with the reason.
-
-### Changed
-- The import code is one path (`device/import.go`) for the three sources; the Observium behaviour of v86 is unchanged.
-
-### Verified
-- `TestImportPlatformGuesses`, `TestImportFromIPFabricAndCentreon` (against the IP Fabric and Centreon stubs), the v86 Observium tests; the full checklist.
-
-### Not verified
-- Not run against a real IP Fabric or Centreon. The platform guesses (IP Fabric's vendor and family strings, Centreon's plugin-pack template names such as `Net-Cisco-Standard-SNMP`) are from memory, not checked; a wrong guess skips a device, it does not import it under the wrong driver, except that a Cisco template cannot tell IOS-XE from classic IOS or Nexus-style names it does not know.
-- The Centreon stub has no `/configuration/hosts`, so the template read is exercised only as "refused": every stub host is skipped.
-- IP Fabric's address is the `loginIpv4` column (else the host name); a release that names it otherwise falls back to the host name.
-- The GUI menu items for IP Fabric and Centreon have not been looked at in a browser.
-
-## [v86] - 2026-11-08 — import devices from Observium
-
-### Added
-- **Import the devices an Observium server monitors.** Right-click the Observium device ▸ **Import devices** (or **Preview import**), `netdir --device-import SERVER [--dry-run]`, `POST /api/devices/import`. Each device whose Observium OS has a driver here (ios, iosxe, nxos, eos, junos, fortigate, panos, aoscx, bigip) and that is not already in the inventory (same name or address) is added **disabled, with no login**, tagged `source=observium` and `site=LOCATION`. The name is the short sysName (made unique with `-2`, `-3`); the address is the host name, else the IP. Others are listed as skipped with the reason. Saved in the configuration history as the caller.
-- Not an MCP tool, and refused over MCP like every other change to netdir.
-
-### Changed
-- A disabled device may have no login (it is never contacted). Enabling one without a login is refused when saved: "give it a login before enabling it".
-
-### Verified
-- `TestObserviumImportRows` (mapping, names, duplicates, location tag, skips, validity), `TestObserviumImportFromTheServer` (against the Observium stub), `TestDeviceImportRefusals`; the full checklist.
-
-### Not verified
-- The OS names Observium uses (`os`) are from memory of its OS list, not checked against a running Observium: an OS I have wrong is skipped as "no driver", not mis-imported. Tell me what yours report.
-- Not run against a real Observium; the GUI menu items have not been looked at in a browser.
-- Imported devices are not placed on a gateway; they appear in Configure ▸ Devices.
-
-## [v85] - 2026-11-08 — MCP cannot change netdir; gateways in the Devices field
-
-### Changed (breaking)
-- **MCP can no longer change netdir's own configuration.** `rw` used to mean "anything the GUI can do"; it now means "change devices". Removed: `edit_config`, `api_request`, `set_node_paused`, `set_paused`, `alert_action`, `schedule_set`, `schedule_delete`, `schedule_run`, `update_fetch`, `update_apply`, `update_push`, `update_cancel`, `rename_node`, `set_label`, `set_gateway_node`, `set_gateway_device` and `clear_left_nodes`. Settings, cluster, gateways, nodes, schedules, updates, alerts, users and certificates are changed in the GUI only, so a client cannot damage the gateway.
-- The rule is also in the request path (`mcpWriteGuard`): over MCP every request that is not a GET is refused except `POST /api/devices/change`, `/raw` and `/capture`, also through `api_get` and the node relay. A tool added later cannot slip through.
-- Still there, read only: `get_config` (secrets hidden), `list_api`, `api_get`, and every monitoring tool. `device_change`, `device_change_raw`, `device_capture` stay for `rw`.
-
-### Added
-- **Gateways in the Devices field (keys and allowed sources).** A `gateway:N` pill (shown by the gateway's name in the GUI; type the name or `gateway:3`) gives the gateway and every device on it, now and later. A caller with only device entries sees no gateway. With a key and a source, both must name it. The access (ro/rw) is whatever the key or source has.
-- A limited caller's `get_topology` and `get_gateways` show only its gateways; `get_alerts` drops the alerts about gateways and devices it may not see.
-
-### Verified
-- `TestMCPWriteGuard`, `TestGatewayScope`, `TestMCPGatewaysFollowTheScope`; the tests that used `edit_config` now change the configuration through the GUI path (`guiEditConfig`); the full checklist.
-
-### Not verified
-- The gateway pill and its name display have not been looked at in a browser.
-- The alert filter (`scopeAlerts`) has no test of its own; `get_gateways` is tested only for what it must not show (a test cluster reports no gateways).
-- Federation, and the log (`get_log`), are not filtered by gateway.
-- The helpers that put `(hidden)` secrets back (`mcpRestoreHidden` and friends) are no longer reached from MCP; they are left in place and tested.
-
-## [v84] - 2026-11-08 — MCP: limit a key or an allowed source to some devices
-
-### Added
-- **A Devices field on every MCP key and allowed source (Configure ▸ MCP).** Pills for device names and `tag:TAG`, and two special ones: **all** (the default, so nothing changes for what you have) and **none**. In the file: `"devices": ["sw1","tag:site=dc1"]` on a key, `10.0.0.20 rw devices=sw1,tag:site=dc1` on a source.
-- A caller with both a key and a source may use only what both allow, as with the privacy level; a narrow key is not widened by its address.
-- Outside its list a device is not in `list_devices` and is refused as if it did not exist. `all` and tags reach the devices the caller may use. A change or a capture that picks even one device it may not use is refused whole. Devices below a Network Director are limited the same way.
-- A limited caller is not offered `get_config`, `edit_config`, `api_request`, `set_gateway_device` or `device_troubleshoot_user`, and the configuration, versions and sign-in routes are refused to it (also through `api_get` and the node relay): they hold every device and every key.
-
-### Fixed
-- **Right-click ▸ Disable on a key was lost when the page saved** (v81): the Keys table left the `disabled` flag out of what it saved. It is kept now.
-
-### Verified
-- `TestNormDevices`, `TestMCPACLDevices`, `TestSourceDevicesAndScope`, `TestMCPKeyLimitedToDevices` (list, targets, tags, names refused, changes refused whole, tools hidden, config routes refused, key and source together); the full checklist.
-
-### Not verified
-- The pill picker has not been looked at in a browser.
-- `get_topology`, `get_alerts` and the log are not filtered by device: a limited caller can still see device names there.
-
-## [v83] - 2026-11-08 — privacy: an address written as one decimal number is hidden
-
-### Fixed
-- **An IPv4 address written as a single number (`3232236805` for 192.168.5.5) was not hidden.** It is now, by the same rules as the dotted form, where something says it is an address: in JSON under a key that names one (`ip`, `addr`, `address`, `gateway`, `host`, `src`, `dst`, `hop`, `via`, `peer`, `neighbor`, also inside longer names such as `gw_addr`), as a number or as a string, and in text after such a word (`ip=3232236805`, `next hop 167772161`).
-
-### Changed
-- A number of 8 to 10 digits with no such word near it (a count of bytes, a time) is left alone, because it is far more often that than an address. So a decimal address with no label still gets through.
-
-### Verified
-- `TestMaskOddForms` (extended), `TestMaskDecimalAddressInJSON`, including counters and times that must stay.
-
-## [v82] - 2026-11-08 — privacy: more ways of writing an address or a MAC are hidden
-
-### Fixed
-- **A MAC address written after a label was not hidden.** `MAC:BC:24:11:3D:2D:D8` and `hwaddr-bc-24-11-3d-2d-d8` were skipped, because the colon or dash in front made the masker take the address for a piece of a longer one. A word in front ("mac", "hwaddr") now ends the address; a run of up to four hex digits ("dead:") still counts as a piece of an IPv6 address.
-- **A MAC in Cisco's `bc2411.3d2dd8` form, or written as twelve hex digits (`bc24113d2dd8`), was not hidden.** Both are now, at every setting (show, oui, nic, hide). A twelve-digit number made of digits only is left alone: it is far more likely a counter or a time.
-- **An IPv4 address with leading zeros (`192.168.005.005`) or in hex (`0xc0a80505`) was not hidden.** Both now are, by the same rules as `192.168.5.5`.
-
-### Verified
-- `TestMaskOddForms`, including text that must stay as it is (a long count, a hash, an IPv6 address, a time).
-
-### Not verified
-- An address written as one decimal number (`3232236805`) is still not hidden: a number that size is as often a counter. Whether this was why pbs1's MAC showed is not known; I could not reproduce it with a real Proxmox answer.
-
-## [v81] - 2026-11-08 — MCP: switch an allowed source or a key off and on
-
-### Added
-- **Right-click ▸ Disable / Enable on a row of Configure ▸ MCP ▸ Allowed sources and on a key.** A disabled entry stays in the list (greyed out) and allows nothing: a disabled address is skipped when the access is worked out, and a disabled key is refused with 401. Enable switches it on again. In the saved list an address reads `10.1.1.50 rw strict disabled`; a key has `"disabled": true`.
-
-### Verified
-- `TestMCPACLDisabledEntries` and `TestMCPKeyDisabled`; the full checklist (gofmt, vet, tests, CGO off, node --check, leak test).
-
-### Not verified
-- The right-click menu and the greyed rows have not been looked at in a browser.
-
-## [v80] - 2026-11-07 — federation: a device cannot come back through the director that published it
-
-### Fixed
-- **A stale list could send a request round and round between two directors that have each other as devices.** If a device's owner went down, a director could still list it through a neighbor that had it from this one a moment before; this one then took it back as reachable through the neighbor, and a request for it went to the neighbor, which sent it back, until the lists aged out. Every device now carries `path`, the installations a request for it goes through (the next hop first, the owner last; `list_devices` has it under `remote`), and a director drops a device whose path has its own installation in it (as it already dropped one that it owns). Index only; no request is changed.
-
-### Verified
-- **A mesh of four directors, round by round** (`TestFederationMeshConverges`): netdir1 ▸ netdir2, netdir3; netdir2 ▸ netdir1, netdir3, netdir4; netdir3 ▸ netdir4, with each director building its index from the lists its neighbors published a round before. The lists settle and stay put; every director reaches exactly the devices below it, by a route that never visits a director twice and has at most three; no device is listed twice and none goes through or belongs to the director that lists it; when netdir4 goes down, vcenter is gone from every director within four rounds. Without the path rule the same test and `TestStaleEntryDoesNotComeBack` fail.
-- `TestStaleEntryDoesNotComeBack` (a path through this installation is dropped, the same list for another installation is kept), the driver test for `Below` (the path starts with the installation that answered), the earlier index tests, full test suite, `node --check`, leak test.
-
-### Not verified
-- **Two real Network Directors with links both ways were not run**; the test uses lists as the directors would give them. The directors must be at v80 for the path to be there: an older one gives none, and a loop through it is only stopped by the owner and depth checks.
-
-## [v79] - 2026-11-07 — Proxmox Backup Server is read over MCP with a read-only caller
-
-### Fixed
-- **`device_api_get` (and `api_get` on `/api/devices/query`) refused Proxmox Backup Server's whole `/admin` tree over MCP** ("path: admin holds secrets ... not available over MCP"): the datastores, groups, snapshots, namespaces, sync, verify and prune jobs and the garbage collection. The words that guard the other platforms' paths against secrets (`admin`, `backup`, `user`, `key`, ...) were applied to every platform. The check is now the platform's: the Proxmox family (`proxmox`, `pbs`, `pdm`) is checked by its own driver (accounts, consoles, keys, files and the backup protocol are refused by segment, secrets in answers hidden), and `CheckAPIPathMCPFor` leaves the generic list to the other platforms. Proxmox VE's `/cluster/backup` and a storage called `backup` were refused the same way.
-- **A datastore, remote, job or node called `backup`, `access`, `download` ... was refused** by the driver's own read and change guards, which compared every segment with the words of the API. A segment that comes after `datastore`, `remote`, `sync`, `verify`, `prune`, `tasks`, `nodes`, `namespace`, `qemu`, `lxc`, `storage` or `pools` is a name somebody chose and is not compared; `/backup`, `/access`, `/tfa`, `.../download` and the rest stay refused.
-
-### Verified
-- A Backup Server stub: `device_api_get` reads `/admin/datastore` and `/admin/datastore/backup/snapshots` for a read-only caller, `/access/users` is refused; a read-only caller is not offered `device_change_raw`, a read-write one plans (dry run changes nothing) and applies a PUT on `/config/datastore/backup`; the paths the driver reads and changes, and those it refuses (`TestPBSPathsAndDatastoreNames`); other platforms' paths are still refused over MCP. Full test suite, `node --check`, leak test.
-
-### Not verified
-- **Not run against a real Backup Server** (the paths are those of its API viewer). The API token's own permission on the Backup Server decides what it may read or change there, on top of this.
-
-## [v78] - 2026-11-07 — Meraki is shown as "Cisco Meraki"
-
-### Changed
-- The platform `meraki` is shown as **Cisco Meraki** in the platform list, the device table, the tiles and the tooltips, like the other Cisco platforms. The stored name is unchanged.
-
-### Verified
-- `TestGUIPlatformLabelsMatchTheDrivers`, the full test suite, `node --check`, the leak test.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v77] - 2026-11-07 — changes and captures go down the federation; the link's key decides
-
-### Added
-- **`device_change_raw`, `device_change` and `device_capture` for a device below a Network Director.** A target that names such a device (`vcenter`, `sw1@netdir3`) sends the same request, with the name that director knows, to the director it is reached through (and from there further down) and joins the answers with this director's own, in the order of the target. Whether it may is decided by the key of the link and the director's own ACL and refusals: a read-only key has no write tool there, so the answer for those devices is that director's refusal; this director's own gate for the caller is passed first. It is logged here (`devices: audit: ... sends device_change_raw for ... down through netdir3`) and on the director that makes the change.
-- `Downstream.Pass` in `device/downstream.go` (only `device_change_raw`, `device_change` and `device_capture` are passed).
-
-### Changed
-- **`all`, `tag:` and `platform:` in a change or a capture pick this director's own devices only**, as before: only a name reaches a device below, so a change never fans out through the federation by accident. (Reads are unchanged: every target form reaches the devices below.)
-- v76 refused a change for a device below with the name of the director that owns it; that refusal is gone, and so is `refuseRemote`.
-- Alerts stay on the director that owns the device (decided; the README says so).
-
-### Verified
-- Stub director: a dry-run `device_change_raw` for `vcenter` reaches the stub as `device_change_raw vcenter`, the answer is joined and keeps `dry_run`; `all` does not reach the devices below; `Pass` refuses any other tool and reports the director's own error for a tool it does not have. Race detector on the new tests, `TestEveryPlatformIsWritable`, the full test suite, `node --check` and the leak test (`Pass` is recorded too).
-
-### Not verified
-- **Not run against two real Network Directors or with a read-only key against a real one**: the stub has no key levels, so "a read-only key cannot change" rests on the director's existing rule that a read-only key is offered no write tools. A capture and a typed `device_change` through the chain were not run (they use the same path as `device_change_raw`). The GUI was not looked at in a browser.
-
-## [v76] - 2026-11-07 — federation: Network Directors chained, devices below show up like any other
-
-### Added
-- **`netdir` platform, shown as "MCP Network Director".** A device of this platform is another Network Director, reached through its MCP endpoint (GUI port 22161, an MCP key as the token). It works like the dnsdir and ntpdir devices (facts, interfaces, resources, neighbors, `show nodes|topology|gateways|alerts|log|host-stats|schedule|updates|node-status|lldp|devices`, configuration, API request, `device_change_raw`), and in addition its devices are reachable from here.
-- **Federation.** The devices a Network Director reaches, and those below the directors it has as devices, are listed here (`remote` of `GET /api/devices` and of `list_devices`; Monitor ▸ Devices with a *Via* column and the health the owning director sees) and are targets of every device request (a name, `tag:`, `platform:`, `all`). The read goes down to the director that has the login, which asks the device (or the director below it) and hides the secrets; the answer comes up the same way. Links go downward only. A name that is taken is shown as `name@director`; a device that comes back through a loop is dropped, one reached two ways is listed once, a chain is cut at six directors. The index is made in the background every minute and when someone looks at the list (at most every 20 s); a name it does not have yet makes the request look again and wait up to 8 s.
-- `device/downstream.go` (the `Downstream` interface: `Below`, `Ask`) and `downstream.go` (index, routing, loop guard), tests for both.
-- The leak test's recording wrapper passes `Below` and `Ask` on and records their answers (27 platforms).
-
-### Changed
-- A change, a raw change or a capture for a device below another director is refused with the name of the director that owns it (the reads go down, the changes do not). A device's configuration is not passed on.
-- `list_devices` also names `remote` and `instance` (the installation's identity, derived from the cluster secret without giving it away).
-
-### Verified
-- Stub Network Directors: the driver's facts and shows, `Below` (own devices with their health, devices below with their chain), `Ask` (names sorted, show and API arguments, no configuration, no names), a request through the MCP tool for a device below and for a name that is taken, an unknown name looked up again and refused, a director that does not answer, the index builder (taken names, duplicates by the longer way, the loop, the depth cut). Race detector on the new tests, `TestEveryPlatformIsWritable`, the full test suite, `node --check` and the leak test.
-
-### Not verified
-- **Only one level was tried against a stub; no two real Network Directors, no firewalled link, no chain of three.** The GUI was not looked at in a browser. The alerts of a device below are raised by the director that owns it and are not collected above. The timeouts for a long chain (15 s per director added to the request's own) were not measured.
-
-## [v75] - 2026-11-07 — platform names as people write them
-
-### Changed
-- The platforms are shown by name in the platform list of Add device, the device table, the tiles and the tooltips: Aruba Fabric Controller, ArubaOS-CX, Aviatrix, F5 BigIP, Centreon, AnyName DNS Director, AnyTime NTP Director, Microsoft Entra ID, Arista EOS, Fortinet FortiOS, Cisco IOS-XE, Proxmox VE, Proxmox Backup Server, Proxmox Datacenter Manager, IP Fabric, Juniper Junos, Meraki, Infoblox NIOS, NSOne, Cisco NX-OS, Observium, Palo Alto Panorama, Palo Alto PanOS, RcodeZero, Technitium DNS Server, VMware vCenter Server. The list is sorted by these names. The stored names (`iosxe`, `proxmox`, ...) are unchanged, so no configuration changes. `TestGUIPlatformLabelsMatchTheDrivers` fails when a driver has no name in the list.
-
-### Verified
-- The new test, `node --check`, the full test suite and the leak test.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v74] - 2026-11-07 — Proxmox Backup Server and Proxmox Datacenter Manager; "proxmox ve"
-
-### Added
-- **`pbs` (Proxmox Backup Server)** and **`pdm` (Proxmox Datacenter Manager)** drivers over their REST APIs (`device/pxmx.go` holds what they share with the Proxmox VE one: the `/api2/json` client, the token or ticket login, the read and change guards, task waiting). Backup Server on port 8007, Datacenter Manager on 8443; the token is `user@realm!id:secret` (a colon, not the equals sign of VE) and is sent as `PBSAPIToken=…` or `PDMAPIToken=…`, or a user name and password for a ticket. Facts, Interfaces, `show` (PBS: datastores, usage, groups, snapshots, jobs, tasks, failed tasks, node status; PDM: remotes, resources, remote tasks, per remote PVE and PBS views), the read-only API request, and `device_change_raw` for rw keys with the usual refusals (users, tokens, permissions, certificates, consoles, restart and shutdown, wiping disks; PBS also: deleting datastores, groups and snapshots, a prune that is not a dry run, `remove-vanished`; PDM also: removing a remote, deleting a guest, a rollback, a cross-cluster migration). A PBS change that starts a task is waited for; a PDM one names its task. The device check connects to 8007 and 8443.
-- Add device fills the port for them, and the platform list, help, README and the `devices` text of `netdir --help` name them.
-
-### Changed
-- **Proxmox VE is shown as "proxmox ve"** (and the new ones as "proxmox backup server" and "proxmox datacenter manager") in the platform lists, the device tiles and the device table. The stored name stays `proxmox`, so no configuration changes.
-
-### Verified
-- Stub servers for both products: the exact token headers, the ticket login with its CSRF token and percent-encoded cookie, every `show`, secrets hidden, each refused read and change is refused without reaching the server, a dry run, an applied change, a waited-for task; `TestEveryPlatformIsWritable`, the full test suite and the leak test.
-
-### Not verified
-- **Not run against a real Backup Server or Datacenter Manager.** The paths come from Proxmox's API viewers and forum reports; the Datacenter Manager ones are the least certain (an unknown `show` can be replaced by an API request), and so is its ticket cookie name. The GUI was not looked at in a browser.
-
-## [v73] - 2026-11-07 — Clients: callers of the last 5 minutes, over all serving nodes
-
-### Changed
-- **Clients** in the gateway tooltip (v71) counted open connections of one node, which are closed after a minute idle and are none for a client that is set up but waiting. It is now the number of different callers (the key's name, or the address when there is no key) that sent any MCP request, the handshake and tool list included, to the gateway's addresses in the last **5 minutes**, added up over the nodes that serve the gateway and counting each caller once. A refused request does not count. The nodes exchange only a short hash of each caller (`mcp_callers` in `/api/canvas?own=1`), never a name or an address; the answers are kept for 5 seconds and a node that cannot be asked counts as it was.
-
-### Verified
-- Tests: a caller counts once however often it asks, two callers count two, the window expires, only hashes leave the node, an `initialize` alone makes a client, a refused request does not; the full test suite and the leak test.
-
-### Not verified
-- With two real nodes (the exchange uses the same relay as the Topology page) and in a browser.
-
-## [v72] - 2026-11-07 — Configure ▸ Alerts: the table of ntpdir
-
-### Changed
-- The rules table of Configure ▸ Alerts is now the one of ntpdir: rules grouped under headings (Gateways, Devices, Certificates and backups, Host), one row each with the columns On, Rule, Severity, Alert when, Threshold, For and Clear after, a coloured severity box, and fixed column widths, instead of one sentence of boxes per rule. What a rule does, and what is saved, are unchanged. The styles and the help text came across with it.
-
-### Verified
-- `node --check`, the help-coverage test, the full test suite and the leak test.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v71] - 2026-11-07 — the gateway tooltip shows how many MCP clients are connected
-
-### Added
-- Hovering the gateway circle (the VIP) now ends with **Clients: N**: how many different addresses have an MCP connection open to the gateway's addresses (the VIP and the extra addresses) right now. The listeners count their open connections (`mcpconns.go`, from `http.Server.ConnState`); several connections from one address count once, and the node's own address and loopback (its own checks) are not clients. The number is the serving node's (`mcp_clients` in `/api/canvas`); a node that does not serve the gateway shows the serving node's. A client that is quiet for a minute is disconnected by the listener's idle timeout, so it leaves the count then.
-
-### Verified
-- A test of the counting (one address with two connections counts once, the node itself and loopback do not, a repeated state is not counted twice, closing is counted down once); the full test suite and the leak test.
-
-### Not verified
-- With a real assistant connected, and in a browser. HTTP clients may open a fresh connection per call, so the number can be 0 between calls.
-
-## [v70] - 2026-11-07 — a device you enable (or add, or edit) is checked at once
-
-### Fixed
-- Enabling a disabled device left it **paused** for minutes: since v63 the next round can be 3 minutes away when nobody is looking, and nothing noticed the change. The monitor now looks at the inventory every 3 seconds between rounds and checks a device that was added, enabled, disabled or edited (address, port, platform, login, certificate option, options, or its login's user name, password or token) straight away, with its facts. Only the primary does it (v63), so another node shows the new state a few seconds later.
-
-### Verified
-- A test that enables, then disables, a device with the next round an hour away and sees it checked and paused within a second; `go test -race` of the package three times; the full test suite and leak test.
-
-### Not verified
-- On a real cluster with several nodes (the primary's change is read by the others over the 10 s cache).
-
-## [v69] - 2026-11-07 — field descriptions: one line, never longer than the field
+- The page was not opened in a browser for this version: the button, the neighbor address box and the password box are the same code as in MCP Network Director, where they were driven in headless Chromium against real daemons. Here only `node --check` and the API/CLI were run.
+- The two daemons ran on one host and shared one account; making the account on a separate machine through the relay was not run. Only Ubuntu's OpenSSH and `useradd` were used; RHEL-family hosts and an `sshd` with `AllowUsers`/`AllowGroups` were not tried.
+- A node that is down during the run, and a cluster of more than 8 nodes (the list holds 8 servers), were not run.
+- BGP: no FRR session was watched moving to the new address.
+
+## [v217] - 2026-11-07 — field descriptions: one line, never longer than the field
 
 ### Changed
 - **New rule in CLAUDE.md:** the text under a form field is one line and no longer than the field. The range line under a number field is now `10 to 600 s. Default 30.` (was `Valid: 10 to 600 seconds. Default 30 seconds.`, which wrapped), and a field that has a hint and a range shows both on the one line (`0 = off. 0 to 65535. Default 0.`). `.f > .hint` is `nowrap` with an ellipsis. A few section notes were shortened again.
 - `TestFieldHintsAreShort` fails any `hint` or `note` in `app.js` over 45 characters.
 
 ### Verified
-- The new test, `node --check`, the full test suite, the leak test.
+- The new test, `node --check`, the full test suite.
 
 ### Not verified
 - Not looked at in a browser (that every range line fits its field).
 
-## [v68] - 2026-11-07 — MCP: the port field is just "Port"
+## [v216] - 2026-11-07 — short descriptions under the fields
 
 ### Changed
-- Configure ▸ MCP ▸ the field **Port on the gateway addresses** is now **Port**; the help says what it is. No Go change.
-
-### Verified
-- `node --check`, the help-coverage test, the full test suite and the leak test.
-
-### Not verified
-- Not looked at in a browser.
-
-## [v67] - 2026-11-07 — short descriptions under the fields
-
-### Changed
-- The text under a field is now a few words (for example "Host or host:port." under a syslog server, "PEM file. Empty: system CAs." under a CA file), and the same for the notes under a section heading. Fields covered: the device Port, Certificate, Name, More IPv4/IPv6 addresses, Use real MAC addresses (the hint is gone), Neighbors, the two Listen/Binding addresses, Login groups, Read-only groups, Devices, Logins, and the Syslog Server and CA file. The full explanation is in the help pane of each page, which already had it. No Go change.
+- The text under a field is now a few words (for example "Host or host:port." under a syslog server, "PEM file. Empty: system CAs." under a CA file), and the same for the notes under a section heading. Same fields as in netdir, plus Servers, Fallback servers, Allowed and Blocked clients, Requests per second and the notes of Health, Client Rate Limiting, Authentication and Leap seconds (the Health note about per-gateway checks moved to the help of Highest stratum). The full explanation is in the help pane of each page, which already had it. No Go change.
 
 ### Verified
 - `node --check` of `app.js` and `help.js`; the help-coverage test and the full test suite; the leak test where the project has one.
@@ -1931,431 +234,21 @@ No code change since v102.
 ### Not verified
 - Not looked at in a browser.
 
-## [v66] - 2026-11-07 — the device check connects to the platform's own API port
-
-### Fixed
-- The check that colours a device and opens **Device not answering** connected to port 443 for every platform, so a Proxmox node (API on 8006) was reported down with "connection refused" although it was fine. It now connects to the platform's own default port when the device names none: Proxmox 8006, Junos 3443, Technitium 53443, dnsdir 53853, ntpdir 12380, otherwise 443 (`device.DefaultPort`, also used by the Proxmox driver). The Port field in Add device and the device table fills in the same defaults.
-
-### Verified
-- A test that the check dials `host:8006` for a Proxmox device and that every default is as listed; the full test suite, `gofmt`, `go vet` and the leak test.
-
-### Not verified
-- Against a real Proxmox node. A device that is really off or unrouted (`no route to host`) still raises the alert, as it should.
-
-## [v65] - 2026-11-07 — Checks fields renamed: Active checks, Active facts, Idle checks, Idle facts
+## [v215] - 2026-11-07 — defaults shown in the fields, valid range under them
 
 ### Changed
-- The four fields of Configure ▸ Devices ▸ Checks are now **Active checks** (seconds while someone looks), **Active facts** (minutes), **Idle checks** (seconds while nobody looks) and **Idle facts** (minutes). The range line under each names its unit ("Valid: 10 to 600 seconds. Default 30 seconds."). Help page updated. No Go change.
+- A number field that was empty for "the default" now shows the default itself, and under every number field is its valid range and default ("Valid: 1 to 255. Default 128."). Filled in: Group ID 100 (what a new gateway gets), Priority 100, Weight 100, Hello 150 ms, Hold 750 ms, Max forwarders 128, Highest stratum 15, Largest root distance 1500 ms, Slowest round trip 500 ms, Serve only within 50 ms, Falseticker offset 128 ms, Failures before down 2, NTP port 123, Probe interval 16000 ms, Probe timeout 1000 ms, session idle 30 min, failed logins 3 in 1 min, lockout 15 min, minimum password length 8, sync interval 5 s. The listen ports (web GUI 12380 and cluster 12381) show their default too. A field where 0 means off or no limit keeps showing 0 (a range line says what is valid). A setting that was saved as 0 for "the default" (minimum password length) now shows the default, and is saved as shown. The "Default 10." and "0 = 8" style hints that said the same are gone. No Go change.
 
 ### Verified
-- `node --check`, the help-coverage test, the full test suite and the leak test.
+- `gofmt -l .`, `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`, the five cross-compiles, `node --check webui/app.js`.
 
 ### Not verified
-- Not looked at in a browser.
+- Not looked at in a browser (the range lines and the filled defaults). The PAM sign-in was not re-run: no Go file changed.
 
-## [v64] - 2026-11-07 — defaults shown in the fields, valid range under them
+## [v214] - 2026-11-06 — MCP: a tool's answer may be as large as a request (1 MiB)
 
 ### Changed
-- A number field that was empty for "the default" now shows the default itself (Group ID 1, Priority 100, Weight 100, Hello 150 ms, Hold 750 ms, Max forwarders 128, session idle 30 min, failed logins 3 in 1 min, lockout 15 min, minimum password length 8, MCP port 443, largest MCP answer 1 MB, sync interval 5 s, the four device check intervals, the listen ports 22161 and 22162, and a device's API port 443, or 8006 for Proxmox, filled when the platform is picked). Under each number field is its valid range and default ("Valid: 10 to 600. Default 30."). A default is still not written to the file, for the device port; the other numbers are now saved as shown.
-
-### Verified
-- Full test suite, leak test and `node --check`; no Go change.
-
-### Not verified
-- Not looked at in a browser (the range lines, the filled port in Add device and the device table, Proxmox getting 8006 when picked).
-
-## [v63] - 2026-11-07 — far fewer device checks: only the primary, slower when nobody is looking
-
-### Changed
-- **Only the cluster primary checks the devices** (a node outside a cluster checks its own). The other nodes read the health from the primary with `GET /api/devices/health` over the cluster channel (cached 10 s) for the Devices page, Topology and the Device down alert; a look on any node sends `?look=1` so the primary uses the short intervals. A node that is not the primary asks itself every 15 s whether it has become it.
-- Each node used to connect to every device every 30 s and ask its facts every 5 min, whoever was looking (with 8 nodes, 8 times that). Now, while nobody is looking, it connects every **180 s** and asks the facts every **360 min**. "Looking" is a Monitor ▸ Devices or Topology page being open, or a device request over MCP, in the last 10 minutes; then it is 30 s and 5 min as before, and the first look after a quiet time checks at once.
-- The facts are still asked when a device is first seen and when it answers again after being down, so a wrong login is found at once, and otherwise within 6 hours (5 minutes while someone looks).
-
-### Added
-- **Configure ▸ Devices ▸ Checks**: four intervals. Quiet: `settings.device_check_s` (30 to 3600 s, empty 180) and `settings.device_facts_min` (5 to 1440 min, empty 360). While someone looks: `settings.device_live_check_s` (10 to 600 s, empty 30) and `settings.device_live_facts_min` (1 to 60 min, empty 5). A quiet value shorter than the looking one is the looking one.
-- Help page and README text on how often the devices are looked at.
-
-### Verified
-- Tests of the intervals (quiet, tuned, watched, never shorter than watched), facts not asked after 30 quiet minutes, asked again 6 minutes after a look, a first look waking the checks once, the settings' limits, an inactive (non-primary) node not checking and starting when it becomes active, and the health handler.
-
-### Not verified
-- Not looked at in a browser (the Checks fields). The primary-to-node health relay is tested only on a standalone node (the cluster relay itself is unchanged and not run with two real nodes); if a primary fails over, the new one starts checking within 15 s, and until then devices show not checked. A device that goes down is now noticed within 3 minutes (not 30 s) when nobody is looking, so the **Device down** alert can take that much longer to open.
-
-## [v62] - 2026-11-07 — Monitor ▸ MCP: the charts take the colours of their tiles
-
-### Fixed
-- The bars of Monitor ▸ MCP were black (they used a class the new layout no longer has). Calls per hour is now the colour of the Calls tile, the failed part the colour of the Errors tile, and Data returned per hour the colour of the Data tile.
-
-### Not verified
-- Seen only in the screenshot you sent; the new colours have not been looked at.
-
-## [v61] - 2026-11-07 — VMware vCenter driver
-
-### Added
-- **`vcenter`** (VMware vCenter Server, vSphere Automation API, Single Sign-On user name and password): the driver creates a session (`POST /api/session`, Basic authentication, never a URL), sends `vmware-api-session-id`, renews an expired session once and deletes the session on close. vCenter 7.0 Update 2 and later use `/api`; an older vCenter (`/rest`, answers wrapped in `{"value": …}`) is found when `/api/session` does not exist, or forced with option `api_style`.
-- Facts (release and build), interfaces (the ESXi hosts), `show vms|vm|hosts|clusters|datacenters|datastores|networks|folders|resourcepools|version|health` (`show vm NAME|ID` is one answer with the record, power state, guest identity and network, and VMware Tools; a part that fails is named), the API request below `/vcenter`, `/appliance`, `/cis`, `/content`, `/esx`, `/vstats`, and changes (rw key) below `/vcenter`, `/cis`, `/content` (power actions are `POST …/power?action=…`).
-- Refused: sessions, users, accounts, tokens, passwords, certificates and keys, KMS, guest processes and files, console tickets; and for changes deployment, restore, updates, the appliance, and deleting a VM, host, cluster, datacenter, datastore, folder, resource pool, network or disk.
-- In the GUI platform list, `main.go`, the example configurations, the README and the help page.
-
-### Verified
-- TLS-stub tests: sign-in and its refusal, an expired session renewed, the session deleted on close, the old `/rest` mode found and forced, every Show form and its bad input, a VM of two with the same name, the API request and its refusals (a refused path never reaches the stub), changes with dry run and the refused ones.
-
-### Not verified
-- **Against a real vCenter.** Paths and field names follow VMware's API reference. The likeliest differences: the old `/rest` mode, the appliance health names, vCenter Deployment APIs that live on port 5480 (not reached), Snapservice (SAML only, not reached), and a large inventory (one call, no paging).
-
-## [v60] - 2026-11-07 — Monitor ▸ MCP and Monitor ▸ Devices laid out like Monitor ▸ Node
-
-### Changed
-- **Monitor ▸ MCP** moved to just below Node in the menu and follows the Node page: the time-range buttons (Last Hour, Last Day, Last Week), a row of tiles (calls, errors, refused, changes, data returned, average time), two charts per hour (calls with the failed part in red, data returned) and the tables as cards. It refreshes by itself every 5 seconds.
-- **Monitor ▸ Devices** starts with tiles (devices, answering, refusing, unreachable, disabled) and the same card headers, and refreshes by itself every 10 seconds. The ask form, change, raw change, capture and network tools are unchanged.
-- `/api/mcpusage` hours now carry `bytes` too.
-
-### Verified
-- Go and JS parse checks; unit tests of the usage report including bytes per hour; help-page tests.
-
-### Not verified
-- Not looked at in a browser: the chart sizes and the tile colours were taken from the Node page's classes. Devices refreshing every 10 s redraws its table, which drops a row you were pointing at.
-
-## [v59] - 2026-11-07 — Monitor ▸ MCP: the page read the answer wrongly
-
-### Fixed
-- Monitor ▸ MCP showed nothing: the page read `.data` of the answer, but `/api/mcpusage` returns the report itself (not wrapped in `{ok, data}` like the pages made through the operations table). The page now reads the answer as it is. The server, its tests, the help text and the README were right and are unchanged.
-
-### Verified
-- `node --check`; the Go suites.
-
-### Not verified
-- Still not clicked through in a browser.
-
-## [v58] - 2026-11-07 — Monitor ▸ MCP: usage by key, source, tool and device
-
-### Added
-- **Monitor ▸ MCP**: calls by key, by source address, by tool and by device/tag/target (calls, errors, refused, changes, data returned, average ms, last call), a calls-per-hour chart, and the newest 200 calls. Time range: last hour, 24 hours, 7 days. `GET /api/mcpusage?window=1h|24h|7d` (relayable to another node; listed in `list_api`).
-- `mcpusage.go`: the counting. Hourly buckets kept 8 days in `mcpusage.json` (state directory; written at most every 30 s and when the web server stops), at most 1000 rows per hour (the rest is counted as `(other)`). Only the key name, address, tool, target, sizes, times and result are kept, never what a caller sent or was answered.
-- A call with a list of targets (`sw1,sw2`) counts once for each device in the list; a tag or `all` is listed as written.
-
-### Changed
-- Nothing else changes in the daemon or the drivers.
-
-### Verified
-- Unit tests of the counting (windows, the 8-day cut, restart, row cap, nil), the handler, and an end-to-end MCP call and refusal; help-page tests; JS parse checks.
-
-### Not verified
-- Not clicked through in a browser; the chart and tables have not been seen. The counts are per node, so a cluster needs each node picked in turn. A crash can lose up to 30 s of counts.
-
-## [v57] - 2026-11-07 — NS1 and RcodeZero drivers
-
-### Added
-- **`nsone`** (NS1 hosted DNS, REST, API key in `X-NSONE-Key`; address defaults to `api.nsone.net`): facts and zones; `show zones|zone|records|record|monitors|datasources|feeds|networks|qps|usage`; API request below `/zones`, `/data`, `/monitoring`, `/networks`, `/stats`, `/views`, `/search`, `/export`, `/account`; changes (rw key) PUT, POST, DELETE below `/zones`, `/data`, `/monitoring`, `/networks`, `/views`. An update (POST) is read first, so the answer holds a `before` copy.
-- **`rcode0`** (RcodeZero anycast DNS, REST, Bearer token; address defaults to `my.rcodezero.at`; option `api_version` v1 or v2): facts and zones; `show zones|zone|rrsets|stats|messages|secondaries|settings`; API request below `/zones`, `/stats`, `/settings`, `/messages`, `/reports`; changes (rw key) below `/zones` and `/settings`, records through `PATCH /zones/NAME/rrsets`. Lists are asked with `page_size=-1` and further pages followed.
-- Shared `device/dnsrest.go`: path and name checks, and a hide by field name (authorization, header, key, token, TSIG...) that runs before the usual redaction.
-- **Add device** fills the address in when the platform is a cloud service: `api.nsone.net` for NS1, `my.rcodezero.at` for RcodeZero (also `api.meraki.com` and `graph.microsoft.com`). An address typed by hand is never replaced; the field's hint shows the service address. (The Configure ▸ Devices table is unchanged: an empty address there is also accepted by the daemon for these four.)
-- Both platforms are in the GUI platform list, `main.go`, the example configurations, the README and the help page.
-
-### Changed
-- Refused on both: API keys and tokens, users, teams, account settings, billing, TSIG keys and (NS1) notification lists; deleting a whole zone.
-
-### Verified
-- TLS-stub tests for both drivers: facts, interfaces, every Show form and its bad input, the API request and its refusals (a refused path never reaches the stub), changes with dry run and `before` copy, key and token handling, options, pagination.
-
-### Not verified
-- **Against a real NS1 or RcodeZero account.** Field names and paths follow the vendors' documentation and client libraries (ns1-python, libcloud, rc0go); RcodeZero's `page_size=-1`, its Bearer scheme and its statistics paths, and NS1's record paging beyond the first 2500 records, are the likeliest places to differ.
-
-## [v56] - 2026-11-07 — Add device: the platform starts with the first in the list
-
-### Changed
-- A new device (Configure ▸ Devices, and Add device on a gateway) starts with the first platform of the list (`afc`) instead of `iosxe`. The platform list is now written once in the GUI, so the table and the form cannot disagree.
-
-## [v55] - 2026-11-07 — Privacy page: shorter label, more space
-
-### Changed
-- Privacy: "Digits of a hidden address left readable" is now **IP addresses** (its first choice reads "hidden"), and there is space above that row and above the words box. The help page follows.
-
-## [v54] - 2026-11-07 — MCP: the largest answer is a setting
-
-### Added
-- **Configure ▸ MCP ▸ Largest answer (MB)** (`settings.mcp_max_result_mb`, shared): the most one answer to an assistant may be, 1 to 8 MB. The default stays 1 MB and is not written to the file. 8 is what the cluster relay carries between nodes.
-
-### Changed
-- A cut answer now says how large the limit was (`cut at 4 MB`), and is cut at a character boundary, not in the middle of a UTF-8 character.
-
-### Verified
-- Unit test of the limit, the range and the default; help-page tests; JS parse checks.
-
-### Not verified
-- Not clicked through in a browser, and no answer of several MB was produced end to end. An assistant may itself refuse or choke on a very large answer.
-
-## [v53] - 2026-11-07 — CodeQL: the request URL of the REST drivers is built, not joined
-
-### Fixed
-- CodeQL (go/request-forgery, `device/httpapi.go`): `apiClient.do` joined the device's address and the caller's path as text (`base + path`). A path that did not start with `/` (such as `@other.example/x`) could have changed the host. The request is now made to the device's address alone and the path and query are set on its URL as such; a path that does not start with `/` is refused. Paths that did start with `/` reach the device exactly as before (tested: encoded slashes and spaces, a query, `//`, a fragment dropped). Callers were already checked by `CheckAPIPath`, so this is a second line of defence.
-
-### Verified
-- All Go suites; a new test of the paths.
-
-### Not verified
-- Whether GitHub's CodeQL now closes the alert: that is only known after the next scan. A second alert (the screenshot shows 2 open) was not seen, so it is not addressed.
-
-## [v52] - 2026-11-07 — Leak test of all drivers; reverse names and address host names masked
-
-### Added
-- **`sh tools/leaktest.sh`** (`device/leakcapture_test.go`, `leak_test.go`): records everything every driver returns while the device tests run (877 answers, 21 platforms), sends it through the same redaction and masking an MCP caller's answer gets at the strict level, and checks with separate patterns that no address (documentation ranges counted as real), MAC address, e-mail address, base64-hidden address, AS number, serial number, contact or secret of the test data is left. A negative control (the standard level instead of strict) is caught with 96 leaks, and the checks find 283 addresses and 56 MAC addresses before masking, so they look properly.
-- A corpus of 34 unusual spellings (address with port or in brackets, in a URL, as a key, mapped IPv6, zone ids, MAC in four forms, JSON inside a string, base64 references, e-mail forms, reverse names ...) checked the same way.
-
-### Fixed
-- Reverse DNS names (`3.2.1.10.in-addr.arpa`, a zone such as `113.0.203.in-addr.arpa`, the nibbles under `ip6.arpa`) leaked the address (or network) they name; they are now hidden as `MASKED-PTR-xxxxxx` when the address is one the level hides.
-- Host names made of an address (`ip-203-0-113-22.example.net`, as cloud hosts are named) leaked it; the address part is now the same stand-in as the dotted form (`ip-PUBLIC-IP-5c0997.example.net`).
-
-### Verified
-- All Go suites; the leak test and its negative control.
-
-### Not verified
-- The test data is what the driver tests' stubs return: few AS numbers (one, and documentation ones are not counted), few serial numbers; real devices say more and in other forms. Nothing was run against real devices.
-
-## [v51] - 2026-11-07 — Privacy is its own page
-
-### Changed
-- Privacy is now its own item, **Configure ▸ Privacy**, between MCP and Devices (v50 had put it on the MCP page). Its help is its own help page again. Saved settings are unchanged.
-
-### Verified
-- Go suites; JS parse checks; opened in a browser.
-
-## [v50] - 2026-11-07 — Privacy moved to the MCP page; last digits; NIC part of a MAC
-
-### Changed
-- The Privacy settings moved from Configure ▸ Settings ▸ Privacy to **Configure ▸ MCP**, under the access list and keys. Its help is on the MCP help page. Saved settings are unchanged.
-
-### Added
-- **Digits of a hidden address left readable** can now keep the **last** 1, 2 or 3 (`PUBLIC-IP-3fa91c.114.7`) as well as the first (`ip_keep` -3 to 3; negative is the last ones).
-- **MAC addresses** can show the **network interface controller** part (the last three bytes) with `macs: "nic"`, next to shown, vendor part and hidden.
-
-### Verified
-- Unit tests of both; Go suites; JS parse checks.
-
-## [v49] - 2026-11-07 — Privacy: values hidden inside base64 identifiers
-
-### Fixed
-- An Infoblox WAPI `_ref` (`record:host/<base64>:name`) carries the object's key in its base64 part (`dns.host_address$._default.<zone>.<host>.<address>`). Only the readable name was masked, so the address could be decoded from the rest. The masking now decodes a base64 piece of 16 or more characters that is printable text; when the rules would hide something in it (an address, an AS number, an e-mail, one of your own words), that piece becomes `MASKED-REF-xxxxxx`. A reference with nothing to hide is left as it was. Applies to every answer at every level except `none`, so other drivers' opaque identifiers (cursors, object IDs, URLs) are covered the same way.
-
-### Changed
-- A masked `_ref` can no longer be sent back to read or change that object (like any value with a stand-in in it). Use the name or address instead.
-
-### Verified
-- Unit tests: strict level, a word of your own inside the encoding, standard level leaving a reference alone, and ordinary long words and identifiers unchanged.
-
-### Not verified
-- Not tried against a real Infoblox; no other driver's identifiers were checked for what they encode.
-
-## [v48] - 2026-11-07 — Topology: devices wrap at six per row
-
-### Changed
-- A gateway's devices are drawn at most six across; the seventh starts a new row (a short last row is centred). Dragging a device to reorder works across rows.
-
-### Verified
-- JS parse check; Go suites.
-
-### Not verified
-- The new layout was not looked at in a browser, and not with more than a few devices.
-
-## [v47] - 2026-11-06 — Privacy tab: explanations moved to the help pane
-
-### Changed
-- Configure ▸ Settings ▸ Privacy and the Privacy columns no longer carry long hint texts; the explanations are in the help pane (the "?" button), which already had them.
-
-## [v46] - 2026-11-07 — Privacy levels for MCP answers
-
-### Added
-- **Privacy levels** (`none`, `standard`, `strict`) for what an MCP caller is told. `standard` is what netdir always hid (public addresses and AS numbers, e-mail addresses, SNMP contact and location, serial numbers by their last four characters), so nothing changes on upgrade. `strict` also hides private addresses and AS numbers, MAC addresses and serial numbers completely.
-- **Configure ▸ Settings ▸ Privacy**: the default level, and what each of `standard` and `strict` hides: public and private addresses, public and private AS numbers, e-mail addresses, contacts, serial numbers (shown, last four, hidden), MAC addresses (shown, vendor part, hidden), how many leading digits of a hidden address stay readable (`203.0.PUBLIC-IP-3fa91c`), and a list of the owner's own words that are always hidden. Saved as `settings.privacy`; only what differs from the built-in rules is written.
-- A **Privacy** column on **Allowed sources** (`"10.1.0.0/24 strict"`, `"10.1.1.50 rw none"`) and on **Keys** (`"privacy"`). A caller with a key and an address gets the strictest of the levels set; with none set, the default applies.
-- New stand-ins `PRIVATE-IP`, `PRIVATE-IP6`, `PRIVATE-AS`, `MASKED-MAC`, `MASKED-SERIAL`, `MASKED-WORD`; one sent back in a change is restored from the current configuration like the others.
-- Help for the new tab; a Privacy levels section in the README.
-
-### Fixed
-- README: a doubled Cisco Meraki heading.
-
-### Verified
-- Unit tests of every rule (strict text, kept digits, MAC modes and IPv6 look-alikes, words not breaking stand-ins, serial modes, normalisation, access-list and key parsing, strictest-wins) and a test through the real MCP path (level on the source, default level, `none` on a source under a strict default).
-
-### Not verified
-- The Privacy tab and the new columns were checked for syntax and by the test that every help topic exists, not clicked through in a browser by a person; not tried against real devices.
-
-## [v45] - 2026-11-07 — Screenshots in the README
-
-### Added
-- `snaps/`: six screenshots of the web GUI (Topology, Configure ▸ Devices, Configure ▸ MCP, and Monitor ▸ Devices with facts, interfaces and a show command), linked from a new Screenshots section of the README, so the repository page shows them.
-
-### Notes
-- Taken from a lab with test stubs (two Juniper routers and a Centreon server), not real devices. No code changed.
-
-## [v44] - 2026-11-07 — README is about netdir only
-
-### Changed
-- The README no longer mentions the NTP Director or `ntpdir`, nor the product netdir came from; the status table says what netdir does, and the driver list now names every driver (Observium, Centreon, IP Fabric and Aviatrix were missing from it). The DNS Director (`dnsdir`) section stays, as a driver of netdir.
-
-### Not changed
-- The `ntpdir` platform is still in the code and still works for a device that uses it; only the README stopped describing it.
-
-## [v43] - 2026-11-07 — Juniper Junos driver
-
-### Added
-- **Juniper Junos** (`junos`): through the REST API (`https://HOST:3443/rpc/…`, user name and password, HTTPS only).
-- Facts (host name, model, release, chassis serial number, uptime), interfaces (state, speed, MAC, description, addresses), LLDP neighbors, the committed configuration (`Config`), `device_show` for any `show …` command (the configuration and secrets refused), `device_api_get` for any `/rpc/get-<name>` read (the configuration, keys, passwords, licences and users refused, also over MCP), and `device_api_catalog`.
-- `device_change_raw` (rw key): lines of configuration in set format are loaded into the candidate configuration, checked, committed with `commit confirmed 3` and confirmed once the device still answers (Junos undoes the change by itself otherwise); `dry_run` returns the device's own diff and puts the candidate back; a candidate that already holds uncommitted changes is not touched. An operational RPC is `POST /rpc` with the XML; the reboot is the line `request system reboot`. Users and login, the REST, NETCONF and SSH services, management interfaces, whole-hierarchy deletes, commits, locks, zeroize, power off, software and file operations are refused.
-- `show` accepts the Junos output filters `| match`, `| except`, `| find`, `| display`, `| trim` and `| resolve` (the check that a show never writes is unchanged: no `| save`, no redirection).
-- The platform is in the device lists, the help, the README, the examples and the test that requires every platform to be writable.
-
-### Fixed
-- Query values of `device_api_get` on Centreon may hold spaces (a search such as `{"name":{"$lk":"%web 1%"}}`).
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass. A stub Junos is read and changed: facts, interfaces, neighbors, configuration, show and refused shows, API reads and refused paths, a dry run, a change that is confirmed, lines the device refuses, a failing commit check, uncommitted changes of someone else, a device that stops answering after the commit, refused lines and RPCs, an RPC, and a reboot (the connection closing).
-
-### Not verified
-- Not run against a real Junos device. The JSON shapes ([{"data": …}] wrappers, element names), the REST answers to `<command format="text">` and to `get-configuration` with `format="text"`, and the exact error layout are from Juniper's documentation and may differ by release; `show <command> | display xml rpc` gives the RPC name when a read is needed.
-
-## [v42] - 2026-11-07 — Infoblox: AAAA records can be read over MCP
-
-### Fixed
-- **`/wapi/…/record:aaaa` and `sharedrecord:aaaa` were refused** as if they held AAA (authentication) secrets, because the path filter looks for the word "aaa" inside a path word and "aaaa" (the DNS IPv6 record type) contains it. "aaaa" is no longer taken for "aaa"; a path word with a real "aaa" in it is still refused.
-
-### Verified
-- `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass; a test reads the AAAA paths and still refuses `aaa` and `admingroup`.
-
-## [v41] - 2026-11-07 — Centreon driver
-
-### Added
-- **Centreon** (`centreon`): the monitoring platform, through its REST API v2 (`/centreon/api/latest`). Credential: an API token (Centreon 23.10 and later) or a user name and password (the driver signs in and renews an expired session). Options: `prefix` (`/centreon` by default, `none` for the root) and `api_version` (`latest` or a release such as `24.04`).
-- Facts (platform version, number of hosts), interfaces (the monitored hosts with address, poller and up or not), `device_show`: `show platform|pollers|hostgroups|servicegroups|downtimes`, `show hosts`, `show services`, `show problems` and **`show host NAME`** (name, alias, address or ID: the monitoring record, configuration, services with status and timeline of one host in one answer; a part the user may not read is named under `errors`).
-- `device_api_get` reads any path below `/monitoring`, `/configuration` and `/platform`; users, contacts, access rights, tokens, authentication and administration are refused.
-- `device_change_raw` (rw key): POST, PUT, PATCH, DELETE below `/monitoring` and `/configuration`; the same refusals. *Save* exports the configuration to the pollers and reloads them (`POST /configuration/monitoring-servers/generate-and-reload`).
-- The platform is in the device lists, the help, the README, the examples, and in the test that requires every platform to be writable.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass. A stub Centreon is read and changed with a token and with a login: facts, interfaces (also 250 hosts over three pages), every `show`, a session that expires, a refused token, a wrong password, both options, `device_api_get` allowed and refused paths, a dry run, a change, a change with save, and the refused paths and bodies.
-
-### Not verified
-- Not run against a real Centreon. Paths, search syntax and field names come from Centreon's API documentation; page size (100) and the export path (`generate-and-reload`, 23.10 and later) are the likeliest to differ on another release. If a list is refused, `device_api_get` shows the server's own message.
-
-## [v40] - 2026-11-06 — IP Fabric 7.5 and later: no version in the URL
-
-### Fixed
-- **IP Fabric 8.1: every request except `/api/version` answered `404 API_NOT_FOUND`.** Since IP Fabric 7.5 an endpoint has no version in its URL (`/api/snapshots`, `/api/tables/inventory/devices`, `/api/auth/login`); the version is the header `X-API-Version`, whose default is used when it is left out. The old path form (`/api/v8.1/snapshots`) is refused in 8.1. The driver sent the path form only. It now reads the release from `/api/version`, tries the unversioned form first for 7.5 and later (and the versioned forms `/api/v<major>.<minor>`, `/api/v<major>`, `/api/v1` after it; for older releases the versioned first) and uses the first that answers something other than 404 on `/os/version` or `/snapshots`. The sign-in (`POST …/auth/login`) is tried the same way.
-- The option `api_version` forces one form: `none` for `/api/…` or `v7.3` for `/api/v7.3/…`. A path given to `device_api_get` or `device_change_raw` may carry either prefix (`/api/snapshots`, `/api/v8.1/snapshots`, `/snapshots`).
-- `show diagnose` tries each form in turn and prints what it answered; the all-404 error names every path tried.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass. A stub that behaves like 8.1 (only `/api/…` answers, the versioned paths give `API_NOT_FOUND`) is read with a token and with a login: facts, a nested table, `/snapshots` under three spellings, a change; the order of forms is tested for 7.3, 7.5, 8.1 and an unknown release.
-
-### Not verified
-- Not run against a real IP Fabric 8.1; the cause comes from the `show diagnose` output of one (every versioned path `404 API_NOT_FOUND`, `/api/version` 200) and IP Fabric's versioning page. The `X-API-Version` header is not sent, so each endpoint answers in its default version; if a table's columns or shapes differ from the ones in use, pick `columns=`.
-
-## [v39] - 2026-11-06 — IP Fabric: `show diagnose`
-
-### Added
-- **`show diagnose`** on an `ipfabric` device (`device_show`): sends `GET /api/version` (no credential), `GET /api/<ver>/os/version` with and without the credential, `GET /snapshots`, a one-row read of `inventory/sites` and of `management/snapshots`, and `GET /api/`, and prints for each the request, whether the credential was sent, the HTTP status and the start of the answer (secrets hidden, the credential never printed). Reading it tells a wrong path (404 with and without the credential) from a refused credential (401/403) or one that is hidden (404 only with it). Nothing is changed.
-- Why: with the correct version (`v8.1`) IP Fabric 8.1.8 still answered 404 to every real request in the field, which v38's version probing cannot explain; the next step needs the answers themselves.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass. A stub test checks the probes, the answer is JSON and the token does not appear.
-
-### Not verified
-- Not run against a real IP Fabric.
-
-## [v38] - 2026-11-06 — IP Fabric: every read answered 404 on 8.1
-
-### Fixed
-- **IP Fabric 8.1.8: every read came back "Requested Resource Not Found" (404)**, including `/snapshots`, `/version`, `/os/version` and `/tables/inventory/devices`, while the health check (which only reads `/api/version`) passed. The driver now checks that the API answers below `/api/<version>` before the first real request. If the version `/api/version` names gets a 404 for both `/os/version` and `/snapshots`, it tries the release's own major.minor (`v8.1`), its major (`v8`) and `v1`, and uses the first one the server knows. If none does, the error lists every path tried and says to set the option `api_version` (the paths of the release are in `/api/rapidoc/`), instead of failing quietly later.
-- Errors from IP Fabric now say which request failed (`POST /api/v8.1/tables/inventory/devices: HTTP 404 …`).
-- **Nested tables are readable**: `routing/protocols/bgp/neighbors`, `interfaces/transceivers/inventory` and the like. The table path may now have up to six parts after `tables/` (was three).
-- The devices table asks for `loginIpv4` instead of `loginIp` (replaced in IP Fabric 7.3 and removed in 8.0).
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass. New test: `/api/version` claims a version the server does not have (404), the release's own version is found, a nested BGP table is read; and a server that answers 404 to everything gives an error naming every path tried.
-
-### Not verified
-- Not run against a real IP Fabric 8.1. The 404 cause is inferred from the report: if the paths of 8.1 are not under `/api/v8.1`, `/api/v8` or `/api/v1`, set the option `api_version` to the right one. The nested table names and their columns are IP Fabric's, unchanged: pass `columns=` (the table's ? ▸ Table description in the GUI lists them).
-
-## [v37] - 2026-11-06 — Serial numbers show their last four characters
-
-### Changed
-- **An MCP caller now sees the last four characters of a serial number** (`****X0AB`) instead of a `MASKED-ID-xxxxxx` token. Keys that count as a serial number: `serial`, `sn`, `snHw`, `entPhysicalSerialNum`, and any key ending in `serial`, `serial-number`, `serial-num`, `serial-no` (not `-port`), in any case and with `_` or `-`. A value of four characters or fewer shows as `****`. Public IP addresses, public AS numbers and e-mail addresses are still replaced by tokens, and SNMP contact and location are still `MASKED-ID` tokens.
-- A `****X0AB` value sent back in `edit_config` or `api_request` is treated like a token: it keeps the real value instead of overwriting it.
-- Tool descriptions, help and README say so.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and the `CGO_ENABLED=0` variants pass (see below). `TestMaskJSON` and the Observium end-to-end test check `****` plus the last four characters and that nothing earlier leaks.
-
-### Not verified
-- A serial number in free text (a `show` line such as `Serial number: ABC123`) or under a key name that does not say so (`id`, `uuid`, `asset`) is still not found by name, so it is shown whole, as before. The GUI is unchanged: it shows full serial numbers to people who may see them.
-
-## [v36] - 2026-11-06 — Aviatrix platform
-
-### Added
-- **`aviatrix` platform** (`source/device/aviatrix.go`): the Aviatrix Controller's action API (`/v2/api`, option `api_path`) with the controller's user name and password (`get_api_token`, then `login` with `X-Access-Key`, session ID renewed once when it expires; every call is a POST form, nothing in a URL). Facts, interfaces (the gateways), `device_show` (`show gateways|transit|spoke|peerings`, **`show gateway NAME`**, `show ACTION name=value` for `list_`/`get_`/`show_` reads), `device_api_get` (`/ACTION?name=value`) and `device_change_raw` (POST with `{"action": ..., ...}`). Refused: actions and parameters about users, administrators, passwords, keys, certificates, tokens, SSO, licences, backups and restores, login, deleting a gateway.
-- GUI platform lists (alphabetical), help, README, `netdir.conf.example`, `tools/devprobe/lab.json.example`, `CLAUDE.md`; `TestEveryPlatformIsWritable` includes it.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and `CGO_ENABLED=0 go vet ./...` / `CGO_ENABLED=0 go test -count=1 .` pass; `help.js` and `app.js` parse. New tests use a stub controller: token and login, facts, interfaces, session renewal, `show gateway` (valid JSON, secrets hidden, peerings filtered), refused reads, dry run, applied change (the caller's CID is replaced), refused changes.
-
-### Not verified
-- Never run against a real controller. Action names and result fields come from Aviatrix's Terraform provider (`list_vpcs_summary`, `get_gateway_info`, `list_inter_transit_gateway_peering`, `get_api_token`, `login`, `edit_gw_config`); `list_version_info` for the release is a guess. No gateway reboot is offered: no action for it is documented in the sources used.
-
-## [v35] - 2026-11-06 — IP Fabric platform
-
-### Added
-- **`ipfabric` platform** (`source/device/ipfabric.go`): IP Fabric's REST API over HTTPS with an API token (`X-API-Token`) or a user name and password (`POST /auth/login`). The API version comes from `GET /api/version` (option `api_version` overrides); option `snapshot` (default `$last`). Facts (release, devices in the snapshot), interfaces (`hostname:interface`), `device_show` (`show devices|interfaces|sites|hosts|arp|snapshots`, `show tables/<section>/<table>`, filters `column=value`, `columns=`, `limit=`, `start=`, `sort=`), **`show device NAME`** (record, interfaces and ARP entries of one discovered device), `device_api_get` for `/tables/...` (sent as the POST read IP Fabric needs), `/snapshots`, `/jobs`, `/version`, and `device_change_raw` (POST/PUT/PATCH/DELETE below `/api/<version>`; users, tokens, login, SSO, licences and the system refused).
-- GUI platform lists (alphabetical), help, README, `netdir.conf.example`, `tools/devprobe/lab.json.example`, `CLAUDE.md`; `TestEveryPlatformIsWritable` includes it.
-
-### Fixed
-- **`webui/help.js` was not valid JavaScript in v34**: the Proxmox help text held `{"command":"reboot"}` with unescaped quotes, which breaks the GUI's help. Escaped. Both `help.js` and `app.js` now parse (`node --check`-style load).
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and `CGO_ENABLED=0 go vet ./...` / `CGO_ENABLED=0 go test -count=1 .` pass. New tests use a TLS stub of IP Fabric 7.3: token and login, facts, interfaces with the column fallback, `show device` (valid JSON, secrets hidden, ambiguous and unknown names), show filters and limits, API reads and refusals, dry-run and applied changes, refused paths.
-
-### Not verified
-- Never run against a live IP Fabric. Written from IP Fabric's public documentation: the table paths and columns (`inventory/devices`, `inventory/interfaces`, `inventory/sites`, `inventory/hosts`, `addressing/arp`, `management/snapshots`), the `l1`/`l2` interface state columns, the `/auth/login` answer (`accessToken`) and the write paths of snapshot management are best effort. Use `show tables/...` with `columns=`, `device_api_get`, and `tools/devprobe` against a lab instance to check.
-
-## [v34] - 2026-11-06 — Reboots on every platform that can
-
-### Added
-- **`device_change_raw` accepts a reboot** on every platform whose API has one, matched exactly so the rest of the management tree stays guarded: IOS-XE (`POST /restconf/operations/Cisco-IOS-XE-rpc:reload`), AOS-CX (`POST /rest/<ver>/boot?image=primary|secondary`), FortiOS (`POST /api/v2/monitor/system/os/reboot`), BIG-IP (`POST /mgmt/tm/sys` with `{"command":"reboot"}`), Meraki (`POST /devices/<serial>/reboot`), Proxmox (`POST /nodes/<node>/status` with `{"command":"reboot"}`), PAN-OS and Panorama (method `reboot`, the operational command `request restart system`), EOS (`reload now`) and NX-OS (`reload` after `terminal dont-ask`). `save: true` writes the configuration first (and aborts the reboot if that fails). A dry run sends nothing. After a reboot nothing is read and nothing is put back, and a connection that ends after the request counts as the device restarting.
-- Not offered, because their APIs have no restart: Infoblox NIOS, Technitium, Aruba Fabric Composer, dnsdir, ntpdir, Observium, Entra. Halt and shutdown are still refused everywhere.
-
-### Changed
-- A BIG-IP body with the command `reboot` and a Proxmox `POST /nodes/N/status` with `reboot` are no longer refused (`halt`, `shutdown`, `load`, `install` and a Proxmox shutdown still are). Meraki `/devices/<serial>/reboot` is no longer refused.
-
-### Verified
-- `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...` and `CGO_ENABLED=0 go vet ./...` / `CGO_ENABLED=0 go test -count=1 .` all pass. New tests: every reboot request is recognised and near misses (other methods, paths, commands, extra lines) are not; a reboot skips guard, aliveness check and put-back and a dropped connection counts as a restart; EOS and PAN-OS reboot with save.
-
-### Not verified
-- No reboot was sent to a real device. The IOS-XE, AOS-CX, FortiOS, BIG-IP, Meraki and Proxmox endpoints are as documented by their vendors; the AOS-CX `boot` path and EOS `reload now` over eAPI in particular should be tried on a lab device first.
-
-## [v33] - 2026-11-06 — Observium driver; every driver can be written
-
-### Added
-- **`observium` platform** (`source/device/observium.go`): Observium's REST API (`/api/v0`) over HTTPS with a Bearer token or a user name and password (never in a URL). A device is either the Observium server (option-less) or one monitored device (option `device`); option `prefix` for a sub-path install. Facts, interfaces with counters, neighbors (LLDP/CDP), resources, ports, `device_api_get` (`/openapi.json` included) and `device_show`.
-- **`show device NAME`** (`device_show`): everything Observium knows about one monitored device in one answer (record, ports, addresses, neighbours, sensors, status, storage, mempools, processors, inventory, counters, probes, alerts, alert log). Also `show NAME [device=NAME] [filter=value]` for the other lists.
-- **Every driver is now writable through `device_change_raw`.** Observium (`POST/PUT/PATCH/DELETE` below `/api/v0`; users, tokens and login refused) and Microsoft Entra (`POST/PUT/PATCH/DELETE` at `/users`, `/devices`, `/groups`, `/organization`; sign-in methods, passwords, keys, roles, consent, mail and files refused) were the two without one. Who may write is still decided by the MCP key (`rw`) or the GUI account, as for every other platform. A dry run returns the "before" copy; neither platform puts a change back automatically.
-- `TestEveryPlatformIsWritable` / `allwrite_test.go`: every registered platform must implement `RawChanger` (afc, aoscx, bigip, dnsdir, entra, eos, fortios, iosxe, meraki, nios, ntpdir, nxos, observium, panorama, panos, proxmox, technitium); a new platform without a write path fails the build.
-- GUI platform lists, help, README, `netdir.conf.example`, `tools/devprobe/lab.json.example`.
-
-### Changed
-- **Add device ▸ Platform list is alphabetical** (and so is the platform column of the devices table editor).
-- SNMP communities and SNMP v3 passwords (`snmp_community`, `snmp_authpass`, `snmp_cryptopass`, `snmp_authname`) are secret words everywhere.
-- `RedactText` keeps a line of JSON as JSON (`"key": "(hidden)"`) instead of cutting off its quotes and comma.
-- MCP masking now also applies to text that is itself a JSON document (a `show` answer), so serial numbers and public addresses inside it become tokens.
-
-### Verified
-- `gofmt -l .` (empty), `go build ./...`, `go vet ./...`, `go test -count=1 ./...` (ok), `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test -count=1 .` (ok). New tests use TLS stubs: Observium server/device/show/lists/api/prefix/throttle/new, an end-to-end `device_show` through MCP (secrets hidden, public addresses and serials tokenised), and `RawChange` for Observium and Entra (dry run, apply, refused paths).
-
-### Not verified
-- Never run against a real Observium or Entra tenant. Observium field names are best effort from its database schema; its API is a Subscription Edition feature and its documentation gives response shapes for devices only (use `device_api_get /openapi.json` and `tools/devprobe` to check). Observium's documented API has no write calls, so a build may refuse every `device_change_raw`. Entra writes need an application permission such as `Device.ReadWrite.All`.
-
-## [v32] - 2026-11-06 — MCP: a tool's answer may be as large as a request (1 MiB)
-
-### Changed
-- **The most an MCP tool answers is now 1 MiB (1,048,576 bytes; was 200,000), the same as the most a request may send.** `mcpMaxResult` in `mcp.go` is now `mcpMaxBody`, so the two cannot drift apart. An answer longer than that is still cut there, with the note asking for less (fewer log lines, a shorter range). The cut is made after secrets, public addresses are hidden, so a cut never shows anything hidden.
+- **The most an MCP tool answers is now 1 MiB (1,048,576 bytes; was 200,000), the same as the most a request may send.** `mcpMaxResult` in `mcp.go` is now `mcpMaxBody`, so the two cannot drift apart. An answer longer than that is still cut there, with the note asking for less (fewer log lines, a shorter range). The cut is made after secrets are hidden, so a cut never shows anything hidden.
 
 ### Verified
 - `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -count=1 ./...` (ok), `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok).
@@ -2363,631 +256,2199 @@ No code change since v102.
 ### Not verified
 - Against a live daemon, and with an answer over the old 200,000: the constant is the only change, and no test sends an answer that long.
 
-## [v31] - 2026-11-05 — Proxmox VE driver
-
-### Added
-- Platform `proxmox` (`source/device/proxmox.go`): Proxmox VE over its REST API (port 8006, `/api2/json`). Login with an API token (`user@realm!id=secret` as the token, or `user@realm!id` as the user name and the secret as the token; a PVEAuditor token reads only) or a user name with realm and a password (a ticket with the CSRF token on writes, renewed when refused; two-factor accounts are refused with a message). Option `node` names the default node for node-scoped reads.
-- Reads: facts (cluster name, node count, version), interfaces (the node's network), `show NAME [node=N] [vmid=ID]` for the cluster (`vms`, `storage`, `nodes`, `tasks`, `backups`, `ha`, `firewall`, …), a node (`node-status`, `node-network`, `node-disks`, `node-services`, …) and a guest (`vm-config`, `vm-status`, `vm-snapshots`, `ct-config`, …; its node is found from its vmid), and the API request below `/version`, `/cluster`, `/nodes`, `/pools` and `/storage`. Accounts, tickets, consoles, ACME accounts, join information and the guest agent's commands and files are never read; secrets by name are hidden.
-- Changes (`device_change_raw`, rw only): POST, PUT or DELETE with a JSON body below `/nodes`, `/cluster`, `/pools` or `/storage`; a dry run reads what the path holds now and sends nothing. A change that starts a task (the answer is a UPID) is waited for, up to ten minutes: the answer says how it ended, a failed task is an error with the last lines of its log, and one still running after that says so.
-- Refused before anything is sent: users, roles, permissions, tokens and realms; cluster create, join and node removal; rebooting or shutting down a node, stopping everything on it, stopping a node's services; consoles and shells; certificates; deleting a VM, a container, a storage or its volumes; restoring a backup (a body with `archive`) or rolling back a snapshot; removing or wiping disks; the guest agent's command execution and file access; a body asking to purge data.
-- In the GUI platform lists, help, README, examples, CLAUDE.md and the device change tool's description.
-
-### Changed
-- `restRaw` sends a platform's authentication headers (`restSpec.auth`) also on a change without a body (a DELETE or a POST such as `status/start`), which Proxmox's token or ticket needs; the other platforms set none, so nothing changes for them.
+## [v213] - 2026-11-06 — MCP keys: the eye to show the key
 
 ### Fixed
-- Test helper `fakeFRR` (`bgp_test.go`) appended to its call list from two goroutines (the BGP apply goroutine and the status handler) without a lock; `go test -race` reported it intermittently (a data race in the test, not in the daemon). The recorder now takes a mutex; three full `go test -race -count=1 .` runs were clean afterwards.
+- **Configure ▸ Monitoring ▸ MCP ▸ Keys: the Key box had no eye.** v212 kept the key and put it in a password box, but the eye that netdir adds to every password box comes from a page-wide helper this GUI does not have (its other eyes are per field), so the key could not be shown. The key box now gets netdir's eye (same icon: struck through while the key is shown) beside it; a key made before keys were kept still has no box content and reads *not kept: Replace key*. The helper is used for this box only, so the BGP and OSPF password boxes, which already have their own eye, do not get a second one.
+- **The key table's styles were netdir's missing ones:** the column widths, the readonly box look, the wide box (`.policy-box.rows.wide`) and the eye (`.reveal`). The unused styles of the removed show-once window (`.keyshow`) are gone.
 
 ### Verified
-- `proxmox_test.go` against a TLS stub: token in both forms and ticket login (one login, renewed after a 401, CSRF token on writes, a wrong password without the password in the error); facts and interfaces; show commands (a guest's node found from its vmid, `cipassword` hidden, refused commands never sent); API reads allowed and denied paths (none of the denied reached the stub); 26 refused changes (accounts, node power, services, consoles, certificates, disks, deleting a VM, container or storage, restore, rollback, agent exec, cluster membership, bad paths and bodies), none sent; a dry run; a PUT applied; a start that starts a task and is waited for; a failed task with its log.
-- gofmt, build, vet, `go test -race ./...`, no-cgo tests and the five cross-builds (CLAUDE.md process).
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -count=1 ./...` (ok), `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `node --check` on `app.js` and `help.js`.
+- **In Chromium** (light and dark, mocked daemon, real `app.js`/`style.css`, the real default configuration from `newDaemonConfig`): Configure ▸ Monitoring ▸ MCP shows the key as dots with the eye beside it; a click shows the key and strikes the eye through; a key with only a hash shows the *not kept* placeholder and has no eye.
 
 ### Not verified
-- Not run against a real Proxmox. Paths, field names (`vmid`, `node`, `exitstatus`, `cipassword`, the cluster status items) and the UPID format come from Proxmox's API reference as remembered. Whether a token's role permits a given read or change is Proxmox's answer. A JSON body on POST and PUT is accepted by Proxmox as documented, not tried here.
-- Deleting a guest or a storage and restoring a backup are refused by design (the owner was asked and gave no answer, so the cautious default was taken); loosening them is one place in `pveRawGuard` and `pveBodyCheck`. Proxmox Backup Server is a separate product with another API and has no driver.
-- No live PAM or Chromium checks were run.
+- Against a live daemon. Copy key, Replace key and Add key were not clicked through; the page error *Cannot read properties of undefined (reading 'status')* in the browser run comes from the mock (the same error appears with v212's own `app.js`).
 
-## [v30] - 2026-11-05 — troubleshoot a user: Entra device to Meraki client
-
-### Added
-- `device_troubleshoot_user` (MCP), `GET /api/devices/troubleshoot`, `netdir tshoot USER [HOURS]` (also `--troubleshoot-user USER [--troubleshoot-hours N]`; `--tshoot` alone is still the node bundle) and, in the GUI, right-click an Entra device ▸ Troubleshoot user. It looks the user up in Entra, takes the device with the latest sign-in (`devices=` up to 3), finds it among the Meraki clients of the last `hours` hours (1 to 168, default 6; all networks of the organization, up to 60, or one with `network=`), matched by name (case and domain ignored), and reports: the Entra device; the Meraki client (IP, MAC, VLAN, SSID, the AP or switch and port, first and last seen, usage), its usage history and device policy; for a Wi-Fi client the connection statistics, latency, connectivity events and failed connections of the window; for a wired client the status of its switch port (speed, duplex, errors, warnings, traffic); and whether the AP or switch it was on is online. A part the dashboard does not have is marked unavailable and the rest is still given; no match is said, with the reason names may differ.
-- The Entra device now carries its management type (`managementType`: MDM, and so on) next to `isManaged` and `isCompliant`. A short account name such as `msmith` finds the user by the start of the display name, sign-in name or mail nickname, or an exact on-premises account name; a tenant that refuses that filter (HTTP 400) gets the plain name lookup instead.
-- It only reads, so read-only accounts and `ro` MCP keys may use it. Each use is logged with who looked up whom. `entra=` and `meraki=` name the device when there are several; a Meraki device with a serial option is not used (the organization device is).
-- Drivers: `UserDeviceLooker` (Entra, devices sorted by last sign-in) and `ClientReporter` (Meraki organization device) in `device/clients.go`.
-
-### Verified
-- `meraki_clients_test.go` against a stub dashboard of two networks: a Wi-Fi match at one, a wired match under a name with a domain at the other, all parts present or marked unavailable, wireless parts only for a wireless client and a switch port only for a wired one, an unrelated client never reported, search by MAC and in one network only (the other is never asked), refused queries, a single Meraki device refused. `entra_test.go`: management type and compliance in the answer, the account name filter and its fallback. `TestShortCommand`: `tshoot USER [HOURS]` becomes the flags, `--tshoot` alone is untouched. `devtroubleshoot_test.go`: Entra and Meraki stubs behind the op: the most recent device is followed, a second device not seen is said, bad arguments, and the MCP tool offered to and answered for a read-only key without secrets.
-- gofmt, build, vet, `node --check`, `go test -race ./...`, no-cgo tests and the five cross-builds (see the process in CLAUDE.md).
-
-### Not verified
-- Not run against a real dashboard or tenant. The Meraki paths (`clients/{id}/usageHistory`, `policy`, `wireless/clients/{id}/connectionStats|latencyStats|connectivityEvents`, `wireless/failedConnections?clientId=`, `devices/{serial}/switch/ports/statuses`, `devices/statuses?serials[]=`) and the client fields come from Meraki's API reference as remembered, not from live answers; one that does not exist for a network or an older model shows as unavailable. `connectivityEvents` and the usage history may be bounded differently from the window.
-- The name match is the weak point: Entra's device name and the host name a client gives DHCP often agree on a Windows laptop and often do not on a phone. A list of more than 1000 clients in the window is cut by the dashboard (said in the answer).
-- The GUI text popup shows the answer as JSON; it was not opened in a browser. No live PAM or Chromium checks were run.
-
-## [v29] - 2026-11-05 — Entra browser sign-in, Aruba Fabric Composer driver
-
-### Added
-- **Entra browser sign-in** (OAuth device code flow, `device/entra_signin.go`, `source/devsignin.go`): add an Entra device with a new login and nothing filled in, right-click it ▸ Sign in with Microsoft (or `netdir --device-signin NAME`; `POST /api/devices/signin` and `/poll`). The page shows a code and a link, the person signs in with a browser, and the refresh token is stored in the login as `rt:…`. The driver then asks Graph with the delegated permissions `User.Read.All` and `Device.Read.All` through Microsoft's public client "Microsoft Graph Command Line Tools" (no app registration, no secret). The application login (app ID and secret) still works.
-- A refresh token that Microsoft replaces is handed to the daemon and stored (at most once a day per login; the old one keeps working); one access token is shared by every driver opened for a login. A revoked or lapsed sign-in says to sign in again, without the token in the text.
-- Starting a sign-in changes a login, so it needs the access a device change needs: read-only GUI sessions are refused, there is no MCP tool, the device code never reaches the page, Microsoft is not polled faster than it said, at most 20 sign-ins are open, and each start and finish is logged with who did it.
-- Platform `afc` (`source/device/afc.go`): Aruba Fabric Composer over its REST API (`/api/v1`): token from `POST /auth/token` (user name and password in headers), renewed when refused, deleted on close. Facts name the fabrics; `show <resource> [name=value …]`; the API request reads `/<resource>[/<uuid>[/<sub resource>]]` (users, roles, authentication, tokens, keys, licences and backups never); `device_change_raw` with a path below `/api/v1/` (a PUT is put back on a 5xx; users, authentication, certificates, keys, licences, backups, restores, upgrades, reboots and resets refused). In the GUI platform lists, help, README, examples and CLAUDE.md.
+## [v212] - 2026-11-06 — MCP keys can be shown again, as in the MCP Network Director
 
 ### Changed
-- Entra's address, tenant and login options are as in v28; a browser sign-in needs no `tenant` (it signs in to "organizations").
+- **Configure ▸ Monitoring ▸ MCP ▸ Keys: the key is kept and can be read back.** It used to be made once, shown once in a window and kept only as its SHA-256 hash. It is now kept in the `ntp` block beside its hash (so in the cluster and the configuration history too), as netdir does: the table has a **Key** column with the key in a password box and the eye to show it, and the row menu has **Copy key** and **Replace key** (a new key under the same name and access; whatever used the old one is refused from the next save). The hash is still what a request is checked against. The key is still never shown to an MCP caller or to a read-only account (`key` is already one of the secret keys both hide). A key made before this release has only its hash and cannot be shown: its box reads *not kept: Replace key*.
+- **The window that showed a new key once, with the Claude Code command line, is gone** (netdir has none); the command line is in the help.
+- `mcpkeys.go` keeps `Key` instead of clearing it when it works out `Hash`; the test of it (`mcpkeys_test.go`) is netdir's, for the new rule (kept in the file, in no MCP answer). `webui/app.js`: the key editor is netdir's; `webui/help.js` and the README describe the new behaviour.
 
 ### Verified
-- `entra_signin_test.go`: code request (https link only, the device code kept out of the answer), pending, done, a wrong code, one refresh for three drivers, the replaced refresh token handed on, a revoked sign-in, an empty login. `devsignin_test.go`: refused starts (unknown device, wrong platform, an application login), no early polls, the token stored in the login with user name and password cleared, renewals stored only for the token they replace and at most once a day. `afc_test.go` against a TLS stub: login headers, filters, token renewed after a 401, one token per driver and deleted on close, the second path prefix, refused commands and paths never sent, refused changes never sent, a failed PUT put back.
-- gofmt, build, vet, `node --check` on app.js and help.js, and the release process in CLAUDE.md (see below for what could not be run).
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -count=1 ./...` (ok), `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test -count=1 ./...`, `node --check` on `app.js` and `help.js`.
 
 ### Not verified
-- Nothing was run against a real Microsoft tenant or a real Fabric Composer. The device code, token and refresh request fields, the scopes, the public client ID and the `ConsistencyLevel` header come from Microsoft's documentation; whether a tenant lets a given account read users and devices, or lets that client sign in, was not tried. Fabric Composer's resource names and fields come from Aruba's developer pages (which show both `/api/v1/…` and `/api/v1/api/…`), not from a live controller.
-- The sign-in dialog was not opened in a browser; no live PAM or Chromium checks were run.
-- Aruba NetEdit has no documented API (its 2.15 guide describes none), so there is no driver for it.
+- Not looked at in a browser, and not against a live daemon: the key table and the eye were checked only by comparing the editor with netdir's, which is the same code.
 
-## [v28] - 2026-11-05 — Microsoft Entra ID driver (read only): the devices of a user
-
-### Added
-- Platform `entra` (`source/device/entra.go`): Microsoft Graph v1.0 with an app registration (client credentials: the login's user name is the application ID, its password the client secret; option `tenant`; option `login_host` and the device address for national clouds; address defaults to `graph.microsoft.com`). Needs the application permissions `Device.Read.All` and `User.Read.All`.
-- `show devices user=<sign-in name | object ID | name>`: the user's registered and owned devices, merged by device with a `relation` list, sorted by name. A name matching several users is refused with the candidates listed. `show user user=…` shows the user. Facts give the tenant.
-- The API request reads only `/organization`, `/users[/{id}[/registeredDevices|ownedDevices]]` and `/devices[/{id}[/registeredOwners|registeredUsers|memberOf]]`; every other path is refused before it is sent.
-- Read only by construction: the driver has no change interface and sends only GET (and the token POST). Entra is in the GUI platform lists, the help, README, the example configurations and CLAUDE.md.
-
-### Verified
-- `entra_test.go` against a TLS stub of the token endpoint and Graph: facts; devices by sign-in name, object ID, bare name; merged registered/owned relations and `@odata.nextLink` paging; one token per driver; wrong secret (error shown, secret not echoed); 429 waited out and given up after repeated ones; ambiguous and unknown users; refused commands and API paths never reach Graph; the stub fails on any non-GET Graph request.
-- The release process in CLAUDE.md (gofmt, build, vet, tests with -race, no-cgo, five cross-builds).
-
-### Not verified
-- Not run against a real tenant. Field names, permissions, the `$filter` forms for name search (`startswith` on display name and sign-in name) and the `ConsistencyLevel` header come from Microsoft's documentation, not from a live answer; sovereign clouds untested.
-- Devices of a user are the registered and owned ones; a device only reached through a group is not listed.
-- No live PAM or Chromium checks were run.
-- The first `-race` run reported a data race in `TestBGPOperateAPIAndStatus` (a test and code this release did not touch); a second full `-race` run passed and the test alone passed 3 times, but the race was not reproduced or explained, so it may be an existing flake.
-
-## [v27] - 2026-11-05 — no ellipses on menu items
+## [v211] - 2026-11-05 — New gateway form labels
 
 ### Changed
-- Menu items and buttons that opened a dialog no longer end in "…": Show command, Delete device, Edit, Add device, Remove from this gateway, Rename, Edit rule, Silence, Run now on, New task, Install key, Another server, Add an existing account (sixteen places in app.js, and the help and README that name them). Progress texts such as "Loading…" are unchanged.
+- **Topology: the New gateway / Edit gateway form's labels** read *Name*, *IPv4 address / prefix*, *IPv6 address / prefix*, *More IPv4 addresses*, *More IPv6 addresses* and *Listening interface*; the words *optional* and *same subnet:* moved into the placeholders (`optional, e.g. Core`, `optional, 2001:db8::1/64`, `optional, same subnet: 10.0.0.2, 10.0.0.3`). The Gateway help and QUICKSTART use the same labels. Same change as dnsdir v636.
 
 ### Verified
-- `node --check` on app.js and help.js; gofmt, build, vet and `go test -run 'Help|EveryPage|Version'`.
+- `gofmt -l .`, `go build`, `go vet ./...`, `go test -count=1 ./...` (ok), `node --check` on `app.js` and `help.js`.
 
 ### Not verified
-- The full suite, the no-cgo run and the cross-builds were not rerun (only two JavaScript files, two documents and the changelog changed since v26); nothing was opened in a browser.
+- Not looked at in a browser; no Go code changed.
 
-## [v26] - 2026-11-05 — shorter device menu
-
-### Changed
-- The right-click menu of a device on the topology had nineteen items. The thirteen questions (Facts, Interfaces, Ports, Neighbors, LLDP and CDP details, Routes, Routing protocols, Firewall, CPU, memory and power, VLANs, API catalog, Configuration, Show command) are now under one **Ask** submenu; the menu is Ask, Network tools, Disable or Enable, Edit, Copy device, Remove from this gateway, Delete device. Help updated.
-
-### Verified
-- gofmt, build, vet, `go test -count=1 -run 'Help|EveryPage'`, `node --check` on app.js and help.js.
-
-### Not verified
-- The full test suite, the no-cgo run and the cross-builds were not rerun (nothing but two JavaScript files and the changelog changed since v25, which passed them). The submenu was not opened in a browser; it uses the same submenu form as Network tools.
-
-## [v25] - 2026-11-05 — Disable and enable a device, Meraki address default, two hints removed
-
-### Added
-- **Disable / Enable a device** (a device's `disabled` flag existed, and every driver and the health check honoured it, but nothing in the GUI or CLI set it; only editing the configuration did). Topology ▸ right-click a device ▸ **Disable** or **Enable** (a disabled device stays in the inventory, is never contacted, and shows grey); `netdir --canvas-pause device --device NAME` and `--canvas-resume device --device NAME` (`canvas.edit`, kind `device`, no gateway needed; saying it twice answers "already disabled"). Help and usage updated.
-
-### Changed
-- A Meraki device with no address is saved with `api.meraki.com` (`device.Validate`, the Add device dialog and the Configure ▸ Devices table no longer insist on one). Other platforms still need an address.
-- The hints under the device dialog's Address and Token fields are removed.
-
-### Verified
-- `TestMerakiDefaultAddress` (Meraki fills in the address, IOS-XE with none is still refused); `TestCanvasDeviceDisable` (pause, pause twice, resume, no device name, unknown device); gofmt, build, vet, `go test -race -count=1 ./...`, CGO_ENABLED=0 vet and test, the five cross-builds and `node --check` on app.js and help.js.
-
-### Not verified
-- Neither the dialog nor the new menu item was driven in a browser (no jsdom or Chromium run); the menu item flips `disabled` on the inventory entry and saves through the same commit as the other device edits. No live two-daemon run although `canvas.go` and `cli.go` changed.
-
-## [v24] - 2026-11-05 — Cisco Meraki as a device (read and write)
-
-### Added
-- **`meraki` platform** (`device/meraki.go`, `device/meraki_write.go`): the Dashboard API (`https://api.meraki.com/api/v1`, Bearer API key as the credential's token; address left empty means `api.meraki.com`). A device is an **organization** (option `org`, optional when the key sees one) or **one Meraki device** (option `serial`).
-  - Organization: Facts (name, device count and how many are online), Interfaces (every MX's uplinks), `show networks|devices|statuses|uplinks|inventory|changes|clients|ssids|vlans|firewall|device|switchports|portstatus|lldp` with `network=` and `serial=`, and the API request for any `/organizations/…`, `/networks/…` or `/devices/…` path (and its catalog).
-  - Device (`serial`): Facts (name, model, firmware), a switch's Ports and Interfaces (name, enabled, status, speed, uplink flag; an MX or an AP shows its management address), LLDP and CDP Neighbors, and **typed port changes** (`change the description for ports 1-8 to read "desks"`, `shut down 12`, `no shutdown 3`) through the existing planner: the port name is Meraki's `name`, shut down is `enabled: false`, read back and put back as for the other platforms. A switch's **uplink port is never shut down** (it would cut the switch off from its dashboard; checked against `isUplink` in the port statuses, and nothing is shut down when that cannot be checked).
-  - **Raw changes** (`device_change_raw`): `POST`, `PUT`, `DELETE` below `/organizations/`, `/networks/`, `/devices/` with a JSON body. A `PUT` keeps the old copy and puts it back after a 5xx or a lost connection; dry run shows the old copy. Refused: PATCH, a query, administrators, SAML, login security, SNMP, licenses, management interface, firmware, reboot, claim, remove, release, clone, combine, split, API keys, and deleting an organization, network or device.
-  - The dashboard's redirect to a regional shard is followed, with the key, only to a `meraki.com`/`.cn`/`.ca`/`.in` host over https (Go would drop the key; any other redirect is not followed). HTTP 429 is waited out twice. Lists are asked with `perPage=1000`; further pages are not fetched.
-- **Options in the GUI**: the device dialog (Monitor ▸ Devices ▸ Add device) and the Configure ▸ Devices table have an Options field (`key=value` pairs), where options such as `serial`, `org`, `api_version`, `vsys` and `node` could only be set in the configuration file before.
-- Typed port changes accept plain port numbers (`1-24`, `12`) for platforms whose ports are numbered that way; on the others a plain number resolves to "the device has no port 5".
-- Secret hiding: JSON names `communityString`, `authPass`, `privPass` are hidden; paths with `loginSecurity`, `licens…` and `apiKey` are not read over MCP (administrators, SAML, SNMP and VPN were already covered).
-
-### Verified
-- `device/meraki_test.go` against a TLS stub of the dashboard API: org facts and uplinks, two organizations ("set option org"), a wrong key (401, key not echoed), 429 waited out twice and given up after more, the redirect rule (a Meraki shard keeps the key; evil hosts, http and look-alike hosts are not followed), a switch's facts, ports, speeds and uplink flag, LLDP and CDP neighbors, an MX answering the switch endpoint with 400 (falls back to its management address), serial validation, typed changes (dry run sends nothing; description, shut, no shut; the uplink refused with nothing written; a missing port; an organization-level device refused), raw PUT (dry run, applied, a 500 putting the copy back) and fifteen refused requests that never reach the API.
-- gofmt, build, vet, `go test -race -count=1 ./...`, CGO_ENABLED=0 vet and test, the five cross-builds, `node --check` on app.js and help.js (results below).
-
-### Not verified
-- **Nothing was run against a real dashboard.** Endpoint paths and field names (`/organizations/{id}/devices/statuses`, `/appliance/uplink/statuses`, `/devices/{serial}/switch/ports` with `portId`, `name`, `enabled`, `/switch/ports/statuses` with `status`, `speed`, `isUplink`, `/devices/{serial}/lldpCdp`) are from Meraki's published API as I know it, and the stub follows them; a field Meraki names differently reads as empty.
-- That a `PUT` of the copy a `GET` returned is accepted by Meraki as a put-back (some endpoints reject read-only fields) is not verified; if it refuses, the result says the change was not put back.
-- Reading is not paged beyond 1000 rows; a very large organization shows its first 1000 devices, clients and so on.
-- Meraki keys and rate limits (10 requests a second per organization): a driver is opened per request and several devices on one organization can hit 429; it waits, then reports.
-- No live two-daemon, PAM or Chromium run, although `app.js` (platform lists, the Options field and column) changed; the node syntax check and the unit tests ran.
-
-## [v23] - 2026-11-04 — packet capture on directors, Arista EOS and F5 BIG-IP
-
-### Added
-- **`device_capture`** (MCP, rw callers only; `POST /api/devices/capture`; `netdir --device-capture IFACE --target DEVICES [--capture-filter EXPR] [--capture-seconds N]`; Monitor ▸ Devices ▸ Capture packets): a timed packet capture on a DNS Director, NTP Director, Arista EOS or F5 BIG-IP, returned as a summary: the busiest address pairs, the protocols counted and the first 100 packets one line each (time, protocol, addresses, ports, TCP flags, length; headers only, never payload). Limits: 30 seconds, 2000 packets, the first 96 bytes of a packet, 10 devices; the filter is limited to words, numbers and `. : / ( ) _ -` and the interface to `A-Za-z0-9_.:/-`, because both end up inside a shell command. Every capture is logged with who made it, where and the filter.
-- `device/capture.go`: the request limits, a stdlib pcap reader (both byte orders, micro- and nanosecond; Ethernet, VLAN, Linux cooked and raw IP; IPv4, IPv6, TCP, UDP, ICMP, ARP, LLDP) and the summary.
-- `device/capture_drivers.go`: **directors** run their own timed capture into a private buffer (`POST /api/capture/job`, then `GET` until done; through the MCP key and `api_request`), the gateway's interface by default; **EOS** runs `tcpdump` in the switch's shell through eAPI `bash` and reads the file back with `base64`, and maps `Ethernet3/1` to `et3_1` and `Management1` to `ma1`; **BIG-IP** does the same through iControl `util/bash` (interface `0.0`, every VLAN, by default). The capture file is removed afterwards, also after a failure, using a context of its own.
-
-### Verified
-- `device/capture_test.go`: the pcap summary (a hand-built file: three DNS queries, a TCP SYN, an ARP; line text, relative times, protocol and pair counts, a cut-off last record, garbage refused), the limits and the refused filters and interfaces (`;`, quotes, backticks, `$(`, `|`), the EOS and BIG-IP shell stubs (the exact tcpdump command including the quoted filter, the file fetched and decoded, no file left after success or after a capture that wrote nothing, nothing sent for a refused request) and a director stub (interface picked from the gateway list, the job started with the right body, polled until done).
-- `devcapture_test.go`: through the MCP endpoint with a stub BIG-IP: an `ro` caller has no tool and is refused, an `rw` caller gets the summary, no file is left, IOS-XE answers that it cannot, a bad filter is refused before any device is asked.
-- gofmt, build, vet, `go test -race -count=1 ./...`, CGO_ENABLED=0 vet and test, the five cross-builds, and `node --check` on app.js and help.js: all pass (including `TestHelpCoversEveryField` and `TestEveryPageHasHelp`).
-
-### Not verified
-- **Nothing was run on a real EOS, BIG-IP or director.** Assumed, not seen: that eAPI accepts `bash …` as a command for a privilege-15 user and `sudo tcpdump` works there (it does in the CLI; the eAPI route was not seen); that `timeout` and `base64 -w0` exist in the shell of the EOS and of BIG-IP; that BIG-IP's `util/bash` returns the output in `commandResult` (it is how the existing documentation describes it). The director's job route comes from its source (`capops.go`).
-- A director's answer goes through its MCP text limit (200,000 characters), so a busy capture can come back cut (the file is base64 in JSON): the driver then says the answer was cut, and the director has let the file go. Use a narrower filter or fewer seconds.
-- The management session is not excluded from a capture; a filter that leaves it out is the caller's to write.
-- No live two-daemon, PAM or Chromium run, although `cli.go`, `ops.go`, `web_mgmt.go` and the page changed: the additions are one flag, one op, one route and one card that follow the existing raw-change ones; they are covered by the unit tests only.
-- Not implemented: PAN-OS, FortiOS (global debug state on the box, steps that cannot be tried here), NX-OS, IOS-XE, AOS-CX, Technitium, Infoblox.
-
-## [v22] - 2026-11-04 — dnsdir and ntpdir as devices
-
-### Added
-- **`dnsdir` and `ntpdir` platforms** (`device/director.go`): the DNS Director (v633 and later) and NTP Director (v206 and later) are managed like any other device, through their own MCP endpoint (`POST /mcp` on the GUI port: 53853 and 12380) with an **MCP key** as the credential's token (the key's `ro` or `rw` is the access). One driver for both. Facts (node, release, cluster size from `list_nodes`), Interfaces and Resources (from `get_host_stats`: CPU, load, memory, swap, file systems, network rate), Neighbors (LLDP, from `get_lldp`), **Show** (`show topology`, `gateways`, `alerts`, `log`, `query-stats`, `host-stats`, `server-stats`, `schedule`, `updates`, `node-status`, `nodes`, `lldp`, and `dns` for the DNS Director or `ntp` and `time` for the NTP Director, with `node=`, `range=`, `top=`, `gateway=`, `transport=`, `lines=`, `level=`), the API request (`api_get`; catalog `list_api`) and Config (`get_config`). Option `node` names the cluster node the tools ask about. Each director hides its own secrets in every answer, so none passes through netdir.
-- **Changes on a director** through `device_change_raw` (`RawChanger`): method `SET` merges a JSON object into its configuration with `edit_config` (a dry run has the director check it without saving), and `POST` or `PUT` with an `/api/…` path calls a route of its GUI API with `api_request`. Login, logout, session and sign-in routes are refused before anything is sent. The director's own `ro` or `rw` key decides what it accepts, in addition to the `rw` rule here; a refusal reads "read-only access". The way back is the director's configuration history; netdir does not put a change back.
-- Inventory, GUI platform lists, help, usage, example configurations, README section and `CLAUDE.md` file list.
+## [v210] - 2026-11-03 — Top Clients no longer lists the node itself
 
 ### Fixed
-- The help's entries for the New gateway dialog now carry the v21 labels (IPv4 address / prefix, IPv6 address / prefix, More IPv4 addresses, More IPv6 addresses, Listening interface); v21's full test run had been skipped and `TestHelpCoversEveryField` caught them.
+- **Monitor ▸ Statistics ▸ Top Clients listed `127.0.0.1` and `::1` (about a quarter of the requests each).** They are the node's own self-check asking its NTP service every 5 seconds, not clients. Loopback is now left out of the statistics when chrony's client table is read, so it is not counted in the totals either, and any loopback entry already in the stored statistics is left out of the client list and the client count. Totals and shares that were counted before the update still include the earlier self-checks until that data ages out of the range shown.
 
 ### Verified
-- `device/director_test.go`: a TLS stub of a director's MCP endpoint that checks the Bearer key and fails the test on any other path or method: facts, interfaces, LLDP neighbors (the link-local address is skipped), resources, `show` with and without arguments and eight refused forms that never reach the director, config, API read and catalog with four refused paths, a wrong key (401, key not echoed), the `node` option, an NTP director (`show time`, no `show dns`), `SET` as a dry run and a real change, a `POST` route call, eight refused changes that never reach the director, and a read-only key refused.
-- The answer shapes of `list_nodes`, `get_host_stats`, `get_lldp`, `get_dns` and `get_time` were read from the two directors this session is connected to (a DNS Director v635 and an NTP Director v210), not guessed.
-- gofmt, build, vet, `go test -race -count=1 ./...`, CGO_ENABLED=0 vet and test, the five cross-builds and `node --check` on app.js and help.js: all pass. No live two-daemon or Chromium run (no change to cli, ops, web_mgmt or page structure).
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check app.js`.
+- **New test:** `TestSampleClientsLeavesLoopbackOut` (`127.0.0.1` and `::1` in chrony's client table are not counted and not listed; the real client is).
 
 ### Not verified
-- **The drivers were not run against a real director.** The stub follows the directors' MCP code (`mcp.go` in both tarballs) and answers observed through this session; nothing was sent to either from netdir.
-- `get_host_stats` has no uptime, so Facts has none. `get_topology` and the other `show` answers are passed through as the director gives them; very long ones are cut by the director (it says so, and the driver then reports "cut or not JSON").
-- `SET` and `api_request` act on the node that serves the endpoint (or the `node` option) and the director's own cluster relay: how the director replicates the change is its business.
+- Against a live chrony; the test feeds a made-up client table.
 
-## [v21] - 2026-11-04 — New gateway form: fields aligned, shorter labels
-
-### Changed
-- **New gateway / Edit gateway** (`webui/app.js`): the labels were long enough to wrap onto two lines, which pushed the inputs of that row down so the two columns did not line up. The labels are now one short line each (*Group number, Name, IPv4 address / prefix, IPv6 address / prefix, More IPv4 addresses, More IPv6 addresses, Listening interface*) and what they used to say about "optional" and "same subnet" is in the placeholder of the field (`optional, same subnet: 10.0.0.2, 10.0.0.3`). The checks and their messages are unchanged.
-
-### Verified
-- `node --check webui/app.js`; gofmt, build and vet passed on the v21 files. The race, no-cgo and cross-build runs were not repeated: only label text in `app.js` changed since v20, which passed them.
-- Chromium with the real `style.css`: in a 640 px wide dialog, the two inputs of each row are at the same height (rows at 56, 130, 204 and 278 px).
-
-### Not verified
-- The dialog itself was not opened in a running daemon: the alignment was checked on the same markup and stylesheet in a test page, not on the live GUI. A very narrow window may still wrap a label; the placeholders are not shown once a field has a value.
-
-## [v20] - 2026-11-04 — Aruba CX port changes, ports without a type, "shut port 1/1/1 down"
-
-### Added
-- **Typed port changes on ArubaOS-CX** (`device/aoscx_write.go`): description, clear, shut down, no shutdown on `1/1/1`-style ports, as for IOS-XE and EOS (plan, apply, read back, put back, management-port guard, rw only). One REST PATCH of `/rest/<version>/system/interfaces/<port>` per port, with the slashes of the name escaped. `user_config` is replaced as a whole by the device, so the PATCH carries what the port holds now with only `admin` changed.
-- **Ports with no type**: `1/1/1`, `1/1/1-48` and `1/1/1-1/1/48` (both ends on the same module; `gi1/0/1-gi1/0/3` is still refused). A typed range may also end in a path (`gi1/0/1-1/0/3`). On a device whose ports have types (IOS-XE) a bare name means the one port that ends with it; if two types have it (`GigabitEthernet1/1/2` and `TenGigabitEthernet1/1/2`) the change is refused with "say which port". The management-port guard treats a bare name as every port that ends with it. `lag` is a port type.
-- **The verb after the ports**: `shut port 1/1/1 down`, `shut gi1/0/1 down`, `turn ports 1/1/1-1/1/48 off`, `bring port 1/1/5 up`, `turn gi1/0/1-3 on` (`shut`, `turn`, `take`, `bring`, `put`). The old forms (`shut down …`, `no shutdown …`) are unchanged. `shut port 1/1/1` with no `down` is still refused.
-- `README.md`, `webui/help.js`, the MCP tool description, `main.go` usage and `CLAUDE.md` say Aruba CX.
-
-### Verified
-- `gofmt -l .` empty, build, vet, `go test -race -count=1 ./...`, `CGO_ENABLED=0 vet` and test, and cross-builds for amd64, arm64, arm, 386 and riscv64 all passed; `node --check` on `help.js`.
-- New tests: `aoscx_write_test.go` (a stateful stub with 48 ports: already as asked, a plan of 48, apply of 48 with another `user_config` key kept, description and clear, a missing port cancelling the change, the management port refused when written as a range; sentences with the verb in either place, bare ports and ranges, ambiguity on a device with two port types).
-- The GUI, CLI, route and MCP code are unchanged apart from texts; the v19 live run was not repeated.
-
-### Not verified
-- **Not run on a real Aruba CX switch.** Seen only in a stub: that `?selector=configuration` of one interface answers `description` and `user_config.admin`, that PATCH of `description` and `user_config` on an interface is accepted (it is my reading of the REST documentation), that a port with no admin setting is down, and that setting `description` to the empty string clears it (if a release refuses it, clearing fails, the read-back catches it and nothing is left half done).
-- A port the AOS-CX REST user may not change answers an error for that device; the change is put back as for the others.
-
-## [v19] - 2026-11-04 — F5 BIG-IP, and any configuration change on every platform
-
-### Added
-- **`bigip` driver** (`device/bigip.go`): F5 BIG-IP over iControl REST (`/mgmt/tm/...`, port 443), with a user name and password (basic) or an auth token (`X-F5-Auth-Token`). Facts (`cm/device`), Interfaces (physical interfaces and self IPs), Ports (interface statistics, bits become octets), Routes and Routing (static routes, BGP, OSPF, BFD, route domains), VLANs (with tag), Firewall (AFM policies, rule lists, address and port lists, NAT policies), Resources (CPU, memory, host info, disk, failover), and the API request and catalog. Reads only; the path guard refuses util, authn, authz, file transfer, UCS archives and tasks, and a query with a bad character. Neighbors, configuration text and `show` answer "unsupported". Wired into the MCP secret rules (`ssl-key`, `ssl-cert`, `ucs`, `file-transfer`, `authn`, `authz`, and the words `auth`, `util`, `login`), the GUI platform lists, help, README, the example configurations and `main.go` usage.
-- **Any configuration change** (`device/rawchange.go`, `rawrest.go`, `rawcli.go`, `rawpanos.go`, `devraw.go`): `RawChanger`, the platform's own write, on every platform. REST platforms (IOS-XE RESTCONF below `/restconf/data/`, ArubaOS-CX below `/rest/<version>/`, FortiOS below `/api/v2/cmdb/`, Infoblox below `/wapi/<version>/`, BIG-IP below `/mgmt/tm/`, Technitium `/api/<call>`): method POST, PUT, PATCH or DELETE, a path and a body. PAN-OS and Panorama: the XML API `config` action (`set`, `edit`, `delete`, `rename`, `move`), an XPath below `/config/` and the element, with `save` as a commit. Arista EOS and Cisco NX-OS: lines of configuration. This is a wider change than v18's, which I had advised against and you chose ("any configuration change").
-- **What still stands between a caller and the device**: the same permission as every write (`rw` key or ACL entry, GUI account outside the read-only group; `ro` has no tool and is refused by the shared gate); a path inside the platform's configuration tree and none of login, logout, users, administrators, API users, whole-configuration files, file operations, restores, UCS, software, util or auth; BIG-IP bodies that ask for reboot, halt, shutdown, load, install or restart are refused; CLI lines are refused when they end the session, reload, erase, copy, run a shell or a script, or turn off the management API or the management interface; bodies up to 256 KB, 500 lines; answers and the old state have secrets hidden (`RedactText`).
-- **Plan, then apply**: `dry_run` sends nothing that changes: REST and PAN-OS return what the path holds now (`before`); EOS returns the switch's own diff (a session, `show session-config diffs`, `abort`); NX-OS has no preview and shows the lines.
-- **Putting it back, as far as it can be done**: REST PUT and PATCH take a copy first; if the request fails in a way that may have changed something (a 5xx, a lost connection) or the device stops answering a read afterwards, the copy is PUT back (FortiOS: the first result; Infoblox: without `_ref`). A 4xx changed nothing and puts nothing back. EOS commits with `commit timer 00:03:00`, checks the switch answers, and only then confirms; if it does not, the switch undoes the change by itself. NX-OS takes a checkpoint first and rolls back to it when a line is refused or the switch stops answering. A POST or a DELETE over REST, a PAN-OS action and a Technitium call are not undone; the result says so and shows the old state. Nothing is read back for equality, because devices normalise what they store. `save` is off by default (IOS-XE `save-config`, BIG-IP `save`, EOS `write memory`, NX-OS `copy running-config startup-config`, PAN-OS commit).
-- **Four ways in**: MCP tool `device_change_raw` (`write`, rw callers only; `method`, `path`, `body`, `lines`, `save`, `dry_run`); `POST /api/devices/raw`; CLI `netdir --device-raw "PATCH /restconf/data/…" --device-body TEXT|@FILE --target DEVICES [--device-save] [--dry-run] [--yes]` and `netdir --device-lines FILE --target DEVICES …`; GUI Monitor ▸ Devices ▸ **Advanced change** (Method, Path, Body, Lines, Save, Plan, then Apply with a confirmation; not shown to a read-only account).
-- **Audit trail**: every call is written to the Log with who, the devices, the request (a body by its size), and for a real change the old state and each line sent. When a device fails after something was done, the error says whether the change was applied and whether it was put back.
-- `README.md` (BIG-IP section, `device_change_raw`, the writes row), `webui/help.js`, `CLAUDE.md` file list, `apiroutes.go` (regenerated), example configurations.
-
-### Changed
-- The "this platform cannot be changed" message of `device_change` now points to `device_change_raw`.
-
-### Verified
-- `gofmt -l .` empty; `go build`; `go vet ./...`; `go test -race -count=1 ./...`; `CGO_ENABLED=0 go vet` and `go test`; cross-builds for linux/amd64, arm64, arm, 386 and riscv64; `node --check` on `app.js` and `help.js`.
-- New tests: `device/bigip_test.go` (a TLS stub that fails the test on any method but GET: facts with both kinds of credential, interfaces, ports, routes, routing with a hidden password, VLANs, firewall, resources, refused paths that never reach the device, wrong password without an echo, incomplete credentials); `device/rawchange_test.go` (twenty-one refusals that must not reach the device on nine platforms; IOS-XE dry run, apply with save, a 400 that puts nothing back, a 500 that is put back, a device that stops answering and is put back; FortiOS put-back of the first result; Technitium; PAN-OS dry run, apply and commit; EOS diff, commit timer, confirmation, write memory and abort on a refused line; NX-OS checkpoint, save, and rollback on a refused line); `devraw_test.go` (an `ro` caller has no tool and is refused, an `rw` caller plans and changes, refused requests never reach the switch, one platform's refusal does not stop another, the route refuses a read-only session).
-- **Live, with two real clustered daemons**, a throwaway PAM setup and a stub IOS-XE switch: `--device-raw` as a plan, with `--yes`, with `--device-save` (the save reached the switch), a refused path, lines sent to a REST platform, a missing `--target`, a malformed `--device-raw`; the same through the second node's socket (clustered settings, same audit); a failing save reported with exit status 1.
-- **Chromium, light and dark**: Monitor ▸ Devices ▸ Advanced change: Apply disabled until a plan and again after an edit, the confirmation, the before copy and the result, the help panel with the new section and command line; the account in the read-only group only sees neither change card. The 401 in the console is the session probe on the login page (as before).
-- Users, groups, the PAM file and every test daemon were removed afterwards, by name and PID.
-
-### Not verified
-- **Nothing was run on real gear: not on a BIG-IP, and not a single raw change on any real device.** Every path, field name and answer shape is from my reading of the vendors' documentation and was seen only in test stubs.
-- BIG-IP: the field names of `cm/device`, `net/interface/stats` (nestedStats), `net/self`, `net/vlan?expandSubcollections=true`, the AFM and routing endpoints; which of them a given release or module set answers (an unlicensed module answers 404 and shows as unavailable); that `POST /mgmt/tm/sys/config {"command":"save"}` is the save.
-- Raw changes: that EOS accepts `commit timer 00:03:00` in a session and that confirming needs `configure session NAME` then `commit` (my reading of the EOS documentation); that NX-API `cli_conf` accepts lines joined with ` ;`, and that `checkpoint`, `rollback running-config checkpoint` and `no checkpoint` run through `cli_show_ascii`; that IOS-XE `cisco-ia:save-config` is the save RPC; that PAN-OS takes `type=commit` and the config actions over GET; that FortiOS and Infoblox accept the old copy back by PUT.
-- A change that cuts the device off in a way the guards do not know (an uplink, a routing change) cannot be read back or put back by the daemon. EOS undoes it with its timer; the others cannot. The guards are lists of words, not an understanding of the configuration: they are a net under a mistake, not a defence against a caller who means harm. Give `rw` to people and keys you would trust with the devices.
-- The put-back is a copy of what a GET returned; a device that does not return everything it holds (secrets, defaults) restores less than it had.
-- A raw body that contains a secret is logged by its size only, but a line of EOS or NX-OS configuration is logged as sent with secrets hidden by the usual word rules (`RedactText`), which hides more than it has to and can miss one.
-- The typed changes of v18 are unchanged; they still cover IOS-XE and EOS only.
-- Not run live: certificate install and revert, and `--update-upload` / `--update-push` (untouched).
-
-## [v18] - 2026-11-04 — Change devices: ports on Catalyst IOS-XE and Arista EOS, in plain English
-
-### Added
-- **Device changes** (`device/change.go`, `device/iosxe_write.go`, `device/eos_write.go`, `devchange.go`): the first thing the gateway writes to a device. A change is one of four typed actions on a range of ports: set a description, clear it, shut down, no shutdown. Nothing a caller types is sent to a device as it is: each driver builds its request from the validated fields. IOS-XE: one RESTCONF `PATCH` of `Cisco-IOS-XE-native:native/interface` for everything that is set (a merge, applied as a whole), and a `DELETE` of the `description` or `shutdown` leaf of one interface for everything that is removed. EOS: one eAPI request holding `configure session netdirXXXXXXXX`, the `interface` and `description` or `shutdown` lines, and `commit`; a refused line stops the request before the commit and the pending session is aborted. Every EOS line is checked against a fixed pattern (`eosCfgRE`) before it is sent, and a test proves that `reload`, `write erase`, a second line in a description and the like are refused.
-- **Plain English** (`ParseChange`): a small fixed grammar, no model inside the daemon: `change the description for ports gi1/0/1-24 to read "devices"`, `set gi1/0/1 description to "x"`, `describe et3 as "x"`, `clear the description on …`, `shut down …`, `no shutdown …` (and `disable`, `turn off`, `enable`, `turn on`). Ports are `gi1/0/1-24`, `te1/1/1`, `et1-48`, `po1`, several separated by commas or `and`; a range runs over the last number. What it does not understand it refuses, saying what it knows; text after a closing quote is refused too.
-- **Plan, apply, read back, put back**: a change is planned first (what each port holds now and would hold), written only to the ports that differ, read back, and, if the device refused it or does not hold it, written back as it was and read back again. The result says `applied`, `rolled_back`, the changes and the ports already as asked. `dry_run` stops after the plan. A port the device lacks cancels the change on that device. A port that holds the address the gateway reaches the device on is never shut down (it would cut off the read-back and the way back).
-- **Permission is the access you already give**: an MCP key or ACL entry with `rw`, or a GUI account outside the read-only group, may change devices; `ro` may not. There is no separate switch. Read-only callers are refused by the same gate as every other write (`authed`, and the node picker holds the line on the relayed node too); `device_change` is not listed for an `ro` caller and is refused if called.
-- **Four ways in, one code path**: MCP tool `device_change` (`text`, or `action`, `ports`, `value`; `dry_run`); `POST /api/devices/change`; CLI `netdir --device-change "…" --target DEVICES [--dry-run] [--yes]` (plan shown first, then a question unless `--yes`; exit status 1 if any device failed); GUI Monitor ▸ Devices ▸ **Change ports** (Plan, then Apply with a confirmation; the box is not shown to a read-only account). Each device is changed on its own: one that fails does not stop the others, and a platform with no writer answers that it cannot be changed from here yet.
-- **Audit trail**: every change is written to the Log with who made it (`alice via 127.0.0.1:22162` when relayed by the node picker, `mcp:KEY@ADDRESS` over MCP), the devices, and for each port what it held before and after.
-- `webui/help.js` (a "Change ports" section and the command line), README (status row, the `device_change` tool, a paragraph on what is and is not sent), `CLAUDE.md` file list, `apiroutes.go` (regenerated).
-
-### Changed
-- `expandGatewayTargets` now has a form that takes a configuration (`expandGatewayTargetsIn`), so `gateway:N` targets work for changes; reads are unchanged.
-- `device/eos.go`: the eAPI request is now sent by one function (`post`) that `run` (show commands, `CheckShow`) and the change code share; reads behave as before.
-
-### Verified
-- `gofmt -l .` empty; `go build -o /dev/null .`; `go vet ./...`; `go test -race -count=1 ./...`; `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; cross-builds for linux/amd64, arm64, arm, 386 and riscv64; `node --check` on `app.js` and `help.js`.
-- New tests: `device/change_test.go` (port ranges, the grammar with accepted and refused sentences, validation, and the plan/apply/verify/rollback logic including a write that fails half way, a write that says yes and changes nothing, and a rollback that fails too), `iosxe_write_test.go` and `eos_write_test.go` (TLS stubs that keep state and fail the test on any request a change never sends: wrong paths, wrong lines, unknown fields; they cover a plan that writes nothing, one PATCH for many ports, the escaped `1%2F0%2F1` DELETE path, rollback after a refusal half way through the deletes, an EOS refusal that leaves no pending session, a commit that changes nothing, and the management-port guard), and `devchange_test.go` (MCP: an `ro` caller is not offered the tool and is refused, an `rw` caller plans and changes in English and typed, refused inputs never reach the switch, a mixed target where one platform has no writer; and a read-only session refused on the route while an rw one is served).
-- **Live, with two real clustered daemons**, a throwaway PAM setup (users in the GUI group, in the read-only group and in neither) and a stub IOS-XE switch that keeps its interface state: `--device-change` as a plan, `--dry-run`, `--yes`, a second run that finds nothing to do, clear, shutdown, an unknown sentence, a missing `--target` and a port the switch lacks (exit status 1 each); the API as a GUI user (served), a read-only-group user (refused, port untouched, reads still work) and a user outside the group (login refused); MCP from an ACL entry with `rw` (tool listed, change made) and from one without (27 tools, no `device_change`, call refused, reads work); the node picker relaying a change to the other node (done, attributed `alice via 127.0.0.1:22162`, and refused for the read-only user on the relayed node); cluster join, a shared edit made on the replica reaching the primary, `--cluster-promote`, the versions list, and a change by `tag:` target on the promoted node.
-- **Chromium, light and dark**: Monitor ▸ Devices ▸ Change ports: Apply is disabled until a plan with changes is shown and again as soon as the text changes, the confirmation text, the result table, the message for a sentence it does not understand, the "?" panel with the new section and command line, and no change box for the read-only user. No `innerHTML`, inline script or inline style was added.
-- A first `go test -race` run failed `TestEnsureReadGroupMakesOnlyTheDefaultGroup` because my live check had created the `netdir-ro` group at that moment (the test needs it absent); after the test users, groups and PAM file were removed the whole suite passed.
-
-### Not verified
-- **Nothing was run on a real Catalyst or a real Arista switch.** The stubs follow my reading of the models; run a plan and a change on a lab port first.
-- IOS-XE, seen only in a stub: that `Cisco-IOS-XE-native:native/interface` lists each type as `{"GigabitEthernet": [{"name": "1/0/1", "description": …, "shutdown": [null]}]}`, that a `PATCH` of that container merges and answers 204, that a `DELETE` of `…/GigabitEthernet=1%2F0%2F1/description` (or `shutdown`) is accepted, that an absent `shutdown` leaf means up, and that the description the switch reads back equals what was sent (a switch that trims or truncates would be reported as a failed change and put back). Port types other than `GigabitEthernet` were only exercised in the stub (`TenGigabitEthernet`, `Port-channel`).
-- EOS, seen only in a stub: the JSON of `show interfaces description` (`interfaceDescriptions`, `interfaceStatus` of `adminDown`, or `disabled` on some releases), that `configure session NAME` … `commit` works in one `runCmds` request, that a refused line leaves a pending session that `abort` removes, and that the eAPI user starts in privileged mode (privilege 15).
-- A change that cuts the device off after it is applied (an uplink that is not the management address, for example) cannot be read back or put back: the result then says so and names the ports. There is no commit timer or switch-side rollback.
-- The management-port guard knows only the addresses the driver lists on the interfaces; a device reached through NAT, or by a host name that resolves to an address on no interface, is not protected.
-- Descriptions are text: a description containing a hidden-value token an MCP caller read (such as `PUBLIC-IP-3fa91c`) is written as that text, not as the real value.
-- Only descriptions and admin state of ports are changeable. NX-OS, ArubaOS-CX, FortiOS, PAN-OS, Infoblox and Technitium have no writer yet.
-- Not run live: certificate install and revert, and `--update-upload` / `--update-push` (the update and certificate code is untouched; the cluster, versions, shared-edit and promote parts were run). The jsdom smoke test was replaced by the Chromium run (jsdom is not installed here).
-- The `webui` was checked against a stub switch only; the Log page was not looked at for the new audit lines (they were read from the daemon log).
-
-## [v17] - 2026-11-04 — Arista EOS and Technitium DNS Server drivers
-
-### Added
-- **`eos` driver** (`device/eos.go`): Arista eAPI, the JSON-RPC interface at `/command-api`, with basic authentication. Only `runCmds` with the format `json` or `text` is ever sent, one command per request, and every command goes through `CheckShow` (no `enable`, no `configure`: the user needs the privilege). Facts (`show version`, `show hostname`), Interfaces and Ports (`show interfaces`: state, speed, MAC, IPv4 and IPv6 addresses, counters and rates), Neighbors (`show lldp neighbors detail`), Routes (`show ip route vrf all` and IPv6, one entry per next hop), Routing (14 parts: route summary, BGP, EVPN, OSPF, IS-IS, BFD, VRRP, MLAG, route maps, prefix lists), Firewall (IP, IPv6 and MAC access lists), Resources (memory from `show version`, CPU from `show processes top once`, fans, temperatures and power supplies found at any depth of the environment answers), VLANs with their ports, Config (`show running-config`, text), Show (text), and APIGet/APICatalog: a path names a show command (`/eapi/show/ip/route/vrf/all`, `%2F` for a `/` inside a word, `?format=text` for text; text is for read-write callers only).
-- **`technitium` driver** (`device/technitium.go`): Technitium DNS Server's HTTP API over HTTPS (default port 53443; the plain-HTTP port is never used). The credential is an API token, sent as `Authorization: Bearer` and never in a URL, or a user name and password, from which the driver logs in (POST form) and logs out in `Close`. **Technitium changes things with plain GET requests, so being a GET is no safeguard: every request, and every path APIGet is asked for, must name an endpoint whose last word is `get`, `list` or `query` (or begins with one) before it is sent, and a `token`, `pass`, `password` or `totp` parameter is refused.** Facts (name, version, uptime from `/api/settings/get`), Interfaces (the addresses it listens on), Resources (the dashboard's statistics for the last hour and day) and APIGet/APICatalog over every read endpoint. Neighbors, routes, routing, firewall, VLANs, port counters, configuration and `show` answer unsupported.
-- **MCP secret safeguards**: for EOS the path is a CLI command and the CLI accepts abbreviations, so a word that is, or abbreviates (two letters or more), `running-config`, `startup-config`, `session-config`, `tech-support`, `snmp`, `users`, `aaa`, `radius`, `tacacs`, `crypto`, `kerberos`, `certificate`, `secret` or `privilege` is refused (`show run` is `show running-config`) (`eosDeniedWord`); Technitium's admin and user endpoints are refused by the existing `admin` and `user` rules.
-- GUI: the platform lists offer `eos` and `technitium`; field hints and `webui/help.js` say what each needs. README, `netdir.conf.example` and `devprobe`'s `lab.json.example` have examples.
-
-### Changed
-- The Show command text and the help say which platforms run commands (EOS now does); tool descriptions and usage text name the new platforms.
-
-### Verified
-- `gofmt -l .` empty; `go build -o /dev/null .`; `go vet ./...`; `go test -race -count=1 ./...`; `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; cross-builds for linux/amd64, arm64, arm, 386 and riscv64; `node --check webui/app.js`.
-- New tests against TLS stubs: `eos_test.go` (4 tests, with the MCP path test for EOS and Technitium) and `technitium_test.go` (3 tests). The stubs fail the test on any request that is not a single show command via `runCmds` (EOS), on a credential or token in a URL, on any Technitium request that is not the login, the logout or a get, list or query endpoint, and on a request without the credentials. They also check that refused paths and commands never reach the device, that a wrong password or token is refused without being echoed, one login and one logout per request for a password login and none for an API token, secrets hidden in answers (a BGP peer's password, TSIG shared secrets, a proxy password), and the EOS abbreviations (`show run`, `show tech`).
-
-### Not verified
-- **Nothing was run on a real Arista switch or a real Technitium server.** Run `go run ./tools/devprobe -inventory FILE` against real devices first.
-- EOS field names seen only in the stub (from memory or from third-party tools, not from Arista's eAPI reference or a switch): the IPv6 interface addresses (`interfaceAddressIp6.globalUnicastIp6s`), the route table JSON (`vrfs`, `routes`, `routeType`, `vias`, `nexthopAddr`, `preference`), `cpuInfo` of `show processes top once`, the nesting and the units of the environment answers (the fan `actualSpeed` is taken as percent), the power supply keys, `show vlan`'s `interfaces`, and every part command of the routing and firewall requests (a part a release or platform does not have is listed under `unavailable`). `show version`, `show interfaces` (state, counters), `show lldp neighbors detail` and the environment keys `currentTemperature`, `actualSpeed`, `outputPower` and `state` match Arista documentation and the Harvest eAPI templates. EOS storage is not answered (`show file systems` has no JSON here).
-- Technitium: the settings and dashboard field names and the login envelope are from Technitium's API documentation as summarised by third parties; **I could not read its API documentation itself** (it is not fetchable from here). The claim that the `Authorization: Bearer` header works from Technitium 15.0 comes from a third-party client's pull request, not Technitium's own documentation; older releases need the token in the URL, which this driver deliberately never does. Whether every endpoint named get, list or query only reads is also unverified (it holds for the endpoints this driver and its examples use). The Technitium app configuration endpoint (`/api/apps/config/get`) is allowed over MCP and its secrets are hidden by key name only.
-- Technitium reports no CPU, memory or sensor readings through its API, so none are given.
-- The MCP safeguards work by name and path only; they hide more than they have to and are not a guarantee.
-- The PAM live check and the jsdom and Chromium GUI checks were not run: the GUI change is only the platform lists and text in `app.js` and `help.js`. The cluster, installer and BGP checks do not apply: those files were not touched.
-
-## [v16] - 2026-11-04 — ArubaOS-CX and Infoblox NIOS drivers
-
-### Added
-- **`aoscx` driver** (`device/aoscx.go`): the ArubaOS-CX REST API (10.04 and later). It logs in once (POST `/rest/<version>/login`, credentials in the form body and never in a URL), keeps the session cookie and logs out in `Close`; the login and logout are the only POSTs, everything else is a GET. Option `api_version` (default `v10.09`, validated). Facts (system status and configuration, chassis serial number and product name, uptime from `boot_time`), Interfaces and Ports (status, configuration and statistics selectors; speed in bit/s converted), Neighbors (LLDP, one request per front-panel port that is up), Routes (every VRF, one entry per next hop), Routing (BGP, OSPF, OSPFv3 and static routes per VRF, route maps, prefix lists), Firewall (ACLs with entries and hit counters, object groups, classes, policies), Resources (CPU and memory from the subsystems' resource utilization, fans, temperatures, power supplies), VLANs (with the ports that carry each), Config (`fullconfigs/running-config`, JSON), and APIGet/APICatalog over any `/rest/<version>/...` resource (login and logout refused). `Show` answers unsupported: the REST API runs no CLI commands.
-- **`nios` driver** (`device/nios.go`): the Infoblox WAPI (`/wapi/<version>/`, default `v2.12`, option `wapi_version`) with basic authentication; only GET is sent and `_function` calls, `fileop` and `request` are refused. NIOS is a DNS/DHCP/IPAM appliance, so only what fits is answered: Facts (the grid member whose VIP or host name is the device's address, its hardware model and serial number, the NIOS version from `upgradestatus`; the grid's name for an address that is no member's), Interfaces (that member's LAN1, LAN2, MGMT and HA addresses, or every member's as `host/lan1`), Resources (the capacity report as storage and each member's service status as sensors), and APIGet/APICatalog over every object type (the catalog lists the release's supported objects). Neighbors, routes, routing, firewall, VLANs, port counters, configuration and `show` answer unsupported (the optional interfaces are not implemented, so the tools say so).
-- **MCP secret safeguards for the new platforms**: refused path words for ArubaOS-CX (`fullconfigs`, `running-config`, `startup-config`, and `accounts`; users, RADIUS, TACACS, SNMP, AAA, certificates and SSH were already refused) and for Infoblox (`authservice`, `authpolicy`, `dnsseckey`, `tsig`, `fileop`; admin users and groups, LDAP, Kerberos, SNMP and certificates were already refused by `admin`, `ldap`, `kerberos`, `snmp`, `certificate`); `tsig_key` and `tsig-key` are secret key names in `Redact`.
-- GUI: the platform lists offer `aoscx` and `nios`; the field hints and `webui/help.js` say what each needs (the switch's `https-server rest ...` settings, the WAPI admin group). README, `netdir.conf.example` and `devprobe`'s `lab.json.example` have examples.
-
-### Changed
-- `device_show` and the Show command text now say that FortiOS, ArubaOS-CX and Infoblox run no commands (NX-OS and PAN-OS do); tool descriptions and usage text name the new platforms.
-
-### Verified
-- `gofmt -l .` empty; `go build -o /dev/null .`; `go vet ./...`; `go test -race -count=1 ./...`; `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; cross-builds for linux/amd64, arm64, arm, 386 and riscv64; `node --check webui/app.js`.
-- New tests against TLS stubs: `aoscx_test.go` (3 tests) and `nios_test.go` (4 tests), and one MCP path test for both platforms. The stubs fail the test on a password in a URL, on any request after the login that is not a GET (AOS-CX), on a function call or any method but GET (WAPI), and on a request without the session or the credentials. They also check: one login and one logout per request, LLDP not asked of ports that are down, a wrong password refused without echoing it, bad `api_version` / `wapi_version` values refused, refused API paths never reaching the device, and secrets (a BGP neighbor's password, an SNMP community string, a TSIG key) hidden in answers.
-- A test caught that `tsig_key` was not hidden (only an exact `key` was); fixed.
-
-### Not verified
-- **Nothing was run on a real ArubaOS-CX switch or Infoblox appliance.** Run `go run ./tools/devprobe -inventory FILE` against real devices before relying on these drivers.
-- ArubaOS-CX field names seen only in the stub (from memory, not from Aruba's reference or a switch): `resource_utilization` `cpu` and `memory`, the fan `speed`, temperature `temperature` (taken as millidegrees when it is 1000 or more) and power supply `characteristics.instantaneous_power`, the VLAN `vlan_tag` and `vlan_trunks` references on interfaces, the LLDP neighbor keys (`neighbor_info`, `mgmt_ip_list`), the route `nexthops`/`port` shape, and the resource names of the routing parts (`bgp_routers`, `ospf_routers`, `ospfv3_routers`, `static_routes`, `route_maps`, `prefix_lists`) and the firewall parts (`acls`, the `statistics` selector for hit counts, `object_groups`, `classes`, `policies`). A part a release does not have is listed under `unavailable`. The system, interface, subsystem, product info and `depth`/`selector` conventions come from Aruba's API guide and pyaoscx.
-- That the default `v10.09` is right for every release: older ones need `api_version`. The running configuration is the JSON `fullconfigs` resource, not CLI text; no text running-config is read.
-- Infoblox field names seen only in the stub: the member `node_info` port settings (`lan2_network_setting`, `mgmt_network_setting`, `lan_ha_port_setting`), `ipv6_setting`, and `service_status`. `member`, `upgradestatus` (`current_version`, read with `type=PNODE`), `capacityreport` and `grid` come from Infoblox's WAPI documentation. Whether `_max_results=1000` and a read-only admin group are enough on every NIOS release is unverified.
-- NIOS has no CPU, memory or sensor readings through WAPI, so none are reported; Resources are the capacity report and the service states only.
-- The MCP safeguards work by name and path only; they hide more than they have to and are not a guarantee (an Infoblox object type that holds a secret under a name no rule knows would show it).
-- The PAM live check and the jsdom and Chromium GUI checks were not run: the GUI change is only the platform lists and text in `app.js` and `help.js`. The cluster, installer and BGP checks do not apply: those files were not touched.
-
-## [v15] - 2026-11-04 — Cisco NX-OS and Palo Alto PAN-OS / Panorama drivers
-
-### Added
-- **`nxos` driver** (`device/nxos.go`): NX-API CLI (`POST /ins`) with basic authentication. Only `cli_show` and `cli_show_ascii` are ever sent and every command goes through `CheckShow`. Facts, Interfaces, Ports (counters and rates), Neighbors (LLDP and CDP, merged by port), Routes (all VRFs, v4 and v6), Routing (OSPF, BGP, EIGRP, IS-IS, RIP, BFD, HSRP, VRRP and others as parts; `unavailable` says what a switch did not answer, a feature that is off included), Firewall (ACLs with match counters, object groups, CoPP), Resources (CPU, memory, fans, temperatures, power), VLANs, Config (`show running-config`), Show (text) and APIGet/APICatalog over NX-API REST (`/api/mo/`, `/api/class/`, `/api/node/...`; cookie login, logged out in `Close`).
-- **`panos` and `panorama` drivers** (`device/panos.go`): the XML API with an API key (`X-PAN-KEY` header) or a user name and password from which a key is made (the only POST; credentials in the body, never in a URL; the key is scrubbed from every error). `panos` recognises a Panorama from its system information, `panorama` forces it. Options `vsys` (default `vsys1`) and `device_group`, both validated so they cannot alter an XPath. Facts, Interfaces (with the management interface, comments and link state from the configuration), Ports, Neighbors (LLDP), Routes, Routing, Firewall (rule hit counters for security, NAT, PBF, decryption and application override; sessions; policy and object configuration; on a Panorama the managed devices, device groups, templates and shared and device-group rules and objects), Resources (`show system resources`, disk space, environmentals), VLANs, Config (running configuration XML), Show (a CLI-style `show` command converted to XML; pipes refused), APIGet/APICatalog (`type=op` with one `<show>` root, `type=config` with `action=show|get`; everything else, a `key` parameter and any write refused). A Panorama answers `unsupported` for routes, routing and VLANs.
-- **MCP secret safeguards for the new platforms**: more secret key names (`pwd`, `phash`, `private-key`, `pre-shared`, `api-key`, `community-string`) in `Redact`/`RedactText`; more refused path words (NX-OS `userext`, PAN-OS `mgt-config`, authentication profiles and sequences, server profiles, high availability, `deviceconfig`, `ike`, ...); NX-OS `sys` (the whole object model) is refused; PAN-OS needs a check of the query, because the path is always `/api/` (`checkPanosQueryMCP`): `show config`, a whole-configuration xpath and the secret-holding parts are refused.
-- GUI: the platform lists (Configure ▸ Devices, the device form) offer the new platforms; field hints and `webui/help.js` say what each needs. README, `netdir.conf.example` and `devprobe`'s `lab.json.example` have examples.
-
-### Changed
-- `device_show` and the Show command now answer for NX-OS and PAN-OS; the error for IOS-XE and FortiOS no longer promises an SSH transport.
-- Tool descriptions and usage text name the new platforms.
-
-### Verified
-- Baseline (v14) tests passed before any change.
-- `gofmt -l .` empty; `go build -o /dev/null .`; `go vet ./...`; `go test -race -count=1 ./...` (root package and `./device`); `CGO_ENABLED=0 go vet ./...` and `CGO_ENABLED=0 go test ./...`; cross-builds for linux/amd64, arm64, arm, 386 and riscv64; `node --check webui/app.js`.
-- New tests against TLS stubs: `nxos_test.go` (5 tests) and `panos_test.go` (12 tests: firewall and Panorama through both `panos` and `panorama`, key generation with the password only in the body, wrong key and wrong password refused without echoing the key, XPath-safe options, CLI-to-XML conversion, API allow/refuse lists and that a refused path never reaches the device, the MCP path checks, the XML reader's edge cases, `top`/`df` parsing, new secret names). Each stub fails the test on any request that is not a read-only show command or read. A mutation check (making NX-OS `Config` send `cli_conf`) made the NX-OS test fail, as it should.
-- One `go test -race ./...` run failed in the root package while another test run may still have been using the machine; its cause was not identified (the output was cut off). Two further full `-race` runs and the `CGO_ENABLED=0` run passed.
-- The existing `TestCheckAPIPathMCP` caught a bug in my refactor of `redact.go` (the `module:` prefix was stripped too late); fixed.
-
-### Not verified
-- **Nothing was run on real NX-OS, PAN-OS or Panorama equipment.** `go run ./tools/devprobe -inventory FILE` should be run against real gear before relying on these drivers.
-- Field names seen only in a stub (from memory, not from a vendor document or a real device): NX-OS `eth_*` interface counters and rate keys, the route table JSON, CDP, fan, temperature and power keys; PAN-OS counter names, the LLDP management address element, environmentals element names, `show running resource-monitor`, `show ippool`, and the Panorama `show templates` / `show devicegroups` shapes. NX-OS `show version`, LLDP, `show system resources`, `show vlan brief` and `show inventory` keys, and PAN-OS system info, interface, LLDP, route, rule-hit-count and Panorama `show devices` fields come from vendor references and NAPALM.
-- Which PAN-OS releases accept the `X-PAN-KEY` header on the XML API (documented for 10.2) is unverified; older releases may need the key as a parameter, which this driver deliberately does not send.
-- Panorama behaviour is stub-only. PAN-OS's advanced routing engine's live state is not read. NX-OS storage is not answered.
-- The MCP safeguards work by name and path only; they hide more than they have to and are not a guarantee.
-- The PAM live check and the jsdom and Chromium GUI checks were not run: the GUI change is only the platform lists and text in `app.js` and `help.js` (`node --check` and the help tests passed).
-- The usual two-daemon cluster, installer and BGP checks do not apply: those files were not touched.
-
-## [v14] - 2026-11-01 — Public addresses and AS numbers never reach an MCP caller
-
-### Added
-- **Everything an MCP tool answers is scrubbed** (`mcpmask.go`, applied where the answer leaves in `mcp.go`, so every present and future tool is covered, errors included): **public IPv4 and IPv6 addresses, public AS numbers, e-mail addresses and serial numbers** are replaced by tokens (`PUBLIC-IP-3fa91c`, `PUBLIC-IP6-…`, `PUBLIC-AS-…`, `MASKED-EMAIL-…`, `MASKED-ID-…`). Private (RFC 1918), ULA, link-local, loopback, CGNAT, multicast, documentation and reserved addresses (netmasks too) and private/documentation/reserved AS numbers are shown.
-  - AS numbers are found by key (`as`, `asn`, `remote-as`, `local_as`, ..., numbers or strings), in `as-path` fields, and in text (`AS15169`, `router bgp N`, `remote-as N`).
-  - The same value gets the same token (a keyed hash; the salt is made at start-up), so the same next hop in a route and in a firewall rule can still be recognised. The token cannot be reversed, and it changes at a restart and from node to node.
-  - **A token sent back in `edit_config` or `api_request` is turned into `(hidden)` and the real value is restored from the current configuration**, like a secret, so a caller can edit a configuration it read with its public VIP masked. A token that matches nothing is refused.
-  - The MCP instructions tell the assistant about the tokens.
-
-### Verified
-- `go test -race ./...`, `CGO_ENABLED=0 go vet/test`, `go vet`, `gofmt`, the five cross-builds. Tests: public/private classification (incl. netmasks, MACs, times), ASN rules, JSON walk (numbers kept exact, keys scrubbed), the token round trip, and through the real tool path a device on 8.8.8.8 listed only by token.
-
-### Not verified
-- **Only what the rules recognise is hidden.** Not scrubbed: host names and domain names (a public FQDN names the network as well as an address does), MAC addresses, device names, free text without an address in it, and a serial number under a name that is not in the list. A dotted version (`17.9.4.1`) that looks like a public address is hidden by mistake. IPv4 embedded in an IPv6 text is not handled. Say what else should go.
-- The GUI and the CLI are not scrubbed: only MCP is.
-- Not run against a real MCP client or real devices.
-
-## [v13] - 2026-11-01 — No device secret reaches an MCP caller; MCP has its own page
-
-### Changed
-- **No MCP caller, read-only or read-write, is handed a device's keys, passwords or configuration.** The assistant behind MCP is a public service, so:
-  - **`device_config` is gone from MCP**, and `op=config` is refused for any MCP caller however it is reached (including `api_get`). The GUI (Monitor ▸ Devices ▸ Configuration, and the download) still has it.
-  - **`device_show` output is scrubbed line by line** (`device.RedactText`): after a word such as password, secret, key, community, md5 or psk the rest of the line reads `(hidden)`; PEM blocks and JSON keys named like secrets are removed. It hides more than it has to (`key chain NAME` loses the name).
-  - **`device_api_get` refuses text answers** (also for read-write callers) and **paths that hold secrets** (`device.CheckAPIPathMCP`): the whole configuration (IOS-XE `native`, FortiOS `cmdb`), and anything with users, AAA, TACACS, RADIUS, SNMP, crypto, certificates, keys, VPN, license, SSH, admin, LDAP/SAML/SSO in the path, and model sources. JSON answers keep their key-name redaction.
-  - A device query sent through another node is refused for MCP callers (that node would not scrub it).
-- **Configure ▸ MCP** is its own page, right below Gateways (it was Monitoring ▸ MCP, the third tab; Monitoring keeps SNMP and Metrics). Help, README, QUICKSTART and the messages that name the page follow.
-
-### Verified
-- `go test -race ./...`, `CGO_ENABLED=0 go vet/test`, `go vet`, `gofmt`, the five cross-builds, `node --check webui/app.js`; new tests for `RedactText`, `CheckAPIPathMCP`, and an rw MCP caller refused the configuration, secret paths and a cross-node query. Chromium against a mocked API: the sidebar lists MCP after Gateways, the page shows the MCP card and the Keys table, Monitoring has SNMP and Metrics only.
-
-### Not verified
-- **This works by name and by path, so it is a safeguard, not a guarantee.** A secret under a name or in a path the rules do not know can still get through (an SNMP community in JSON under a plain name, for one). Keep the devices' API logins read-only and least-privilege. Tell me any leak you find and I will add the rule.
-- The scrubbing was tested on made-up IOS-XE and FortiOS text, not on real `show running-config` output.
-- Dark mode of the moved page was not looked at in a screenshot.
-
-## [v12] - 2026-11-01 — Read anything a device's API presents
-
-### Added
-- **MCP tools `device_api_get` and `device_api_catalog`** (API `op=api&path=…` and `op=api_catalog`; Monitor ▸ Devices ▸ *API path* / *API catalog*). Instead of a tool per topic, `device_api_get` sends a GET for any path of the device's own API and returns the answer, so whatever a device presents is readable. `device_api_catalog` says what is there: on IOS-XE the top-level node of every YANG model (`GET /restconf/data?depth=1`) and the modules the switch lists; on FortiOS how cmdb, monitor and log paths are built (it has no index of its API; `?action=schema` on a cmdb path lists a table's fields).
-- Limits: only GET is ever sent. IOS-XE: `/restconf/data...`, `/restconf/yang-library-version`, `/restconf/tailf/modules/...`. FortiOS: `/api/v2/monitor/`, `/cmdb/` and `/log/`; paths with backup, download, export, packet-capture, certificate or restore in them are refused. A path with a host, `..`, spaces or control characters is refused for every platform. JSON answers have keys and passwords hidden (`device.Redact`); a text answer (a YANG file, a configuration) can hold secrets that have no name to find them by, so it goes to read-write callers only.
-- The named tools (`device_ports`, `device_routing`, `device_firewall`, ...) stay as shortcuts that normalize the common cases.
-
-### Verified
-- `go test -race ./...`, `CGO_ENABLED=0 go vet/test`, `go vet`, `gofmt`, the five cross-builds, `node --check webui/app.js`; tests run both drivers against TLS stubs (JSON redacted, text flagged, refused paths, the catalog) and the read-only rule.
-
-### Not verified
-- **Not run on real gear.** Whether a given IOS-XE release answers `/restconf/data?depth=1` the way the catalog expects was not seen; if not, the catalog says so in `top_level_nodes_error` and still lists the modules it can.
-- A big IOS-XE model may exceed the 32 MB answer limit; ask for a deeper path or `?depth=N`.
-- FortiOS endpoints that need a POST, or a parameter this cannot give, are not reachable.
-- The GUI field for the path was not looked at in a browser.
-
-## [v11] - 2026-11-01 — CPU, memory, storage, power and VLANs over MCP
-
-### Added
-- **MCP tools `device_resources` and `device_vlans`** (API `op=resources|vlans`), asking every device a target picks.
-  - **resources**: `cpu` (percent now, and over 1 and 5 minutes where the device reports them), `memory` pools (bytes and percent used), `storage` (percent used), `sensors` (power supplies, fans, temperatures: kind, state, reading, units) and `details`, each answer whole, with `unavailable` naming what a device did not answer. IOS-XE reads the process-cpu, memory, file-system, environment-sensor and hardware-inventory models; FortiOS reads `resource/usage` (percentages only, no sizes) and `sensor-info`.
-  - **vlans**: ID, name, status, member ports and `raw`. IOS-XE reads the VLAN operational model, else the VLANs of the configuration; FortiOS lists its VLAN interfaces with the parent interface as the port.
-- GUI: both are in Monitor ▸ Devices and the device's right-click menu, as tables. Help and README follow.
-
-### Verified
-- `go test -race ./...`, `CGO_ENABLED=0 go vet/test`, `go vet`, `gofmt`, the five cross-builds, `node --check webui/app.js`; new tests run both drivers against TLS stubs.
-
-### Not verified
-- **Every model and field name here was seen only in a stub, not on real gear.** Doubtful ones: the IOS-XE file-system model (`q-filesystem`), the sensor field names (`current-reading`, `sensor-units`), the memory pool units (assumed bytes), and FortiOS `sensor-info` (only some models have power supply sensors; its `kind` is a guess from the name). A missing model shows under `details.unavailable`, not as a failure.
-- Switch ports' access/trunk VLAN membership is not read, only the VLAN's own port list. FortiSwitch-managed VLANs are not read.
-- The new tables were not looked at in a browser.
-
-## [v10] - 2026-11-01 — Port counters, LLDP/CDP details, routing and firewall over MCP
-
-### Added
-- **MCP tools `device_ports`, `device_neighbor_details`, `device_routes`, `device_routing`, `device_firewall`** (API `GET /api/devices/query?op=ports|neighbor_details|routes|routing|firewall`), each asking every device a target picks, like the existing device tools.
-  - **ports**: every port with counters as named fields (in/out octets, packets, unicast/multicast/broadcast, discards, errors, unknown protocols, pps/kbps, flaps) plus `counters.all`, every statistic the device returned under its own names, and `properties`, everything else it holds for the port (type, MTU, duplex, configuration).
-  - **neighbor_details**: the LLDP and CDP neighbors with `protocol` and `detail`, every field the device reported. `neighbors` stays short.
-  - **routes**: the routing table (protocol, prefix, next hop, interface, metric, distance, VRF, and `raw`).
-  - **routing**: the state and configuration of each routing protocol. IOS-XE: OSPF, OSPFv3, BGP, EIGRP, IS-IS, RIP, BFD operational models, plus the native router and static-route configuration. FortiOS: OSPF/BGP neighbors and paths, routing statistics, policy routes, and the cmdb configuration of static, OSPF, BGP, RIP, IS-IS, BFD, route maps, prefix and access lists. A part the device refuses is listed under `unavailable` with its reason instead of failing the request.
-  - **firewall**: FortiOS policy hit counts, bytes, packets and sessions (monitor) and the policies, address and service objects, VIPs, IP pools, shapers, local-in and DoS policies (cmdb). IOS-XE access list entries with match counters, ACL/zone/policy-map/NAT configuration and NAT and zone-firewall statistics.
-- Keys, passwords, MD5 and authentication keys in these answers read `(hidden)` (`device.Redact`), so read-only callers may use them. `device_config` is still rw-only.
-- GUI: Monitor ▸ Devices and the device's right-click menu ask for all of these; Ports and Routes get tables, the others show as text.
-
-### Changed
-- `device.Neighbor` has `Protocol` and `Detail`. Drivers offer the new requests through the optional interfaces `Porter`, `Router` and `Firewaller`; a driver without one answers `not supported`.
-
-### Verified
-- `go test -race ./...`, `CGO_ENABLED=0 go vet/test`, `go vet`, `gofmt`, the five cross-builds, `node --check webui/app.js`. New tests run both drivers against TLS stubs (counters, properties, routes, protocols with an unavailable part, firewall, secret hiding) and the op wiring.
-
-### Not verified
-- **Every field and model name here was seen only in a stub, not on real gear**: the IOS-XE models for OSPFv3, EIGRP, IS-IS, RIP, BFD, ACL counters, NAT and zone firewall, the IETF/Cisco routing-table models, and the FortiOS `router/*/neighbors6`, `paths6`, `firewall/local-in`, `firewall/shaper` and `session/summary` endpoints are written from the vendors' documentation. Where a release lacks one, it shows under `unavailable`. Run `go run ./tools/devprobe` against a real device and tell me what it answers.
-- The FortiOS routing table is read with the API's default paging; a very large table may be cut off.
-- The new GUI tables were not looked at in a browser. Cross-builds use the PAM stub (only the native amd64 build was built with PAM).
-- `TestBGPOperateAPIAndStatus`/`TestBGPCannotBeSetOrEnabledWithDnsdir` and a cluster-port test are flaky in full `-race` runs (port clashes); they passed on rerun.
-
-## [v9] - 2026-11-01 — The key row keeps its height when the key is shown
+## [v209] - 2026-11-03 — Add ▸ Node lists the nodes in a menu of its own
 
 ### Fixed
-- **Configure ▸ Monitoring ▸ MCP ▸ Keys**: a row was about 1 px taller with the key hidden than shown, because a password box and a text box got different padding and font size from the style sheet. The key box now has its own fixed font, padding and height, so the row does not move (37.8 px both ways in Chromium).
+- **Topology: the gateway's right-click ▸ Add ▸ Node showed one "Node: name" line for each removed node.** It is one **Node** item again with a menu beside it listing the nodes that can be added back (as *Add node* did). Menus can now open a third menu from a sub-item; the arrow keys work in it (right opens, left closes).
 
 ### Verified
-- Chromium against a mocked API: the row's height measured before and after the eye is clicked; `go test -race ./...`, `go vet`, `gofmt`, the five cross-builds.
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check app.js`.
+- **In Chromium** (mocked daemon): Add ▸ Node opens a third menu listing the removed nodes; picking one saves the gateway without it in `excluded_nodes`.
 
 ### Not verified
-- Dark mode and other browsers were not measured.
+- Against a live daemon.
 
-## [v8] - 2026-11-01 — The MCP key shown in its own box, like every other secret
+## [v208] - 2026-11-03 — A block that covers the node itself can no longer pause it
 
-### Changed
-- **Configure ▸ Monitoring ▸ MCP ▸ Keys**: the **Fingerprint** column is gone and the **Key** column takes the room. The key is in a password box (dots) with the eye on its right, which shows the key in the box, as every other secret does. No window opens for it any more: **Add key** just adds the row, **Replace key** replaces the key in the row, and the first gateway's `default` key is read from its row. Right-click ▸ **Copy key** replaces the old window's Copy button. A key made before v7 shows `not kept: Replace key`.
-- **Allowed sources** is as wide as Keys (63 rem).
-- Help follows.
+### Fixed
+- **A blocked loopback address made the node's own self-check fail, so the node paused itself** (and, with two nodes, un-pausing one paused the other: each one's self-check asks its own NTP service from `127.0.0.1` / `::1`, and a `deny` there is a miss). The settings already refused such an entry; now, whatever way one got in (an older version, a hand-edited settings file, a cluster copy), **chrony is never given a `deny` that covers loopback**, in the file or in the live rules, and the log says once which entry is ignored. Remove it in Configure ▸ Settings ▸ Blocked clients.
+- **Statistics ▸ Top Clients ▸ right-click on a loopback client** shows *Block* greyed out, with the reason as its tooltip.
 
 ### Verified
-- Chromium against a mocked API: the Key box is a password box that the eye turns into text, no dialog opens on Add/Replace, the save sends the replaced key; `go test -race ./...`, `go vet`, `gofmt`, `CGO_ENABLED=0`, the five cross-builds.
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- **New test:** `TestBlockedLoopbackNeverReachesChrony` (`127.0.0.1`, `::1` and `127.0.0.0/8` in the list never reach the chrony file or the live rules; `10.9.0.0/16` still does).
 
 ### Not verified
-- Copy key (it uses the browser clipboard, which the test browser does not give).
+- I could not tell how the entries got past the settings check in the report (the check, `TestBlockedClientsValidation`, refuses `127.0.0.1`, `::1` and `127.0.0.0/8`); the new code does not depend on it. Not run on a live two-node cluster.
 
-## [v7] - 2026-11-01 — MCP keys can be shown again
+## [v207] - 2026-11-02 — Copy anycast addresses and servers to another gateway, and one Add menu on the gateway
+
+### Added
+- **Topology: right-click an anycast address ▸ Copy ▸ Anycast address / All anycast addresses, then right-click another gateway ▸ Paste ▸ Anycast address / All anycast addresses.** *All* is every anycast address on the gateway the pill is on. They are added to the other gateway's own list and the first is selected; an address that gateway already has, or that is some gateway's shared address, is left out. Copy also puts them on the system clipboard as plain text. Paste is greyed out, with the reason as its tooltip, on the gateway they were copied from, when nothing is left to add, and before anything was copied. A pause is not copied. In ntpdir the gateway menu's single *Paste server* item became *Paste* ▸ *Server* / *Anycast address* / *All anycast addresses* (a piggyback gateway has no anycast addresses, so it only offers *Server*). The Topology help says so.
 
 ### Changed
-- **An MCP key is kept, not just its hash.** `settings.mcp_keys[].key` stays in the configuration beside `hash` (the hash is worked out from the key and is what a request is checked against). It is stored the way the gateway keys and the device logins already are: in `netdir.conf`, the configuration history, the backups and on every cluster node (over the signed cluster channel), and it is still `(hidden)` for a read-only account and for every MCP answer and audit line (`key` was already a secret key name). Nothing is encrypted: a key stored next to the file that holds it would only look safer, and the file already holds the device passwords.
-- **Configure ▸ Monitoring ▸ MCP ▸ Keys**: a **Key** column with an eye on every row (opens the key and the Claude Code command again), and right-click **Show key** and **Replace key** (a new key under the same name and access; the old one is refused from the next save). A read-only account sees a dash.
-- **Password, token and key boxes** have a small eye icon (struck through while the value is shown) instead of the Show/Hide text buttons.
-- **Configure ▸ Devices**: the Logins table is as wide as the Devices table (50% wider, 63 rem).
-- Help, the usage text and the changelog wording follow.
+- **Topology: the gateway's right-click menu has one *Add* item** with *Anycast address*, *NTP server*, *AnyName address* (with AnyName on the host) and *Node* (a further menu listing each node that was removed from the gateway; greyed out, with the reason, when none was) in place of the separate *Add* items and *Add node*. The help says so.
+- **Sub-menus of the Topology right-click menu can grey an item out with the reason as its tooltip** (as in dnsdir); the Paste items use it.
+- **Topology: right-click a server ▸ Copy ▸ All servers, then right-click another gateway ▸ Paste ▸ All servers.** Every server of the gateway is copied; on the other gateway the ones it does not have yet are added as they are and the ones it has are left alone (no form opens). Paste ▸ All servers is greyed out, with the reason, before anything was copied, on the gateway they came from or one that has them all. In ntpdir the server's *Copy server* item became *Copy* ▸ *Server* / *All servers*.
+- **Configure ▸ Alerts: "Checks of last" fits on one line** (`3 of 5 checks`); the number boxes in the rules grid lose their spinner arrows and are narrower, and the Threshold column is wider.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- **In Chromium** (light and dark, mocked daemon, two gateways): the gateway menu offers *Add* ▸ …, *Copy* / *Paste* ▸ *Server*, *All servers*, *Anycast address*, *All anycast addresses* with the greyed-out reasons; a paste on the other gateway adds the address(es) or server(s) and the config saved with them; *All anycast addresses* puts the list on the system clipboard; the Alerts grid shows *3 of 5 checks* on one line.
+
+### Not verified
+- Against a live daemon; the browser checks used a mocked daemon. The *Node* entry of *Add* was only seen greyed out (no node was removed from a gateway in the test).
+
+## [v206] - 2026-11-02 — A read-only account sees only the host name of the online repository
+
+### Changed
+- **Configure ▸ Settings ▸ Upgrades shows a read-only account only the first part of the repository address**, `https://github.com`, and not the owner and name after it. The node does the hiding: `GET /api/update` sends `(hidden)` for the repository and `GET /api/update/history` leaves out the text of the repository-change events, so the rest of the address is not in anything the account can fetch. The field is read-only for it. A full account sees and edits the address as before.
+
+### Verified
+- `gofmt -l .` (empty), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok; one race run clashed on a fixed test port with the other product's suite running at the same time and passed when run alone), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check app.js`.
+- **New test:** `TestReadOnlyDoesNotSeeTheRepositoryPath` (a full account sees the repository on `/api/update` and `/api/update/history`; a read-only one gets `(hidden)` and nothing of the owner or name).
+
+### Not verified
+- Against a live daemon and in a browser. Error messages of "Fetch from online" can still name the address; they were not changed.
+
+## [v205] - 2026-11-02 — Configure ▸ Alerts is a grouped, aligned grid
+
+### Changed
+- **The rules on Configure ▸ Alerts are grouped by what they watch** (NTP, Gateways, Certificates and backups, Host) and laid out in columns that line up from row to row: On, Rule (with what one alert is about, or "This node"), Severity (a coloured pill), Alert when, Threshold (with its unit), For (value rules only) and Clear after. Switching a rule off dims its row. Every control is still a real setting; nothing was added or removed, and the saved settings are unchanged. The Alerts help topic describes the layout.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- In Chromium (light and dark) with a mocked `/api/alerts`: the groups and rows draw, nothing scrolls the page sideways at 1280 px, a switched-off rule is dimmed, the severity pill changes colour with the choice, and for an up/down rule the threshold unit follows the "Alert when" choice (checks or min; "of N" shows for "Checks of last").
+
+### Not verified
+- Against a live daemon; saving after editing was not driven in the browser (the code that reads the rows back is unchanged). Narrow windows below about 900 px scroll the table sideways.
+
+## [v204] - 2026-11-02 — A read-only account no longer sees the BGP and OSPF passwords
+
+### Fixed
+- **`GET /api/bgp` and `GET /api/ospf` handed the passwords to read-only accounts.** Both return the node's whole routing settings (Monitor, Configure and Operate ▸ Anycast read them), so a read-only sign-in could read every BGP neighbor's MD5 password and every OSPF interface's MD5 key in the page's data, although `GET /api/config` and the version pages already kept them back. The web handler now passes every `bgp.*` and `ospf.*` answer through `redactRouting` (`readonly.go`) for a read-only session: the passwords read `(hidden)` (an unset one stays empty), the rest of the settings are as before, and the pages still load. A full-access account is unchanged, and the node picker (which runs the same handler on the other node with the caller's read-only flag) is covered by the same code.
+- **The result of the last FRR apply can echo configuration lines** (`reloading FRR failed: … neighbor X password …`); for a read-only account `redactRouting` takes the secrets out of that text too.
+- **The troubleshooting bundle (`GET /api/tshoot/download`, which a read-only account may fetch) left the OSPF MD5 key in `frr.conf.txt` and `running-config.txt`.** Its free-text rule took `ip ospf message-digest-key 1 md5 SECRET` as "key 1" and removed the word `md5`, leaving `SECRET`. The rule now skips a key id, `md5` and an encryption type before the secret (`password 7 HASH` as before), so the key, the `md5 7 HASH` form and `authentication-key SECRET` are removed. The BGP `neighbor X password SECRET` lines were already handled.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok), `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64.
+- **New tests:** `TestReadOnlyDoesNotSeeRoutingPasswords` (a full account sees the passwords on both routes, a read-only one gets `(hidden)` and still gets the peer, AS and the rest; it fails with the new line in `web_mgmt.go` removed), `TestRedactRoutingTakesSecretsOutOfTheApplyText`, and `TestTshootRedactsText` extended with the OSPF key lines (it failed on the old rule).
+
+### Not verified
+- **Against a live daemon** and in a browser: the Anycast pages for a read-only account were not looked at (the password field now holds `(hidden)`); no FRR was run; the cluster node picker was not driven between two real daemons.
+- Other pages that show settings to a read-only account (for example SNMP communities) were not audited in this release.
+
+## [v203] - 2026-11-02 — TCP listeners are plain TCP: multipath TCP is turned off
+
+### Changed
+- **Multipath TCP (MPTCP) is off.** Go 1.24 listens with MPTCP by default on Linux (`net.ListenConfig`, so every `net.Listen("tcp", …)` and `http.Server`) when the module's `go` line is 1.24 or later, which this one is. `main.go` now carries `//go:debug multipathtcp=0`, so the GUI, cluster, DNS-over-TCP/TLS/HTTPS and other TCP listeners are ordinary TCP whatever the kernel's `net.mptcp.enabled` says. Nothing in ntpdir uses MPTCP; UDP is not affected. The setting is built into the binary, so an update that rebuilds from source keeps it, and `GODEBUG=multipathtcp=1` in a service's environment still turns it back on.
+
+### Verified
+- `go version -m` on the built binary shows `DefaultGODEBUG=multipathtcp=0`; a control build of the same tree without the directive shows no `DefaultGODEBUG`.
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok), `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64.
+
+### Not verified
+- **On a live host:** that a listener really is plain TCP (`ss -M` on a machine with MPTCP enabled) was not looked at; the binary's embedded setting was.
+- The web GUI, PAM and cluster checks were not repeated (no code besides the directive changed).
+
+## [v202] - 2026-11-02 — Monitor ▸ Statistics and Monitor ▸ Node: a download icon on each card saves its numbers as CSV
+
+### Added
+- **A small download icon in the header of each card** on Monitor ▸ Statistics (the chart, Outcome, IP family, Top Clients, Top Servers) and Monitor ▸ Node (the CPU, Memory, Disk and Network charts, Filesystems, Network interfaces, LLDP neighbors). It saves that card's numbers as a `.csv` file named after the card (`ntpdir-top-clients.csv`). The file is built in the browser from what the page already holds, so there is no new API route, no CLI flag and no change to the daemon. Ported from dnsdir v628.
+- **What each file holds.** Charts: one row per interval, times in UTC (ISO 8601); the Statistics chart has every line and the Clients count and leaves out the interval still filling, as the drawing does; the Node charts have the busiest sample of each interval beside the average for CPU, disk I/O and network, and a gap is an empty cell. Donuts: every name with its count and share, not folded into "Other". Top lists: every row the daemon returned for the picked range and filter, not just the page on screen. Tables: the same rows as on screen, with raw numbers (bytes, bits per second) instead of the formatted text.
+- A text cell that starts with `=`, `+`, `-` or `@` is written with a leading apostrophe, so a spreadsheet cannot read a client or host name from the network as a formula.
+- `webui/help.js`: a "Download as CSV" paragraph on the Statistics and Node topics. `webui/style.css`: the icon button and its row.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok on the second full run, see below), `CGO_ENABLED=0 go test -count=1 ./...` (ok), `GOOS=linux GOARCH=…  go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- **In Chromium (light and dark)** with the real `app.js`, `help.js` and `style.css` and the API mocked from the Go result structs: both pages load without console errors; all 12 icons download a file; the contents were read back (quoting of commas and quotes, the formula guard, a gap in a series, the unfinished interval dropped, the chart's button still working in the RPS view); the icons sit in the card headers in both themes.
+
+### Not verified
+- **Against a live daemon** (none was run); the PAM and authentication checks were not repeated (nothing in `web.go` changed). The Cluster view (several nodes added together) and an LLDP card with real data were not looked at.
+- **Known flaky test:** `TestBGPCannotBeSetOrEnabledWithDnsdir` reported a data race (`bgp_test.go:128` against `bgp.go`) in the first `-race` run of the full suite; it passes on its own (three runs) and the full `-race` run passed when repeated. No Go file was changed in this release.
+- There is no command-line equivalent: the files are made by the page.
+
+## [v201] - 2026-11-01 — Ported from dnsdir: IPv4-first connections, fallback servers are probed, self-check, per-gateway capture, faster log scan
+
+### Added
+- **IPv4-first outbound connections** (`netprefer.go`). Every name this node dials itself (update check, WHOIS, LDAP, syslog, SSO, cluster pinning, alert delivery) is tried over IPv4 first and IPv6 only if that fails, so a host with a broken IPv6 route no longer waits for it to time out.
+- **Fallback NTP servers are probed every round.** Before, a fallback server was assumed up. Now `ProbeNow` queries it like any other server and `applyFallback` records the result without ever changing whether the gateway is healthy (a fallback is still only used when every ordinary server is down).
+  - **New alert `fallback_down`** ("Fallback server not answering", warning): fires when a fallback has not answered for `FailThreshold` rounds in a row.
+  - Shown on the NTP page as an amber "no answer" pill, in the gateway canvas (`FallbackDown`), in `ntpdir --status` ("fallback servers NOT ANSWERING") and over MCP. The log notes when one stops answering and when it answers again.
+  - Names are resolved IPv4-first.
+- **Self-check** (`selfcheck.go`). The node asks its own NTP address (every anycast/VIP address it serves, from loopback) every 5 s. Three misses in a row pause the node, in memory only, so the gateway's traffic goes to another node. It is held for 1 minute, doubling up to 10 minutes, and ends after 6 good answers in a row.
+  - Quiet when silence is by design: chrony not serving (not running, not synced, too far off) or muted writes no allow rules and refuses the port, which the check does not count as a fault.
+  - Guards: never pauses the only node in service, never the last server of a gateway, and does nothing while AnyName is installed (`dnsdirPresent()`).
+  - A manual pause or resume takes over from a self-pause. `--node-status` and Monitor ▸ Node say "This node PAUSED ITSELF".
+  - Setting: Configure ▸ Settings ▸ General ▸ Self-check (on by default). Stored as `self_check` only when switched off, so a file that never touched it still loads in older versions.
+- **Per-gateway packet capture.** Monitor ▸ Capture: the Node menu lists each gateway; "Capture on its nodes" captures on that gateway's nodes only, on the gateway's own interface, filtered to the gateway's addresses (`(hosts) and (your filter)`). API field `gw` on `/api/clustercapture/start`. CLI: `--capture - --group N`, with `--capture-file FILE.tgz`.
+- **Test** that pausing the primary hands the role to a node in service (`TestPausingThePrimaryHandsItOver`).
+
+### Changed
+- **Faster log scan** (`logstore.go`): the log reader skips files outside the requested time range, counts lines without decoding them, and keeps a ring buffer instead of the whole result. Same output.
+- Help, README and `--help` updated for all of the above.
+
+### Fixed
+- **A paused node could be promoted by failover.** `pickFailover` now skips members that are paused.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` and `CGO_ENABLED=0 go test ./...` (ok; the second `-race` run failed `TestBGPOperateAPIAndStatus`, the known `fakeFRR` race below, and passed on a full re-run), `GOOS=linux GOARCH=… go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- The first full run failed `TestHelpCoversEveryField`: the Self-check checkbox was not in the test's list of Settings field arrays. `SELF_FIELDS` is added to `help_fields_test.go`; the help already had its entry.
+- **New tests:** `selfcheck_test.go` (pause after three misses, hold and doubling, six good answers to end it, manual pause/resume takes over, quiet when chrony is silent by design, no targets, the guards, `TestProbeNTP`, `TestProbeNTPComesFromLoopback`, `TestSelfCheckSetting`, `TestSelfCheckTargets`), `netprefer_test.go`, fallback probing (`TestFallbackProbedButAlwaysUp`, `TestFallbackByNameIsProbed`, `TestAlertFallbackNotAnswering`), `TestGatewayCaptureFilter`, `TestClusterCaptureOfAGateway`, `TestReadLogSkipsFilesBeforeTheRange`, `TestPausingThePrimaryHandsItOver`, and a paused-member case in `failover_test.go`.
+- **chrony, live:** a private `chronyd` with `ratelimit interval 1 burst 10`: probes from loopback are rate-limited like any client (5 probes/s lost 11 of 30), a muted chrony refuses the port. That is why a refused connection counts as a miss only while chrony is expected to answer (`chrony.answering()`).
+- **UI, live:** the real `webui/app.js` in headless Chromium (light and dark) against a mocked API: the NTP page shows "no answer" for a silent fallback and "up" for an answering one; Settings ▸ General has the Self-check box and saves `self_check:false` only when it is unticked; Monitor ▸ Capture lists the gateway in the Node menu, reads "Capture on Gateway Office" and sends `POST /api/clustercapture/start {"gw":"100",…}`. No script errors.
+
+### Not verified
+- **A real daemon pausing itself.** The self-check was tested with fakes and against a private chronyd for the rate-limit and mute behaviour, but not in a running two-node cluster with the anycast addresses on the loopback.
+- **Per-gateway capture on real nodes** (tcpdump on each node of a gateway and the combined download): tested with stubs and in the UI against a mock only.
+- **Fallback probing against real pool servers**, and the `fallback_down` alert end to end.
+- **The PAM and authentication checks** of the web GUI were not repeated: `web.go`, `webtls.go`, `pam_*.go` are untouched; only `webui/app.js` and `webui/help.js` changed there. Cross-compiles build the fail-closed PAM stub.
+- **Known flaky test:** `TestBGPOperateAPIAndStatus` can fail under `-race` (a data race in the test helper `fakeFRR`, also present in v199; about 1 run in 60).
+- Not ported: automatic (ACME) certificates for the GUI.
+
+## [v200] - 2026-11-01 — Monitor ▸ Anycast shows how fast a BGP neighbor drops a dead node (the BFD timers)
+
+### Added
+- **The BFD timers of every BGP session, and the time a dead node keeps getting traffic.** FRR already printed each session's intervals in `show bfd peers json`; only the state was read from it. `parseBFDSessions` (`bgp.go`) now also reads `receive-interval`, `transmit-interval` and `detect-multiplier`, and the neighbor's `remote-receive-interval`, `remote-transmit-interval` and `remote-detect-multiplier`, and for a session that is **up** works out, as RFC 5880 asynchronous mode defines it:
+  - **`detect_ms`, the time the neighbor takes to drop this node when it goes silent**: this node's detect multiplier times the slower of this node's transmit interval and the neighbor's receive interval. This is how long a dead node keeps being sent traffic, and so the number that matters for failover.
+  - **`peer_detect_ms`, the time this node takes to drop the neighbor**: the neighbor's multiplier times the slower of the neighbor's transmit interval and this node's receive interval. Left out when FRR does not print the neighbor's multiplier.
+- **Where it shows.**
+  - `/api/bgp`: each peer has `bfd_timers` (`tx_ms`, `rx_ms`, `mult`, `remote_tx_ms`, `remote_rx_ms`, `remote_mult`, `detect_ms`, `peer_detect_ms`). It is left out when the session is not up or FRR gave no intervals, so a session that is down never shows a made-up time.
+  - **Monitor ▸ Anycast ▸ BGP**: `detect_ms` in small text beside the BFD pill; the hover has the multiplier and interval behind it, and the other direction.
+  - `ntpdir --bgp`: `bfd up (drops this node after 900 ms)` after the BFD state.
+  - The OSPF tab and `--ospf` are unchanged; OSPF reads the BFD state through the same `parseBFDPeers`, which still returns the plain status.
+
+### Changed
+- **The help said to lower the timers on the router to notice a dead node sooner. That is only half true, and the text now says so.** BFD is on for every neighbor with no profile, so this node sends at FRR's defaults (every 300 ms, detect multiplier 3 = 900 ms). A router with slower timers makes the time longer; a faster one cannot make it shorter than this node's own. Changed in the BGP help topic (Configure ▸ Anycast) and the Monitor ▸ Anycast topic, and in the README. The same sentence in the OSPF help topic is left as it was.
+- **README:** the "Anycast addresses and BGP" section is updated.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .` (native, with the PAM headers), `go vet ./...` (also with `CGO_ENABLED=0`), `go test -race -count=1 ./...` (ok), `CGO_ENABLED=0 go test ./...` (ok), `GOOS=linux GOARCH=… go build` for amd64, arm64, arm, 386 and riscv64, `node --check` on `app.js` and `help.js`.
+- The first `go test -race` run failed `TestBGPOperateAPIAndStatus` with a data race inside the test helper `fakeFRR` (`bgp_test.go`: its call log is written by a background `Apply` and by the status call at the same time, with no lock). It is not new: the unmodified v199 tree fails the same test the same way (1 run of 60 with `-race -count=60`), and so does this tree about as often (2 of 60). A full re-run was ok. The helper is left as it is; it wants a mutex.
+- **New tests** (`bgp_test.go`): `TestParseBFDSessionsTimers` (the field names as FRR prints them; both ends at 300 ms × 3 = 900 ms each way; the slower end wins, 3 × 500 and 5 × 300 = 1500 ms; a router faster than this node's own interval still gives 900 ms; a session that is down, or up with no intervals, has no timers; the neighbor's multiplier missing gives only `detect_ms`; an address that is not an address is skipped; `parseBFDPeers` still gives the plain status) and `TestAddBFD` (state and timers set on the matching peers only, unreadable output leaves what was there, the JSON names and the timers left out when there are none).
+- **UI, live:** the real `webui/app.js` in headless Chromium (Playwright, light and dark) against a mocked API with three neighbors: an up session with both times (`up 900 ms`, hover with both directions), an up session where the router is the slower end (`up 1500 ms`), and a down session with no time. No script errors.
+
+### Not verified
+- **Against a real FRR and router.** The field names are the ones `show bfd peers json` prints as far as I know them, and the new tests use JSON of that shape, but no FRR was run for this change. If FRR leaves out `remote-detect-multiplier`, only `detect_ms` is shown (tested). Compare the figure on Monitor ▸ Anycast with `vtysh -c "show bfd peers"` on a real node after the update.
+- **The PAM and authentication checks** of the web GUI were not repeated: `web.go`, `webtls.go`, `pam_*.go` and every auth, CSRF and lockout path are untouched; only `webui/app.js` and `webui/help.js` changed.
+- **The cross-compiles** run with cgo off and so build the fail-closed PAM stub; only the native amd64 build was checked with PAM.
+
+## [v198] - 2026-10-31 — The MCP Keys table looks and works like the address list above it
+
+### Changed
+- **Configure ▸ Monitoring ▸ MCP ▸ Keys** is now built like **Allowed sources**: the same numbered, bordered table, the same width, and edited in place. A key's **Name** can be changed in its row, as well as its **Access**. Renaming doesn't change the key; an invalid or duplicate name puts the old one back. The **Added** date and the **Fingerprint** are plain cells.
+- Adding and deleting work through **right-click**, like the other tables. On the table or the empty-table line, choose **Add key**. On a key's row, choose **Add key**, **Copy fingerprint** or **Delete**; Delete asks first. The **Add key…** and **Remove** buttons are gone. The empty table reads "No keys: only the sources above may use /mcp. Right-click here ▸ Add key."
+- The paragraph under the table is gone. Like the address list, what keys do is in the page's help (Configure ▸ Monitoring ▸ MCP ▸ Fields ▸ Keys, and the key steps), now with renaming and the right-click menu. The help and the README now spell the menu item **Add key** without "…", as menus throughout the GUI drop it. The same change is in dnsdir v622.
+
+### Verified
+- `gofmt -l .` (empty), `go vet .`, `go test -count=1 .`, `node --check` on `app.js` and `help.js`.
+- Headless Chromium, real PAM user, a running daemon of each product (dnsdir in light, ntpdir in dark):
+  - Right-click ▸ **Add key** created a key.
+  - Renaming the first key in its row was saved to the file, with its access and hash unchanged.
+  - The table matched the address list above it, with no paragraph under it, and the help showed the keys text.
+
+## [v197] - 2026-10-31 — MCP keys: an assistant whose address changes can connect with a key
+
+### Added
+- **Configure ▸ Monitoring ▸ MCP ▸ Keys.** Besides the address list, `/mcp` now takes a key in the header `Authorization: Bearer KEY`, so a laptop on DHCP, Wi-Fi or a VPN no longer needs its address in the list. Each key has a name and an access, `ro` or `rw`. With a valid key the caller gets that access from any address, and from a listed address it gets the higher of the two. A key that matches none is refused (401, with `WWW-Authenticate: Bearer`), whatever the address, so a typo shows at once, and it is logged as a warning once a minute per address. A request with neither a listed address nor a key gets 403, which now says why.
+- **Add key…** makes a random 256-bit key in the browser (`ntpdir_…`) and shows it once, with **Copy** buttons and the whole `claude mcp add … --header "Authorization: Bearer KEY"` command line. It is sent with the next save, and the daemon keeps only its SHA-256 hash (`mcp_keys` in the shared `ntp` block: `name`, `access`, `hash`, `created`), so the key is not in the configuration file, its history, the other nodes or any MCP or API answer, and cannot be read back. The table shows each key's name, access (changeable in the row), the date it was added and a fingerprint (the start of its hash). **Remove** asks first, and whatever uses that key is refused from then on. Up to 32 keys; names are letters, digits, `.`, `-`, `_`.
+- A key can also be given as `{"name": "laptop", "access": "rw", "key": "AT-LEAST-32-CHARACTERS"}` through `edit_config`, the API or the file. The configuration check turns it into its hash before anything is saved or sent to the cluster. A hand-edited file keeps the key as typed until the next save.
+- Requests with a key run, are logged and are kept in the configuration history as `mcp:NAME@ADDRESS` (`mcp@ADDRESS` without one). The help (Configure ▸ Monitoring ▸ MCP) and the README have the steps for Claude Code and for Claude Desktop with `mcp-remote`. The same change is in dnsdir v621.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `node --check` on `app.js` and `help.js`.
+- **New tests** (`mcpkeys_test.go`):
+  - A new key becomes its hash, and the access is normalised.
+  - Bad names, duplicate names or keys, short keys, a missing or bad hash and a bad access are refused.
+  - Access checks: no key and no address gets 403; a wrong key gets 401, even from an allowed address; a non-Bearer header gets 401.
+  - A read-only key gets the read tools only, and its write is refused. A read-write key changes things under `mcp:laptop@127.0.0.1` in the history. An allowed address combined with a key gets the higher of the two accesses.
+  - A key set through `edit_config` is saved as its hash only: no file under the configuration's directory (the file, its history, the state) contains the key, and the saved key then opens the endpoint.
+- **Live:** a running daemon in headless Chromium, real PAM user, dark and light themes. **Add key…** showed the key and the command line once. The file then held only the hash, and no file under the configuration's directory or the state held the key. With `curl` on `/mcp`, the read-write key listed the write tools and the read-only key did not, a wrong key got 401, and no key with an empty address list got 403. A change made with the key was logged as `NAME@127.0.0.1 calls …`.
+
+## [v196] - 2026-10-30 — Monitor ▸ Statistics: the chart's legend pills are gone; the tiles are the legend
+
+### Changed
+- **The row of pills above the Statistics chart is removed.** Each tile above it already has a coloured edge in the colour of its line, so the pills repeated the tiles; and clicking a tile already draws only that line (and limits the donuts and lists to it), with the total bringing every line back. The pills' one extra, switching several lines off at once, goes with them; every line the range has is drawn unless a tile is picked. The pills of the smaller charts (latency, cache, Monitor ▸ Node), which have no tiles, are unchanged. The Statistics help says the tiles are the legend. The same change is in dnsdir v617.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `node --check` on `app.js` and `help.js`.
+- Headless Chromium, dark, real PAM user, against a running daemon of each product: Monitor ▸ Statistics has no pills over the chart and draws every line; clicking a tile drew only its line, clicking the total drew them all again.
+
+## [v195] - 2026-10-30 — Neighbor discovery: the lldpd state beside the box keeps itself up to date; the box reads "Run LLDP on every node"
+
+### Fixed
+- **The state beside "Run LLDP on every node" only changed on a page reload.** It was read once when the page was drawn and once 1.5 s after a save, which is often before lldpd has started (the daemon applies the setting when it reloads the configuration), so it could say *Stopped: see the log* for good. It is now asked again every 3 s while the card is on screen (its tab shown and the window visible); the timer ends when the page is drawn again or left. Changes made elsewhere (the command line, another node, an lldpd started or stopped by hand) show within seconds too. The same fix is in dnsdir v614.
+
+### Changed
+- The box is labelled **Run LLDP on every node**: "(lldpd)" said nothing the card does not already say. The help panel's field entry follows.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `node --check` on `app.js` and `help.js`; the help tests (`TestHelpCoversEveryField` matches the new label).
+- Live, headless Chromium against a daemon with a real lldpd behind a `systemctl` shim and a real PAM user: ticking the box showed **ACTIVE** within 1.5 s with no reload; `--lldp-disable` and then `--lldp-enable` from the command line turned it to *Stopped* and back to **ACTIVE** within 4 s each, on a page left open.
+
+### Not verified
+- The tick box itself still shows the value from when the page was drawn when the setting is changed elsewhere (as every other field on Configure); only the state beside it follows.
+
+## [v194] - 2026-10-30 — LLDP: the setting now controls lldpd, whoever started it
+
+### Changed
+- **The Neighbor discovery setting is authoritative.** Before, ntpdir only ever stopped an lldpd it had started itself and left any other running, so an lldpd started by its package (Debian starts it on install) or by hand kept running with LLDP off, and the box did nothing about it. Now, on every node: **on** → lldpd is enabled and running; **off** → lldpd is stopped and disabled, whoever started it. The minute check (`lldpWatch`) applies it again, so an lldpd installed, started or stopped behind ntpdir's back follows the setting within a minute. `applyLLDP` now looks at `systemctl is-enabled` too, so an lldpd that is only running, or only enabled at boot, is set right.
+- **Upgrading:** LLDP is off by default, so a node that already ran lldpd (installed by hand before this feature) has it stopped and disabled when it starts this version, until LLDP is switched on in Configure ▸ Settings ▸ General ▸ Neighbor discovery.
+- `/etc/lldpd.d/ntpdir.conf` now only says "LLDP is on here" (written while on, removed when off); the uninstaller still stops lldpd when it is there and never removes the package. The page and `--lldp` no longer have the *started outside (ntpdir) (left alone)* state.
+- **With AnyName (dnsdir) on the same host, AnyName decides, as before**, but more simply: ntpdir drops its file and neither starts nor stops lldpd while dnsdir is installed (no hand-over stop any more; dnsdir applies its own setting), and decides again within a minute of dnsdir being removed.
+- Help, README, installer and uninstaller comments say so.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-builds for linux/amd64, arm64, arm, 386 and riscv64 (only the native amd64 build is verified with PAM). `node --check` on `app.js` and `help.js`; `bash -n` and `shellcheck -x -S warning` on both scripts.
+- `TestApplyLLDPFollowsTheSetting` (off stops an lldpd started outside, or only enabled at boot; on enables one only started; not installed runs nothing) and `TestApplyLLDPDefersToDnsdir` (nothing touched while dnsdir is installed, either setting; decides again once it is gone) replace `TestApplyLLDPStartsAndStopsOnlyItsOwn` and the old hand-over test.
+- Live: A real lldpd started and enabled before the daemon, with LLDP off, was stopped and disabled at start-up; `--lldp-enable` enabled and started it and wrote the file; an lldpd killed by hand was started again by the minute check, and `--lldp` listed the peer `sw1`. With dnsdir "installed" (its directory), ntpdir dropped its file, said *managed by AnyName*, and left lldpd running even after `--lldp-disable`; with dnsdir "removed", it stopped and disabled lldpd within a minute (LLDP off).
+
+### Not verified
+- Real systemd (the shim stands in for `enable --now`, `disable --now`, `is-active` and `is-enabled`) and a real switch.
+
+## [v193] - 2026-10-30 — LLDP: Configure ▸ Settings ▸ General ▸ Neighbor discovery, the switch port of each interface on Monitor ▸ Node, lldpd in the installer
+
+### Added
+- **Neighbor discovery (LLDP)** (`lldp.go`): a **Neighbor discovery** card on Configure ▸ Settings ▸ General with **Run LLDP (lldpd) on every node** (`lldp` in the shared `ntp` block, omitted while off so the shared hash of a cluster that never used it is unchanged; **off by default**, because LLDP tells the segment the host's name, OS and addresses). On: every node runs lldpd; off: each node stops the lldpd it started. Beside the box, for the node looked at: **ACTIVE**, *Stopped*, *lldpd is not installed on this node*, *started outside AnyTime (left alone)*, or *managed in AnyName* (the box is then disabled). Settings has a new **General** tab, first, as in dnsdir, holding the **Neighbor discovery** card (so Settings opens on it).
+- **Only an lldpd ntpdir started is ever stopped.** ntpdir marks one with `/etc/lldpd.d/ntpdir.conf` (comments only; lldpd reads that directory as lldpcli commands) when it starts it, and removes the file when it stops it. An lldpd already running without the file is someone else's: left alone, its neighbors still shown. Delete the file to take a running lldpd out of ntpdir's hands.
+- **On a host that also has AnyName (dnsdir), AnyName decides.** While dnsdir is installed (its files under `/usr/local`), ntpdir neither starts nor stops lldpd and the box cannot be changed here; an lldpd ntpdir had started is handed over within a minute (its marker removed, lldpd stopped unless dnsdir runs it too), and ntpdir decides again within a minute of dnsdir being removed (`lldpWatch`).
+- **Monitor ▸ Node ▸ LLDP neighbors**: for the picked node (not the cluster sum), each interface's switch (name; its description on hover), port (description, or ID), VLANs (*untagged* for the port's own), management address and how long ago it was heard (`1m 10s`). Shown while LLDP is on or lldpd runs; a read error is plain red text in the card.
+- **`GET /api/lldp`** (relayed by the node picker; `proxyPrefixes`), ops `lldp.status` and `lldp.set`, and the MCP read tool **`get_lldp`**.
+- **CLI:** `--lldp` (the setting, lldpd on this node and a neighbor table), `--lldp-enable`, `--lldp-disable` (the shared setting; `--lldp-enable` waits up to 5 s for lldpd to come up before printing).
+- **Support bundle:** `lldp/neighbors.txt` and `lldp/status.txt` (lldpcli's neighbors, interfaces and counters).
+- **Installer:** `install_lldpd` adds the `lldpd` package where the distribution has it (Debian, Ubuntu, Fedora, Arch; on RHEL, Rocky and Alma only with EPEL already enabled — the installer never switches EPEL on and says how to). A failure is a warning, like snmpd. An lldpd it installs is stopped at once (Debian starts it on install); one already on the system is left exactly as it was. **Uninstaller:** stops lldpd only when `/etc/lldpd.d/ntpdir.conf` is there and dnsdir's marker is not, removes that file, and never removes the package. A cluster updated from the GUI does not run the installer: there lldpd must be installed by hand (the card says *not installed*).
+- Help: the General topic ("Configure: Settings ▸ General"), Monitor ▸ Node's "LLDP neighbors" section and the MCP topic; README (LLDP paragraph, prerequisites, CLI table, MCP tools).
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-builds for linux/amd64, arm64, arm, 386 and riscv64 (only the native amd64 build is verified with PAM; the cross-builds use the fail-closed stub). `node --check` on `app.js` and `help.js`. `bash -n` and `shellcheck -x -S warning` on `install.sh` and `uninstall.sh`; `install.sh --dry-run` with fake os-release files for ubuntu, debian, linuxmint, fedora, rocky, almalinux, centos, arch, manjaro and endeavouros (each installs `lldpd`; alpine refused); `install_lldpd`'s branches with stubs (present, installed, failed on rhel with the EPEL hint, failed elsewhere); the uninstaller's block against a scratch directory (no marker, own marker, both markers, a file without the header).
+- **New tests:** `TestApplyLLDPStartsAndStopsOnlyItsOwn`, `TestApplyLLDPDefersToDnsdir` (hand-over with dnsdir off and on, a stale dnsdir marker, switching off with the sibling's marker there), `TestParseLLDPJSON0` (a fixture made from what a real lldpd 1.0.18 answered, plus a second neighbor and VLANs), `TestLLDPStatusAndText`, `TestLLDPSettingSharedAndOmittedWhenOff`, `TestLLDPOverTheAPIAndMCP` (`get_lldp`, `api_get /api/lldp`, `LLDPSet` with its history entry, `edit_config` switching it off); the help tests now expect the General topic and `LLDP_FIELDS`; `apiroutes.go` regenerated.
+- **Live, with real lldpd 1.0.18:** a second lldpd in a network namespace across a veth pair, as a switch named `sw1` with port `GigabitEthernet1/0/7`; the daemon with a `systemctl` shim that starts and stops a real lldpd on the veth (`NTPDIR_SYSTEMCTL`, `NTPDIR_LLDP_DIR`, `NTPDIR_LLDPCLI_ARGS`). `--lldp-enable` started lldpd and wrote the marker, and `--lldp` listed `sw1`, its port and its management address; `--lldp-disable` stopped it and removed the marker; an lldpd started outside was left running both ways; a restart with LLDP on started lldpd by itself. **Both products on one host:** ntpdir with LLDP on, then dnsdir "installed" (its marker directory) with LLDP off: ntpdir stopped its lldpd within a minute; `dnsdir --lldp-enable` started it with dnsdir's marker and `ntpdir --lldp` said *managed by AnyName* and showed the same neighbor; `dnsdir --lldp-disable` stopped it; with dnsdir "removed", ntpdir started it again within a minute.
+- Headless Chromium, light and dark, real PAM user: the Neighbor discovery card on the General tab, unticking and ticking it (saved on its own; the state beside it followed), its "?" panel, and the LLDP neighbors card on Monitor ▸ Node listing `sw1`. The PAM user, groups, `/etc/pam.d` files, namespace and veth were removed afterwards.
+
+### Not verified
+- A real switch, and a multi-node cluster (the setting replicates like the other shared `ntp` settings; each node starts its own lldpd).
+- lldpd under real systemd (the shim stood in for `systemctl enable --now` / `disable --now` / `is-active`), and the package on each distribution (dry runs only).
+- VLAN names from a real switch (the fixture's VLANs were written by hand; the veth had none).
+
+## [v192] - 2026-10-30 — Monitor ▸ Host is now Monitor ▸ Node, matching Operate ▸ Node
+
+### Changed
+- **The Monitor menu's Host page is called Node.** The menus pair the same word under Operate and Monitor (Cluster and Cluster, Anycast and Anycast); Operate ▸ Node and Monitor ▸ Host were the exception for the same thing, a node. Only the label changes: the page's key (`#host`), the API route (`/api/host`), the CLI flags (`--host`, `--host-range`), the MCP tool (`get_host_stats`) and the **Host** section of Operate ▸ Node (restart or shut down the machine) are as before, so links, scripts and dashboards keep working. Its help topic is now **Monitor: Node**; the README and code comments that named the page follow. The same change is in dnsdir v611.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-builds for linux/amd64, arm64, arm, 386 and riscv64 (only the native amd64 build is verified with PAM; the cross-builds use the fail-closed stub). `node --check` on `app.js` and `help.js`.
+- Live, a daemon in a scratch directory with a real PAM user, in headless Chromium, light and dark: the Monitor menu lists Statistics, **Node**, Gateways, …; clicking Node opens the page at `#host` with its charts; its "?" panel is titled **Monitor: Node**. The PAM user, groups and `/etc/pam.d` file were removed afterwards.
+
+### Not verified
+- Nothing beyond the label was changed, so no cluster run was made.
+
+## [v191] - 2026-10-30 — MCP: no caller is shown a secret, rw included; "(hidden)" sent back keeps the current value
+
+### Changed
+- **MCP answers never carry a secret, whatever the address's access** (`mcpsecrets.go`). Until now an `rw` address was shown the whole configuration, gateway keys, BGP passwords and all, and those values went into the assistant's conversation. Every tool answer now goes through `mcpRedact`: the values of the keys a read-only GUI account is not shown (`secretKeys`), plus `keys` (chrony's symmetric keys), `snmp_communities`/`communities`, `key_pem`/`private_key`, `token`/`tokens`, `code` (join codes), `server_password`, `psk`, `csrf` and `cookie`, read `"(hidden)"` however deep they are. Numbers, booleans and empty values are left (a pool's numeric `key`; an empty secret shows that none is set).
+- **The log line of an MCP change** (`mcp: ADDRESS calls TOOL {...}`) shows its arguments redacted the same way, so a new secret sent through MCP does not land in the log either.
+- **`api_get`/`api_request` refuse `/api/versions/get`, `/api/versions/diff` and `/api/versions/download`** over MCP: they answer with whole configuration files, secrets included (a read-only GUI account is refused them too). `api_get /api/versions` (the list) still answers.
+- Tool descriptions, the server's `instructions`, the MCP help page and the README say so.
+
+### Added
+- **`"(hidden)"` sent back means "keep the current value"** in `edit_config` and `api_request`, so what an assistant read can be sent back whole (the `groups` list, which is replaced whole, carries each gateway's key). The current value is put back from the configuration (for `edit_config`) or from a GET of the same route (for `api_request`; `/api/config` answers `{"config": ...}`, the shape its PUT takes). List entries are matched by an identity field (`group_id`, `id`, `peer`, `name`, `host`, `addr`, `address`, `url`, the first that picks out exactly one entry), by position only when an entry has none of them and the list kept its length, so a reordered list keeps each secret with its own entry. A `"(hidden)"` that matches nothing (a new gateway, a new BGP neighbor) or sits under a key that is no secret is refused with its path, and nothing is saved. To set or rotate a secret, send the real value.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, cross-builds for linux/amd64, arm64, arm, 386 and riscv64. Only the native amd64 build is verified with PAM; the cross-builds use the fail-closed stub. `node --check webui/help.js`.
+- **New tests:** `TestMCPRedactHidesEverySecretKind`, `TestMCPRestoreHiddenMatchesByIdentity` (a reordered list, a new entry, a shorter list without identity fields, `"(hidden)"` under a key that is no secret), `TestMCPNeverShowsSecretsEvenToRW` (an rw address: two gateway keys set, absent from the answer and the log line; hidden in `get_config`, `api_get /api/config` and an `edit_config` dry run; the three versions routes refused; the groups list sent back reordered and renamed keeps both keys; a hidden key for a new gateway refused and nothing saved; the whole configuration PUT back through `api_request` keeps the keys; one key rotated with a real value while the other is sent hidden). The new test fails with the redaction or the restoring taken out.
+- **Live, a daemon in a scratch directory** (a gateway on `lo`, chrony keys, an SNMP community, `127.0.0.1 rw`), over `/mcp` with curl: `get_config` showed `"(hidden)"` for the gateway key, `keys` and `snmp_communities`; `api_get /api/versions/get` was refused; `edit_config` renaming the gateway with all three sent as `"(hidden)"` saved the rename and kept the three secrets in the file; a real new key was saved and appeared in neither the answer nor the log; a hidden key for a new gateway was refused (`groups[1].key`); the whole configuration from `get_config` PUT back through `api_request` kept every secret.
+
+### Not verified
+- A cluster of more than one node: a tool for another node goes through the cluster relay, and the redaction and restoring happen on the node that serves `/mcp`, so a node still on v190 answering through the relay is covered too; not run here.
+- Claude Desktop and `mcp-remote` against this version (the protocol is unchanged).
+- Secrets in free text (an FRR configuration a route returns as text, a log line that quotes one) are not looked for; the support bundle does that for itself (`tshoot.go`).
+
+## [v190] - 2026-10-29 — MCP: drive the cluster from Claude (ported from dnsdir v606-v608); Alerts rows no longer reorder
+
+### Added
+- **The Model Context Protocol (MCP) at `POST /mcp` on the web GUI port** (`mcp.go`, from dnsdir v606-v608), so an assistant such as Claude can look at the cluster and, from an address allowed to, change it. Streamable HTTP with JSON answers, no event stream; protocol versions 2024-11-05 to 2025-11-25, batches too.
+- **Configure ▸ Monitoring ▸ MCP** (`mcp_acl` in the shared `ntp` block), the same way `/metrics` works.
+  - No login: the address of the connection decides, and an empty list means nobody.
+  - Each row is an address, a network or a host name, with **Access** `ro` or `rw`. `rw` is refused for a network or a host name.
+  - Under the list is the endpoint's URL. The tab has its own help page (`config_mcp`).
+- **Read tools:** `list_nodes`, `get_topology`, `get_ntp`, `get_time` (the node's clock and chrony), `get_gateways`, `get_alerts` (one node, or `all`), `get_log`, `get_query_stats` (NTP client requests: a node, the cluster, or one gateway), `get_host_stats`, `get_server_stats`, `get_schedule`, `get_updates`, `get_node_status`, `list_api`, `api_get`, `get_config`.
+- **Write tools (`rw` only):** `set_node_paused`; `set_paused` (gateway, server or anycast address; on one node or all); `alert_action` (ack, unack, silence, resolve, fix: `recheck` or `restart_chrony`); `schedule_set`, `schedule_delete`, `schedule_run`; `update_fetch`, `update_apply`, `update_push`, `update_cancel`; `rename_node`; `set_label`; `set_gateway_node`; `clear_left_nodes`; and full access through `edit_config` (any setting, merged and saved as Configure does, `dry_run`) and `api_request` (any route of the GUI's API).
+- **How a tool runs:** each one is a request to the GUI's own API, made in-process as the user `mcp@ADDRESS`, read-only unless the address is `rw`. So the GUI's rules apply (the last node in service cannot be paused, nor the last server of a gateway without fallback servers), another node is reached through the cluster relay, and changes are logged and kept in the configuration history under that name. A read-only address sees what a read-only GUI account sees, with the secrets hidden.
+- **A web page cannot use it:** a request whose `Origin` is another site is refused, and `GET /mcp` answers 405.
+- **`POST /api/canvas/edit`:** the `--canvas-*` edits over the web API, used by the MCP tools. It gains `prune node` (`group` 0 means every gateway): it drops the removed-node entries of nodes that are no longer in the cluster, keeps those still in it, and refuses to act when the cluster's nodes are not known. An edit that changes nothing answers "nothing to change" and saves no new version.
+- **`apiroutes.go`:** the route list behind `list_api`, generated from the source. `TestAPIRoutesListed` fails when it is out of date; `NTPDIR_UPDATE_ROUTES=1` writes it again.
+- **Left out on purpose (DNS only in dnsdir):** `get_dns`, `clear_cache` and `edit_domain`, and the `domain` kind of `set_paused`. `get_ntp` and `get_time` take their place.
+
+### Fixed
+- **Alerts page, rows reshuffling.** Alerts that opened in the same second came back in a different order on each poll, so the table jumped. `AlertEngine.View` built the list from a map and sorted it only by `opened`. It now sorts with `alertBefore`: newest first, then node, rule, subject and ID. The Alerts page here has no cluster view, so the server sort is the whole fix (dnsdir v609 also fixed its cluster merge in `app.js`).
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, and cross-builds for linux/amd64, arm64, arm, 386 and riscv64. Only the native amd64 build is verified with PAM; the cross-builds use the fail-closed stub.
+- **New tests:**
+  - `TestMCPACLNormalised`, `TestMCPNobodyUntilListed`, `TestMCPReadOnly`, `TestMCPReadWriteGoesThroughTheGUIRules` (a shell task and a backup task made, `edit_config` dry run, save and refusal, history under `mcp@127.0.0.1`, the only node cannot be paused, an unknown node named as such), `TestMCPRefusesBrowsersAndGET`.
+  - `TestAPIRoutesListed`, `TestCanvasPruneLeftNodes`, `TestAlertViewOrderStableForSameSecond`.
+  - The help tests now cover the MCP tab and `MCP_FIELDS`.
+- **Live, against a daemon in a scratch directory:**
+  - Real PAM: a group member signed in; a wrong password, a user outside the group, and root got the same generic refusal.
+  - Headless Chromium, light and dark: the MCP tab and its "?" panel showed. `10.1.0.0/24 rw` was refused with the reason in the page's red save-error line and nothing was saved; `127.0.0.1 rw` was saved to the file.
+  - Over `/mcp` with curl: `403` while the list was empty; `initialize` and 32 tools listed for rw; `list_nodes`, `get_time`, `get_ntp`, `get_topology`, `get_log` and `api_get /api/versions` answered.
+  - Write tools on a gateway on `lo`: `set_label` named the gateway and a server; `set_paused` paused and resumed a server on all nodes, and refused kind `domain`; `set_gateway_node` refused an unknown node; `clear_left_nodes` dropped a planted entry, then answered "nothing to change"; `edit_config` dry-ran and saved; `schedule_run` and `alert_action` with unknown ids and pausing the only node were refused. Every change is in the history as `mcp@127.0.0.1`.
+  - With the real `mcp-remote` client (npm, `NODE_TLS_REJECT_UNAUTHORIZED=0`), as Claude Desktop runs it: `initialize`, 32 tools, `list_nodes`, `get_time`, `get_alerts` (all nodes), and pausing and resuming a gateway, confirmed in `get_topology`.
+  - Read-only (`127.0.0.0/8`): 16 tools and no write tools listed, a write refused, `get_config` with the gateway key hidden. A foreign `Origin` got 403, and `GET /mcp` got 405.
+
+### Not verified
+- Claude Desktop itself, and a cluster of more than one node over MCP (the relay is the one the Node menu uses).
+- `rename_node` and `update_apply`/`update_push`, which rename or rebuild the host. They are the same requests as Operate ▸ Node and Operate ▸ Updates.
+
+### Known, not changed here
+- The top-level `ntp` block is validated only when some gateway has no `ntp` block of its own (`needGlobal` in `DaemonConfig.Validate`). Gateways made in the GUI always have one, so an out-of-range `client_rate` (or another value `NTPConfig.Validate` checks there) is saved without complaint from the GUI and from `edit_config` alike. A live run saved `client_rate: -5`; chrony ignores a rate of 0 or less, so it did no harm. dnsdir has the same pattern. Always validating the block could stop existing configurations from loading, so it is left for a release of its own.
+
+## [v189] - 2026-10-27 — Fix two CodeQL code-scanning alerts (Zip Slip, integer conversion)
+
+### Fixed
+- **Backup restore path check (CodeQL "Zip Slip", `backup.go`).** `readBackupArchive` already refused absolute names and `..` prefixes, but with string tests CodeQL could not follow. Entry names are now checked with `filepath.IsLocal`, and the destination is built by a new `backupDest`, which refuses a non-local name and anything that does not land strictly below the absolute target directory (prefix check plus `filepath.Rel`). Links, devices and other non-regular entries are still refused as before.
+- **Chrony client counters (CodeQL "Incorrect conversion between integer types", `chronysrc.go`).** The per-poll packet/drop deltas (64-bit, from `strconv.ParseUint`) were narrowed with `uint32(min(x, 1<<30))`, which CodeQL does not treat as a bound. A new `clampCount` applies the same 1<<30 cap with an explicit comparison before the conversion. Behaviour is unchanged.
+
+### Verified
+- `gofmt -l .` (empty), `go build -o /dev/null .`, `go vet ./...`, `go test -race -count=1 ./...` (pass); `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` (pass); cross-compiles for linux/amd64, arm64, arm, 386, riscv64. Only the native amd64 build is verified with PAM; the cross-compiles build the fail-closed stub.
+- New tests `TestBackupDestStaysInsideTheDirectory` and `TestClampCount`; `TestBackupRestoreRefusesBadPaths` also covers `./../evil`, `..`, `a/..` and `x/../../../evil`.
+- CodeQL CLI (latest bundle, `go-security-and-quality` suite) on v188 and on this tree: both alerts are reported on v188 and gone here; no other alerts changed.
+
+### Not verified
+- No live `chronyd -x` run: the `chronysrc.go` change only caps the client statistics counter and does not touch sources, the pool or client settings.
+
+## [v188] - 2026-10-27 — Backup page redesigned (ported from dnsdir v590-v595)
+
+### Changed
+- **Configure ▸ Backup has three cards: Schedule, Servers and Restore.** The explanations are in the "?" help, not on the page.
+  - **Schedule**: Last backup and Next backup, with **Back up now**, **Schedule daily backups** (when there is no task) and **Open Scheduler** under them.
+  - **Servers**: one table with this node's status under each row. Click a row, then use **Add a server**, **Test**, **Install key…** or **Remove** above the table. Install key puts the keys of every node of the cluster on the server. In a cluster the card is tagged *shared*. The SSH-key text box is gone; `ntpdir --backup-status` still prints the key.
+  - **Restore**: your servers come first, and this node's backups on the picked one are listed at once. **All nodes** lists every node's backups. **Restore** asks one confirmation; for another node's backup that confirmation is an "Are you sure?" saying this node becomes that node. **Another server…** and **A file from this computer** stay for new nodes.
+- **Backups are a Scheduler task.** There is a new action `backup` ("Back up this node"). It goes to every server and waits, and the task's history names the servers that failed.
+  - **Migration.** The `enabled`, `hours` and `at` of v184-v187 become such a task when the configuration file is read (local time converted to UTC) and are then dropped, so backups that were on stay on.
+  - Between runs a failed server is retried after 15 minutes, and a new server gets its first backup at once, only while a backup task runs on the node. The alert **Backup failed** follows the same rule.
+- **No archive password.** New archives are sealed without one (the format and its tamper check are kept). Anyone who can read a file can read the private keys in it, so the help says to keep the backup directories private.
+  - A restore tries no password first, then the v184-v187 password still in the settings, which the page keeps without showing.
+  - `ntpdir --restore` asks for a password only when an older archive needs one.
+
+### Fixed
+- **Remove** on a backup server did not save.
+- Typing in the restore fields started a configuration save.
+- The Restore card did not pick up a server added in the same visit.
+- **Errors now say what went wrong.**
+  - "Connection closed" now shows sftp's real reason, for example "the server refused this node's key; use Install key… on this server".
+  - A missing ssh-keygen or sftp says to install the OpenSSH client.
+  - Listing errors show on their own line under the Restore row.
+
+### Verified
+- `gofmt -l .` (empty), `go build`, `go vet ./...`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...`, and cross-builds for linux/amd64, arm64, arm, 386 and riscv64. The PAM path was checked only on the native amd64 build.
+- The backup tests of dnsdir v590-v595 came along. They cover:
+  - restoring with no password and with the old one
+  - the Scheduler action and only retrying while scheduled
+  - the schedule migration, including through `loadConfig`
+  - sftp error lines and missing tools
+  - the password having no limits
+- Live: a scratch daemon with a v187-style backup block (`enabled`, `at` 03:15 in America/Phoenix, an old password), a real PAM user, and a fake SFTP server (`NTPDIR_SFTP` and `NTPDIR_SSHKEYGEN` scripts) with one server that answers and one that refuses the key. Checked in Chromium, light and dark:
+  - `--schedule` showed the migrated task at 10:15 to 10:20 UTC.
+  - The page had no password field.
+  - A backup reached the working server, and the refusing server's row and listing showed the refused-key message.
+  - The list showed this node's backups, and All nodes showed the other node's too.
+  - The other node's backup asked one "Are you sure?", and declining left nothing pending.
+  - This node's older, password-sealed backup restored with the password from the settings, after one confirmation. The daemon restarted into it and kept the old state in `state.before-restore-…`.
+- The README gains a Backup section (it had none) and the `backup` Scheduler action.
+
+### Not verified
+- A real OpenSSH server.
+- A multi-node cluster (the shared tag, Install key across nodes, and migration on replicas).
+
+## [v187] - 2026-10-26 — Server form: erasing the name looks the address up again
+
+### Fixed
+- In the Add/Edit server dialog, erasing the name after the address had been changed did not look the name up for the new address, and erasing the address did not look it up from the name. Erasing either field now fills it from the other one that is there.
+
+## [v186] - 2026-10-26 — Saved shared settings no longer flick back on a replica
+
+### Fixed
+- On a replica, a change to the shared settings was accepted by the primary and written to the replica's own file at once, but an older state of the primary that was still on its way could be applied first and put the old values back (a ticked box showed unticked) until the new revision arrived a few seconds later, applying the settings twice. The replica now waits for the primary's state at the revision its own change made (at most a minute) before it takes shared settings from the primary. This covers every shared setting.
+## [v185] - 2026-10-26 — Backups to several servers, Install key, restore in the GUI
+
+### Added
+- **Several backup servers.** Configure ▸ Backup has a table of up to eight servers (name, server, port, user, directory, keep). One archive is made per run and uploaded to every server; each server keeps its own number of backups of each node. A server that cannot be reached does not stop the others, and only the failed ones are tried again after 15 minutes; a server added later gets its first backup at once. Every server has its own status, test and list of files. The alert **Backup failed** names the servers that failed. The single server of v582 becomes the first row.
+- **Install key.** On each server, **Install key…** logs in once with the account's password (not stored or logged), adds the public keys of all the nodes of the cluster to its `authorized_keys` as `restrict` keys without touching the other lines, and tests the login. No more copying keys by hand.
+- **Restore in the GUI.** Configure ▸ Backup ▸ Restore a backup on this node: pick a backup on a configured server, on another server (with the account's password; works on a node with nothing set up) or upload a file; type the backup password; **Check backup** opens and verifies it and shows whose it is, when it was made and a warning if it is another node's or from a newer version; **Restore and restart** swaps the files in at the next start and keeps the old state next to it.
+- Help and README updated.
+
+### Notes
+- Upload of a backup file through the page is limited to 32 MB (5 MB when the node picked in the top bar is not the one you are logged in to).
+
+## [v184] - 2026-10-26 — Automatic backups
+
+### Added
+- **Configure ▸ Backup** (`backup` in the shared `ntp` block): every node packs its state (the configuration and its history, the web and DNS certificates with their private keys, the cluster identity, the users, the alerts, the schedule and its own backup key) into one archive, encrypts it (AES-256-GCM, key from the password with PBKDF2-SHA256) and puts it on a server over SFTP, once a day at a time you choose or every N hours. Only the newest N archives of each node are kept (the oldest are removed after every upload; other nodes' files and anything else in the directory are never touched). Uploads go under a temporary name and are renamed when complete.
+- Each node makes its own SSH key (ed25519); the page shows the public line to add to `authorized_keys` on the backup server, a **Back up now** button, **Test connection**, when the last backup ran and how it went, and the archives on the server. The host key is accepted on the first connection and remembered.
+- A failed backup is tried again after 15 minutes. New alert rule **Backup failed** (on by default; opens after 30 minutes of failing).
+- `ntpdir --backup-status`, `ntpdir --backup-now` and `ntpdir --restore FILE [--restore-password-file F]` (the password can also come from `NTPDIR_BACKUP_PASSWORD` or a prompt). A restore needs the service stopped, checks the archive before touching anything, puts the contents in place of the state directory and keeps what was there in `<state dir>.before-restore-<time>`. The log, staged upgrades, block lists, statistics and sessions are not in a backup and are left alone.
+- Help page for Configure ▸ Backup.
+
+### Notes
+- The password is part of the configuration, so it is inside every backup: keep a copy elsewhere, a backup cannot be opened without it.
+- Needs `sftp` and `ssh-keygen` (the OpenSSH client) on the nodes.
+
+## [v183] - 2026-10-25 — Alerts
+
+### Added
+- **Monitor ▸ Alerts** lists what is wrong on the node picked in the top bar: severity, alert, message, since/for how long, state (open, recovering, acknowledged, silenced, closed) and a count when it keeps coming back. Right-click an alert for **Acknowledge** / **Unacknowledge**, **Silence…** (15 minutes to 7 days) / **Unsilence**, **Mark resolved**, **Copy** and **More** (a safe **Fix** for that rule, **Go to** the page that shows the cause, **Edit rule…**). **Show closed** shows the last 30 days. A red warning triangle on the Alerts item (and on the Monitor heading) shows while an alert is open, not acknowledged and not silenced.
+- **Configure ▸ Alerts** (`alerts` in the shared `ntp` block): webhook address, repeat hours, **Send test**, and the rules: chrony not running, clock not synchronised, no time source answers, clock offset, stratum (off by default), upstream server down, upstream server with the wrong time (falseticker), only fallback servers in use, NTP listener down, no active gateway, certificate expiring, CPU, memory and disk. Each rule has an on/off, a severity, how long a problem must last (failed checks in a row, minutes, or M of the last N checks; for values a threshold and minutes) and when it clears (good checks in a row or minutes).
+- Opened and resolved alerts go to the webhook (JSON with `text`, `content`, `node`, `severity`, `rule`, `subject`, `message`, ...) and to the log. A resolved message is sent once and not for a silenced alert. An alert that comes back within an hour is the same alert, with its count up.
+- `/metrics` has counts only: `ntpdir_alerts_active{severity}`, `ntpdir_alerts_acknowledged{severity}` and `ntpdir_alerts_opened_total`. The example Grafana dashboard has an open-alerts panel and the example Prometheus rules a "critical alert open for 10 minutes" rule.
+- Help pages for both.
+
+### Notes
+- Alerts, acknowledgements and silences belong to each node (`alerts.json` in the state directory); the rules and the webhook are shared by the cluster. Checks run every 15 seconds. History: 30 days or 1000 alerts.
+- Fix actions: check the upstream servers now; restart chrony.
+- Alerts can be seen and handled on any node from any node (the Node menu in the top bar).
+
+## [v182] - 2026-10-25 — Example Grafana dashboard and Prometheus alert rules
+
+### Added
+- Under the **Allowed sources** list of Configure ▸ Monitoring ▸ Metrics: two links, **Grafana dashboard example** and **Prometheus alert rules example**. The dashboard (import it in Grafana) shows the clock offset and stratum, chrony sources, requests, upstream servers, gateways and the host; the rules file (list it under `rule_files:` in `prometheus.yml`; the job is expected to be called `ntpdir`) alerts on a node that cannot be scraped, chrony stopped or not synchronised, a clock offset over 100 ms, a high stratum, no reachable source, no active gateway, a listener down, upstream servers down or false, CPU, memory and full filesystems.
+- When the certificates run out is a metric: `ntpdir_certificate_expires_in_seconds` and `ntpdir_certificate_not_after_timestamp_seconds`, for the web certificate. The dashboard shows the days left and the rules warn at 14 days and 3 days.
+
+## [v181] - 2026-10-25 — SNMP fields in a better order, short lists without filter and paging
+
+### Changed
+- Configure ▸ Monitoring ▸ SNMP: **Location** and **Contact** come first, above **Community strings** and **Allowed sources**.
+- The SNMP and Metrics lists no longer have the filter box and the page controls (they are short lists).
+
+## [v180] - 2026-10-25 — Configure ▸ Monitoring: SNMP access list and Metrics
+
+### Added
+- **Configure ▸ SNMP is now Configure ▸ Monitoring**, with two tabs: SNMP and Metrics.
+- SNMP **Allowed sources** (`snmp_acl`): the addresses, networks and host names snmpd answers to. **Empty means nobody**, so a community string answers no one until a source is listed. **After updating, add your monitoring system under Configure ▸ Monitoring ▸ SNMP ▸ Allowed sources, or SNMP stops answering.**
+- **Metrics** tab with **Allowed sources** (`metrics_acl`): who may read `GET /metrics` on the web GUI port, which returns this node's numbers in the Prometheus text format: the clock (synchronised, stratum, offset, chrony's sources, requests received and dropped), each upstream server (health, answer time, stratum, offset, falseticker), the gateways, and the host (CPU, load, memory, swap, disk I/O, filesystems, network interfaces). The page is always there; with the list empty nobody can read it, and everyone not listed gets 403. There is no login, and no client addresses are in it.
+- Both lists take an address (`10.1.1.1`), a network (`10.1.1.0/24`, `2620::/64`; host bits are dropped) or a host name; a name is looked up (SNMP: when snmpd.conf is written and every 5 minutes; metrics: every minute).
+
+## [v179] - 2026-10-24 — Topology: copy a server and paste it on a gateway
+
+### Added
+- Right-click a server ▸ **Copy server**, then right-click a gateway (the circle, or the empty drawing) ▸ **Paste server**: the server and its name are added to that gateway, which can be another one. If that gateway already has the server's address, the *Add NTP server* form opens so the copy can be given its own address. *Paste server* is greyed out until something is copied. A pause is not copied.
+
+## [v178] - 2026-10-24 — Topology: an NTP server's tooltip is one fact per line
+
+### Changed
+- The tooltip of an NTP server reads: its name and address; "Stratum 1, offset +4.47 ms"; "Time is taken from it" (with "(the selected source)" for the one chrony follows); then how long it has been online. The round trip is no longer in the tooltip (it is on the server's statistics page and square). The text of `--canvas` and the other commands is unchanged.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race` on the full suite.
+
+## [v177] - 2026-10-23 — Configure ▸ Users ▸ LDAP: the fields are laid out on two lines
+
+### Changed
+- The LDAP sign-in form shows bind account, bind password and search base on the first line, and the full-access group and the read-only group on the second (they were four across and one on its own). On a narrow window they stack.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite; the form looked at in Chromium (ntpdir; the same code and style in all three).
+
+## [v176] - 2026-10-23 — No pause of an imported gateway or of a node while AnyName is installed
+
+### Fixed
+- A gateway imported from AnyName could be paused, and went grey, but NTP kept answering on its addresses: AnyName holds them and chrony answers on every address of the node, so ntpdir cannot stop it. *Pause* is no longer offered on these gateways or on their nodes' menu, and `--canvas-pause gateway` and `--node-pause` are refused while AnyName is installed (resuming still works). A pause left from an earlier version is cleared. Drain the node or gateway in AnyName to stop its addresses.
+- Two test-only data races are gone: `TestLogServerFlips` shared an unlocked log buffer with a goroutine left by another test, and the tests that point the AnyName markers elsewhere raced with a leftover goroutine reading them (the markers are now behind a lock). Four full `-race` runs in a row passed.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+## [v175] - 2026-10-23 — AnyName instead of dnsdir in the text; imported gateways are read-only on Configure ▸ Gateways
+
+### Changed
+- Messages, the GUI, `--help`, the help pages, the README and the quick start now say "AnyName" (the AnyName DNS Director) where they said "dnsdir". Commands, flags (`--canvas-add dnsdirvip`), file paths, config keys (`dnsdir_vips`) and JSON field names are unchanged.
+- Configure ▸ Gateways shows a gateway imported from AnyName as a read-only card (it said so, with its group number and name) instead of the editable form; saving the page keeps it as it was.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite; in Chromium against a fake AnyName, the Gateways page and a save from Settings.
+
+## [v174] - 2026-10-23 — "Imported from AnyName"
+
+### Changed
+- The note and tooltips on a gateway imported from dnsdir say "Imported from AnyName" (the product's name) instead of "dnsdir".
+
+## [v173] - 2026-10-23 — The "imported from dnsdir" note no longer runs into the circle
+
+### Changed
+- The note above a gateway imported from dnsdir is now just "Imported from dnsdir"; the rest (the dnsdir gateway number, and that its name, addresses and nodes are managed there) is in its tooltip and the gateway's tooltip.
+
+## [v172] - 2026-10-23 — Saving a setting no longer fails with "group 100: at least one of vip4 or vip6 must be set"
+
+### Fixed
+- The settings pages (Users ▸ LDAP, Settings, Web GUI and the others) send the whole configuration, and the page rebuilt each gateway from a fixed list of fields that did not include the ones that mark a gateway imported from dnsdir (`piggyback`, `piggyback_of`, `dnsdir_shared`). The server then saw a gateway with no address and refused the save. The page now sends them back unchanged.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race`; in Chromium against a fake dnsdir, changing the log level on Settings saved and both imported gateways were still in the file afterwards.
+
+## [v171] - 2026-10-23 — Gateways imported from dnsdir say so, and lose the menu items that are dnsdir's
+
+### Changed
+- A gateway that mirrors one of dnsdir's now says "Imported from dnsdir (gateway N) — its name, addresses and nodes are managed there" above its circle and in its tooltip; the sidebar note reads "Imported from dnsdir" and each gateway's tooltip says so.
+- Its nodes' menu no longer offers *Controller* or *Remove from this gateway*, and the circle's menu no longer offers *Add node*: which node serves a gateway is dnsdir's decision.
+
+### Verified
+- `node --check`, `gofmt`, `go vet`, `go test -race`; looked at the drawing and a node's menu in Chromium against a fake dnsdir.
+
+## [v170] - 2026-10-23 — The sidebar dot of a gateway that mirrors dnsdir's follows the circle
+
+### Fixed
+- The dot beside PHX.SITEDNS / PTX.SITEDNS in the sidebar was red ("No node is serving this gateway") while the circle was green. The cluster counted nodes that serve a gateway from the election, and these gateways have none. A node now counts as serving one when it holds one of its addresses, is not paused and has an NTP server to answer from, and the colour it shares with the other nodes is the circle's.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+### Not verified
+- Not run in a real cluster with dnsdir; the dot's colour in a cluster is covered by the unit test of the serving rule only.
+
+## [v169] - 2026-10-23 — dnsdir's gateway VIPs are drawn in the circle, not as anycast pills
+
+### Fixed
+- In v168 the gateways that mirror dnsdir's showed the gateway's own VIPs as pills labelled like anycast addresses and left the circle without an address. The circle now shows the gateway's shared addresses (IPv4 and IPv6) the way dnsdir's does, and only addresses in dnsdir's `extra_vips` are pills. The shared addresses are kept with the gateway (`dnsdir_shared`, replicated), so every node draws the same thing, and the status no longer depends on reading dnsdir's file on the node that draws it.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite; a live run of the daemon against a fake dnsdir (two gateways, one anycast address) and a look at both gateways in Chromium.
+
+### Not verified
+- Not run against a real dnsdir install with live addresses and a cluster.
+
+## [v168] - 2026-10-23 — Installed next to dnsdir, AnyTime shows one gateway for each gateway of dnsdir
+
+### Changed
+- v167 made one merged gateway named "dnsdir" holding every address dnsdir has. Now there is one gateway for each gateway of dnsdir, with dnsdir's name (PHX.SITEDNS, PTX.SITEDNS ...), answering on that gateway's shared and anycast addresses, so the Topology matches dnsdir's. Gateways are added, renamed and removed to follow dnsdir; a v167 gateway is adopted.
+- All of them share one list of NTP servers: a server added, removed or renamed on one is applied to the others.
+- The circle shows the gateway's shared addresses as dnsdir's circle does; only its anycast addresses are pills. A node that does not hold the shared address (dnsdir holds it on one node at a time) is no longer shown as degraded for that.
+- Renaming a mirrored gateway is refused (rename it in dnsdir). The same anycast address on two dnsdir gateways is accepted.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite (one unrelated race in `TestLogServerFlips` appeared once and did not repeat in five runs or the full rerun).
+
+### Not verified
+- Not run against a real dnsdir install; tests use a fake dnsdir configuration. The GUI drawing was not checked in a browser.
+
+## [v167] - 2026-10-23 — Installed next to dnsdir, AnyTime answers on dnsdir's gateway and anycast addresses
+
+### Added
+- When dnsdir is installed on the same host, ntpdir piggybacks on it: a gateway named "dnsdir" is made and kept current automatically with every gateway VIP and anycast address dnsdir has (read from its configuration every few seconds). It has one NTP server list for all of them. ntpdir only listens on those addresses; it never adds, removes or announces them and never touches FRR.
+- Gateways ntpdir had of its own stay in the configuration but do not run while dnsdir is present, and show grey with the reason; removing dnsdir restarts them and stops the "dnsdir" gateway. Standalone behaviour is unchanged.
+- New gateway, Edit, Add anycast address, Add dnsdir address and Delete are refused on the "dnsdir" gateway, and a new gateway is refused while dnsdir is present (GUI, CLI, API). The flag is part of the cluster's shared settings.
+- `piggyback_test.go` covers reading dnsdir's addresses, creating and following the gateway, validation, shared round-trip, held-back gateways, canvas status and the refusals.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+### Not verified
+- Not run against a real dnsdir install with live anycast addresses; the address handling is covered by tests with a fake dnsdir configuration.
+
+## [v166] - 2026-10-23 — LDAP sign-in: an account whose UPN differs from name@domain can sign in by account name
+
+### Fixed
+- With no bind account set, LDAP sign-in binds as `name@domain` (the domain from the search base) and then checks that the account it reads back is the one that signed in. That check required the account's userPrincipalName to be exactly the bind name, so an account whose UPN has another suffix or form (`michael.cushard@company.com`, signing in as `mcc` -> `mcc@axway.int`) was refused with "the account found (…) is not the one that signed in", although the server had accepted the password. Active Directory also accepts account name @ domain, so the check now accepts the entry when its account name is the part before the `@` and no account has the bind name as its UPN (an account that does is the one the server really signed in, and the entry found is still refused). Sign-in by full UPN, `DOMAIN\name` or a plain name whose UPN matches is unchanged.
+- `TestLDAPAccountNameWithDifferentUPN` covers the new case and the refusal when another account owns the UPN; the fake directory now resolves bind names the way Active Directory does.
+
+### Verified
+- `gofmt`, `go vet`, `go test -race` on the full suite.
+
+### Not verified
+- Against a real Active Directory.
+
+## [v165] - 2026-10-23 — Scheduler: "Ignore the exit status" for shell tasks
+
+### Added
+- A shell task has a new option, **Ignore the exit status** (`ignore_exit` in the task, so `--schedule-set` takes it too). A command that ran and exited with any status then counts as done, and its output ends with `(exit status N, ignored)`. A command that cannot start, or that the time limit stops, still fails. Before, any non-zero exit marked the run failed, which made commands like `systemctl status` on a stopped service or `grep` unusable as tasks. Without the option nothing changes.
+- Help (Operate ▸ Scheduler ▸ Good to know) and README describe it. The scheduler test covers exit 3 with and without the option, and a timeout with it.
+
+### Verified
+- `gofmt`, `go vet`, `go test` on the full suite.
+
+### Not verified
+- A live multi-node run with the option on a real cluster.
+
+## [v164] - 2026-10-23 — Configure ▸ Cluster moved to Configure ▸ Settings ▸ Cluster
+
+### Changed
+- The **Cluster** settings (binding address, advertised address, sync interval) are now the **Cluster** tab of **Configure ▸ Settings**, after Logs and Upgrades. The *Cluster* entry under Configure is gone; an old `#cfg_cluster` bookmark opens the new tab. Nothing else changes, and the help panel follows the tab.
+
+## [v163] - 2026-10-23 — Configure ▸ Settings with Logs and Upgrades tabs; syslog forwarding; Gateways
+
+### Changed
+- **Configure ▸ General is now Configure ▸ Settings**, with two tabs: **Logs** (the *Log level* and the new syslog settings) and **Upgrades** (automatic updates, online repository). There is no General tab: nothing was left for it.
+- **Configure ▸ Gateway groups is now Configure ▸ Gateways.**
+
+### Added
+- **Syslog forwarding (Configure ▸ Settings ▸ Logs, `--syslog*`).** Every line of the log can also go to a syslog server over **TCP, UDP or TLS** (RFC 5424, or RFC 3164), with the facility you pick. Per node, not replicated. A queue of 2000 messages keeps a slow or dead server from holding anything up (the oldest are dropped and counted); the connection is retried with a growing pause. TLS checks the server's certificate against a CA file or the system's authorities unless told not to. The tab shows connected / not connected with the sent and dropped counts, and has a **Send test message** button. CLI: `--syslog`, `--syslog-server`, `--syslog-protocol`, `--syslog-facility`, `--syslog-format`, `--syslog-ca`, `--syslog-tls-insecure`, `--syslog-disable`, `--syslog-enable`, `--syslog-test`. The troubleshooting bundle gets `ntpdir/syslog.json`.
+- **Help:** new panels for the Logs and Upgrades tabs; the Gateways panel is renamed.
+
+## [v162] - 2026-10-23 — Log file rotates at 100 MB
+
+### Changed
+- The daemon's log file (`ntpdir.log` in the state directory) now rotates at **100 MB** instead of 2 MB; the two previous files are still kept, so up to about 300 MB of history is on disk. README and the Log help panel say so.
+
+## [v161] - 2026-10-23 — Configure ▸ Users tabs: Local, LDAP, SSO
+
+### Changed
+- The tabs on **Configure ▸ Users** are now in the order **Local**, **LDAP**, **SSO** (they were Local, SSO, LDAP). Nothing else changes; the help panel still follows the tab.
+
+## [v160] - 2026-10-23 — Operate ▸ Anycast and Monitor ▸ Anycast get BGP and OSPF tabs
+
+### Changed
+- **Operate ▸ Anycast** and **Monitor ▸ Anycast** now have a **BGP** tab and an **OSPF** tab (BGP first), like Configure ▸ Anycast. Before, OSPF appeared as extra sections on the same page. Nothing else changes: the same buttons, tables and live state, and the *Anycast addresses* table is on both Monitor tabs.
+- **Help:** each of the two pages now has two panels (`BGP` and `OSPF`), and the panel follows the tab.
+
+## [v159] - 2026-10-23 — Anycast over OSPF, and Configure ▸ Anycast split into BGP and OSPF tabs
+
+### Changed
+- **OSPF as a second way to announce the anycast addresses.** New **OSPF** tab on **Configure ▸ Anycast** (the **BGP** tab is first): router ID, hello and dead interval, metric, and a table of interfaces (name, area, link type, optional OSPFv2 MD5 key, enabled). OSPFv2 carries the IPv4 addresses and OSPFv3 the IPv6 ones. The settings are per node and not replicated (`ospf` block in the config, written only when used).
+- **`ospfd` and `ospf6d` run only while OSPF is configured.** They are switched on in `/etc/frr/daemons` when the first interface is added and back off (FRR restarted) when the last one is removed or OSPF is disabled; `bgpd` follows BGP in the same way and `bfdd` stays on while either protocol uses it. A node that uses neither never has its FRR files touched. `frr.conf` is now rendered for BGP and OSPF together; BGP-only output is unchanged.
+- **Same posture as BGP.** Only the anycast addresses are redistributed into OSPF (a route-map permits just them, type 1 external, with the configured metric) and nothing is taken in (a route-map on zebra's OSPF routes denies everything). BFD is on for every interface.
+- **Not with dnsdir on the same host.** Like BGP, OSPF is unavailable while the Anyname DNS Director is installed on the host: ntpdir leaves FRR alone, treats OSPF as off, refuses to set it up or enable it (clearing still works) and the Anycast pages say so.
+- **Announce gate and Topology pills.** An address is held on `lo` while BGP **or** OSPF can carry it (OSPF: an enabled interface has a neighbor in state Full, OSPFv2 for IPv4, OSPFv3 for IPv6). The pill colours count OSPF interfaces the way they count BGP neighbors and show the better of the two; the labels say *no OSPF neighbor* / *OSPF disabled* when OSPF is the one in trouble.
+- **Operate ▸ Anycast** has *Disable OSPF* / *Enable OSPF* and a per-interface Disable / Enable (passive); **Monitor ▸ Anycast** shows the OSPF status and the neighbors per interface (protocol, state, BFD, up time) next to the BGP ones.
+- **Command line, API, support bundle.** `--ospf`, `--ospf-router-id`, `--ospf-interface-add/-del`, `--ospf-area`, `--ospf-network`, `--ospf-key`, `--ospf-hello`, `--ospf-dead`, `--ospf-metric`, `--ospf-disable/-enable`, `--ospf-interface-disable/-enable`; `GET/PUT /api/ospf` and `POST /api/ospf/operate` (relayable to another node); the tshoot bundle gets `ntpdir/ospf.json` and `frr/ospf.txt`.
+- **Help.** The Anycast configuration help is now two panels (BGP and OSPF) that follow the tab; the Operate and Monitor Anycast panels and the Topology notes cover OSPF.
+
+## [v158] - 2026-10-23 — Help rewritten: one plain-English panel for every screen and tab
+
+### Changed
+- Every help panel was rewritten. Each screen now has a panel of its own, and so does every tab and sub-tab: the Configure ▸ General, Gateway groups, Web GUI, SNMP and Cluster pages, each of the five NTP tabs (Servers, Health, Clients, Security, Leap seconds), the Users tabs (Local, SSO with its General, Google, Microsoft and OpenID Connect tabs, and LDAP), and every Operate and Monitor page.
+- The panel follows you: change a tab or a sub-tab while the help is open and the panel changes with it.
+- All panels use the same layout: what the screen is for, what you can do on it, numbered steps for the usual jobs, a Fields list with the exact on-screen labels, notes on what to watch out for, and the command-line equivalents. Warnings stand out in a highlighted note.
+- The existing explanations were carried over and reorganised; the long single paragraphs (statistics, the topology page) were split into short, headed parts.
+- The checks now require a panel for every page and tab (and fail on one left over from a page that is gone), the same layout in every panel, and every labelled field in the panel of the tab it is on.
+
+## [v157] - 2026-10-22 — A joining node does not pull the cluster up to its version
+
+### Changed
+- With auto-update on (the default), every node follows the highest source version any member offers, so a node that joined a cluster while holding a newer release staged would have upgraded the whole cluster. A node that has just joined now does not offer the source it had staged when it joined (it reports no source and refuses `/cluster/source`) until an administrator uploads or fetches a release on it, or it stages something else. The guard is on the joining node, so it works even when the cluster's nodes are older. A joining node on an older version updates itself from the cluster as before.
+
+## [v155] - 2026-10-22 — LDAP without a service account
+
+### Changed
+- **Configure ▸ Users ▸ LDAP**: the bind account and its password are now optional. Leave both empty and each person signs in to the directory as themselves (`alice` is sent as `alice@example.lan`, the domain taken from the search base; `alice@example.lan` and `EXAMPLE\alice` are sent as typed), and the console reads their own groups and account status.
+- Without a bind account an open session cannot be rechecked against the directory, so it runs until it expires or the person signs out; with one, sessions are still rechecked every minute. A bind account without its password (or the reverse) leaves LDAP off.
+- The Test box needs a password in this mode. The account that signed in must be the account whose groups were read.
+
+## [v154] - 2026-10-22 — LDAP sign-in, and an option to skip certificate checks
+
+### Changed
+- **Configure ▸ Users ▸ LDAP** (new tab beside SSO) signs people in with a Samba 4 or Active Directory account. Servers (`ldaps://`, or `ldap://` with StartTLS), a bind account, a search base, and a full-access and a read-only group (name or DN, nested groups count). The host's own accounts are tried first. Sessions are rechecked every minute. A **Test** box shows each step of a lookup.
+- **Do not check the server's certificate** (LDAP) and **Do not check the provider's certificate** (OpenID Connect) accept self-signed certificates without trusting a certificate authority. Off by default; the log warns while on.
+- New help pane for LDAP; the SSO pane covers the new option.
+
+## [v153] - 2026-10-22 — A tab for each sign-in provider
+
+### Changed
+- **Configure ▸ Users ▸ SSO** has a tab for each provider: **General** (the console's address and the table of users), **Google**, **Microsoft** and **OpenID Connect**.
+
+## [v152] - 2026-10-22 — Sign in with any OpenID Connect provider
+
+### Changed
+- **A third sign-in provider: any OpenID Connect provider** (Authentik, Keycloak, Authelia, Zitadel and the like), for an internal tool that cannot use Google or Microsoft. On Configure ▸ Users ▸ SSO: a button name, the issuer address, the client ID and secret. The login page gets a button with that name. The same checks as the other two (signature RS256, issuer, audience, expiry, nonce, PKCE), and the provider must say the e-mail address is verified.
+- **The Users table has a Provider column**: `any` (the default) or `google`, `microsoft` or `oidc`, which admits the address through that provider only. (The file already allowed this, as a word after the level; the table dropped it, now it keeps it.)
+
+## [v151] - 2026-10-22 — No filter or paging on the short lists
+
+### Changed
+- The short list tables (servers, fallback servers, neighbors, more VIP addresses, community strings, keys, authenticated servers) no longer have the filter box and page controls; the long ones (clients, domains, users and the like) keep them.
+
+## [v150] - 2026-10-22 — Last apply shows just the tag
+
+### Changed
+- **Anycast ▸ Last apply** shows only the **ok** tag when the last apply worked (no "FRR is configured" beside it); a failure still shows its message.
+
+## [v149] - 2026-10-22 — Empty new rows go away
+
+### Changed
+- In the list tables, a row added with right-click ▸ **Add** and left empty disappears again when you press Esc or click elsewhere. A row with anything in it stays.
+
+## [v148] - 2026-10-22 — Narrower list tables
+
+### Changed
+- The list tables are no longer as wide as the whole card (at most 42 rem), and their number column is narrow, so a one-column table is not half number column.
+
+## [v147] - 2026-10-22 — Help for Local and SSO users
+
+### Changed
+- **Users** has two help pages now, one for the **Local** tab and one for the **SSO** tab, each describing its own settings (the SSO one has the Google and Microsoft set-up steps and how an address is matched to a provider).
+- On the SSO tab the fields are in three rows: the console address; the two Google fields; the three Microsoft fields.
+
+## [v146] - 2026-10-22 — Tidier tables and SSO page
+
+### Changed
+- The **Add row** button is gone from the list tables; right-click ▸ **Add row** does it (the empty table says so).
+- The text on the **SSO** tab is in the help now (Configure ▸ Users ▸ SSO), not on the page.
+
+## [v145] - 2026-10-22 — Sign in with Google or Microsoft
+
+### Changed
+- **Single sign-on.** The login page can offer **Sign in with Google** and **Sign in with Microsoft** (Entra ID) besides the system password (which stays). OpenID Connect with PKCE; the ID token's signature, issuer, audience, expiry and nonce are checked, Microsoft accounts must belong to the configured tenant, Google addresses must be verified.
+- **Configure ▸ Users** has two tabs now: **Local** (the accounts of this host, as before) and **SSO** (the provider settings and a table of the e-mail addresses that may sign in, each `rw` or `ro`). Only those addresses get in. An SSO session is checked against the list every minute: removing an address ends it, and `rw` to `ro` makes it read-only.
+- The settings are shared by the cluster; the client secrets are hidden from read-only accounts. Each node needs HTTPS access to accounts.google.com or login.microsoftonline.com. Not tested against a real Google or Microsoft tenant, only against a stand-in provider.
+
+## [v144] - 2026-10-22 — Lists as tables
+
+### Changed
+- These lists are tables now (edit in place, drag to reorder, right-click menu, filter, paging, **Add row**): **Servers**, **Fallback servers**, **Allowed clients**, **Blocked clients**, **Keys** (Key ID, Hash, Key), **Authenticated servers** (Server, Method, Key ID), **Neighbors**, **More IPv4 / IPv6 addresses** and the SNMP **Community strings**. The stored settings are unchanged.
+
+## [v143] - 2026-10-21 — Delete a cluster member in one step
+
+### Changed
+- **Cluster ▸ Members:** right-click a member ▸ **Delete** drops it from the cluster and leaves nothing behind (before, **Remove** put its address on a removed list and a second step, **Allow again**, was needed to clear it). A member that is still running resets itself to a cluster of one. The removed-nodes card now has a **Delete** button on each address to forget one that is already there. Command line: `--cluster-delete ADDR`. `--cluster-remove` and `--cluster-unremove` are unchanged, for blocking a node that must not come back.
+
+## [v142] - 2026-10-21 — Picking a client or a domain in the statistics is much faster
+
+### Changed
+- **Statistics, picking a client or a domain (or the Filter box with a client picked).** The files of who asked for what (`<state-dir>/pairs/`) are read far less:
+  - Finished hours are merged into hour files and finished days into day files, in the background (at start-up for what is already there, then every five minutes). A range reads a day file for each whole day, an hour file for each whole hour, and 10-minute files only for the rest; the 10-minute files are kept for 26 hours, hour and day files for the retention. Identical pairs add up, so the merged files are smaller than the sum of the files they replace, and the day files add roughly as much space again as the hour files.
+  - What a finished file holds for the picked client or domain is remembered in memory (up to a million entries), so a refreshed page reads only the file still being filled.
+  - A file is read in one pass that compares the raw bytes of its strings with what was picked, several files at once.
+  On a synthetic two days of 60,000 pairs per file on a 2-core machine, the first look took 3.1 s instead of 10.3 s, the same look again 0.5 ms, and 0.7 s without the cache once the files were merged. The numbers shown are the same as before; a merged hour or day file keeps up to 2 / 4 million pairs, beyond that a flood shows as "(others)".
+
+## [v141] - 2026-10-20 — The loopback row is really gone from the cluster view
+
+### Fixed
+- **Monitor ▸ Host, Network interfaces:** the `lo` row was hidden for a single node but still listed for the whole cluster, where its name is `node lo`. It is hidden there too.
+
+## [v140] - 2026-10-20 — Filesystems named by node, no loopback row, clearer login log lines
+
+### Changed
+- **Monitor ▸ Host, Filesystems for the whole cluster** now lists one row per node and mount, named like the Network interfaces rows (`node /var`), instead of adding the same mount of every node together. The Disk space tile shows the fullest of them.
+- **Logins in the log, with addresses.** Every line about signing in or out now names the address: `web: login: "name" signed in from ADDRESS (full access|read-only)`, `web: logout: "name" signed out from ADDRESS (signed in from ADDRESS)`, and a session that ran out is `web: logout: … (session expired; signed in from ADDRESS)`. Failed logins (`web: login failed for "name" from ADDRESS: reason`) were already logged; now an attempt refused because the address or name is locked out is too (`web: login refused for "name" from ADDRESS: locked out for another …`, at most once a minute for each), and so are a cross-origin login and "too many logins at once". The log is kept per node: look at the node the person signed in to (the Node menu on the Log page).
+
+### Removed
+- **Monitor ▸ Host, Network interfaces:** the `lo` row is not listed any more (it was never in the totals and has no link speed).
+
+## [v139] - 2026-10-20 — No read-only tag beside the user name
+
+### Removed
+- The "read-only" tag next to the signed-in name at the top. Read-only accounts still cannot change anything, and the Users page still marks them.
+
+## [v138] - 2026-10-20 — The ntpdir-ro group is made on a web update too
+
+### Fixed
+- A node updated from the web page (or by hand) never ran `install.sh`, so it did not get the `ntpdir-ro` group. The daemon now creates it when it starts (and when the settings change) if it is the first of the Read-only groups and is missing, only when running as root; any other name, such as a directory group, is left alone.
+
+## [v137] - 2026-10-20 — Read-only users on the Users page, and a ntpdir-ro group made on install
+
+### Added
+- **Users page: Access.** Adding a user or an existing account has an Access choice (Full access or Read-only), and a user's page has one too (Save moves the account between the login group and the read-only group on every node). Read-only users show a read-only pill in the list. Read-only accounts are not counted as the last account that can sign in, and the account you are signed in as cannot make itself read-only.
+- **The installer creates the group `ntpdir-ro`** next to `ntpdir` (`--add-ro-user NAME` adds someone to it; the uninstaller keeps it unless `--remove-group`, or `--purge` when the installer made it). It is the new default of **Read-only groups** (`web.read_group`); an empty setting turns read-only access off, and a configuration written by the previous version, which had none, gets the default.
+
+## [v136] - 2026-10-20 — Read-only group, and a test that the cards, chart and lists agree
+
+### Added
+- **Read-only groups** (Configure ▸ Web, `web.read_group`; off by default, shared by the cluster): members of these groups who are in none of the login groups can sign in and see everything, but cannot change anything. Every request but a read is refused with 403 and a message (Sign out still works), keys and passwords in the configuration are shown as `(hidden)`, the configuration versions cannot be opened or downloaded, and a read-only label shows beside the user name. The check is made on the node the person is signed in to and again on a node a request is relayed to.
+
+### Changed
+- New test: over a fully counted range every number card equals the sum of its chart series, the answer kinds add up to the total, each top list adds up to the total (to the picked kind's card when one is picked), and the Clients line ends at the Clients card.
+
+## [v135] - 2026-10-20 — The Clients line ends at the Clients tile
+
+### Fixed
+- **Statistics ▸ Clients chart** drew the clients of each ten-minute slot (the busiest node's, in a cluster), so it sat far below the tile. It now draws the clients counted so far in the range: it climbs as new clients appear and its last point is the number on the tile. In a cluster the nodes report which clients they first saw at each point and the union is taken, so a client that asked several nodes counts once. The still-filling last point is drawn too.
+
+## [v134] - 2026-10-20 — Clients over time on the Statistics chart
+
+### Added
+- **Statistics ▸ Clients tile is clickable**: it draws the clients counted so far in the chart, like the RPS tile does for its rate. The line climbs as new clients show up and its last point is the number on the tile; with a kind picked, only those count. Click it again or another tile to go back. Nothing new is stored: new clients are noticed per top-list slot, so the line moves in steps of ten minutes up to a day and a half and an hour beyond, and a slot that hit its client cap makes the count a lower bound. In a cluster each node reports which clients it first saw at each point and the union is taken, so a client that asked several nodes counts once. New fields `client_counts` and `client_new` in the statistics API answer.
+
+## [v133] - 2026-10-20 — Topology finds servers written as host names in chrony's list
+
+### Fixed
+- **No blue line (and no chrony state in the tooltip) for a server written as a host name**, such as `time.google.com`, although chrony was using it: the topology looks the server up in chrony's numeric list (`chronyc sources -n`), where it is an IP address. The daemon now also asks chrony for the names its sources were configured with (`chronyc -N sources`, chrony 4.0 and later; once a minute or when the list of addresses changes, not at every look) and matches on those too. A chrony without `-N` behaves as before.
+
+## [v132] - 2026-10-20 — Topology legend
+
+### Fixed
+- The legend under the topology said "used for time (* selected)", but nothing on the page shows a `*`. It now says "used for time".
+
+## [v131] - 2026-10-19 — Capture keeps its filter when the node changes
+
+### Fixed
+- **Monitor ▸ Capture**: choosing another node in the Node menu cleared the filter box. It is kept now, like the search of Monitor ▸ Log (which already kept it, with the level, time range and line count).
+
+## [v130] - 2026-10-19 — One Start/Stop button in Capture
+
+### Changed
+- **Monitor ▸ Capture has one button** instead of two: it reads Start and starts a capture, and reads Stop while one runs and stops it. Pressing Enter in the filter box starts a capture but never restarts a running one.
+
+## [v129] - 2026-10-19 — Capture from a server given by name
+
+### Changed
+- **Right-click a server ▸ Capture** for a server written as a host name now looks the name up (the node does it, IPv4 preferred) and fills in `host ADDRESS and port N`; only when the name cannot be resolved is the filter just `port N`.
+
+## [v128] - 2026-10-19 — Capture and Logs from a server's menu
+
+### Added
+- **Right-click a server on the Topology page ▸ Capture** opens Monitor ▸ Capture with the filter `host SERVERIP and port 123` filled in (the server's own port when it has one; 853 for `tls://`, 443 for `https://`; a server given by host name gets just `port N`, since the packet filter works on addresses). Press Start.
+- **Right-click a server ▸ Logs** opens Monitor ▸ Log with the server's address already in the search box.
+## [v127] - 2026-10-19 — Whois no longer repeats a timeout for an hour
+
+### Fixed
+- **A whois server's IPv4 addresses are asked before its IPv6 ones, each address in turn.** On a node whose IPv6 path to whois.iana.org connects but never answers, every lookup waited out the timeout and failed although the IPv4 path worked.
+- **A whois lookup that failed to reach the server (timeout, connection refused or reset) was remembered for an hour** like a real "not found", so Run again returned the same error without asking anybody. It is now remembered for 15 seconds only; "not found" answers are kept as before.
+- When whois.iana.org does not answer, the common TLDs (com, net, org, info, biz, io, us, uk, de, fr, nl, edu, eu, ca, co, me, dev, app) go straight to their registry's whois server, the way the `whois` command does.
+
+## [v126] - 2026-10-19 — The scheduler's "Only in" months on two lines
+
+### Fixed
+- **The month boxes of a scheduled task ("Only in") were in one long column**: a general style that gives a tick box a whole row applied to them too. They are now six to a line, January to June on the first and July to December on the second.
+
+## [v125] - 2026-10-18 — One BGP switch, in Operate only
+
+### Removed
+- The Enabled box for BGP as a whole in Configure ▸ Anycast (added in the previous version): switching BGP off and on stays under Operate ▸ Anycast ▸ Disable BGP. The Enabled box on each neighbor's row stays.
+
+## [v124] - 2026-10-18 — BGP on/off switch in Configure ▸ Anycast
+
+### Added
+- **An Enabled box in Configure ▸ Anycast** turns BGP off and on for this node, with a confirmation when switching it off. It does what Disable / Enable BGP under Operate ▸ Anycast does: every setting is kept, no session is started and no anycast address is announced. It is greyed out until a local AS number is set.
+- **An Enabled box on each neighbor's row** shuts that one session down and back up (a confirmation when switching it off), the same as Disable / Enable in Operate ▸ Anycast. The neighbor and its settings stay; editing a neighbor does not change whether it is enabled.
+
+## [v123] - 2026-10-18 — Gateways are listed alphabetically
+
+### Changed
+- **The gateways under Topology are listed in alphabetical order** (by the name shown, numbers in natural order so 10.0.0.2 comes before 10.0.0.10), instead of in the order they were created. The first one in the list is the one opened when none was chosen.
+
+## [v122] - 2026-10-18 — Server statistics of a gateway this node does not serve
+
+### Fixed
+- **Statistics for a server on a gateway this node is not part of said "Nothing recorded for this server yet"**: a node probes only the servers of the gateways it serves, so it has no history of the others. When the node you are looking at has none, it now asks the other nodes that do and shows their history added together, with the line "Counted on N other node(s) (this node does not probe it)" above the graphs (`--server-stats` too). The history a node has itself is shown as before. The cluster call that fetches the buckets now answers for a server or a domain as well as a gateway; a node on an older version does not answer it and is counted as not answering.
+
+## [v121] - 2026-10-18 — The sign-in lockout and minimum password length are replicated
+
+### Changed
+- **Configure ▸ Web: failed logins before lockout, the window they count in, how long the lockout lasts, and the minimum password length are shared settings**: set on any node, the primary replicates them, so the same rules hold on every node (like the login groups). While all four are the defaults (3 in 1 minute, locked for 15 minutes, 8 characters) nothing is replicated and the document's hash is unchanged, which keeps a rolling update in agreement; any other value is replicated. A node that receives none, from an older primary, keeps its own. Update every node before changing them.
+
+## [v120] - 2026-10-18 — The login groups are replicated in a cluster
+
+### Changed
+- **Configure ▸ Web ▸ Login groups (`web.group`) is a shared setting**: set on any node, the primary replicates it, so the same people can sign in on every node. A cluster whose login group is still the single `ntpdir` that every earlier version had shares nothing (the replicated document, and so its hash, is unchanged, which keeps a rolling update in agreement); any other value is replicated. A node that receives no value, from an older primary, keeps its own. Update every node before changing it: a node on an older version ignores the setting.
+
+## [v119] - 2026-10-18 — AD sign-in in a container: the ID range is set
+
+### Added
+- **In an unprivileged container (LXC, Proxmox) Active Directory users could not sign in, because sssd made their IDs from 200000 up and the container only has IDs up to 65535**: at start, when `/proc/self/uid_map` shows such a container and an AD domain in `sssd.conf` has no `ldap_idmap_range_*` and does not turn ID mapping off, the daemon adds `ldap_idmap_range_min = 10000`, `ldap_idmap_range_max = 60000` and `ldap_idmap_range_size = 50000` to that domain's section, stops sssd, deletes its cache (`/var/lib/sss/db`, `/var/lib/sss/mc`: the IDs it made are kept there) and starts it again. This is done together with the group-policy mapping, with one backup of the file (`sssd.conf.ntpdir.bak`) and one restart. A range you set yourself is left alone; a container with fewer than 60000 IDs, or a domain defined only in a `conf.d` snippet, only gets a warning in the log. A host or virtual machine is not touched. The README (*Signing in with Active Directory*) and the help explain it; use the same range on every node.
+
+## [v118] - 2026-10-18 — Help: signing in with Active Directory
+
+### Changed
+- **Help (Users)**: a new *Active Directory* part with the steps (join, directory group `ntpdir-users`, Login groups, group policy mapping, checks). No other change.
+
+## [v117] - 2026-10-18 — README: signing in with Active Directory
+
+### Changed
+- **README**: a new section, *Signing in with Active Directory*, covers joining the node with sssd, the sssd settings, the directory group (`ntpdir-users`) next to the local one in **Login groups**, the group policy mapping the daemon adds, the checks to run from the shell and what the log messages mean. No code change.
+
+## [v116] - 2026-10-18 — Several login groups: a local one and a directory one
+
+### Changed
+- **Login group takes a list**: `web.group` (Configure ▸ Web ▸ Login groups) may name several groups separated by commas, and a member of any of them may sign in. The default for a new configuration is `ntpdir,ntpdir-users`: `ntpdir` is the local group the Users page manages and `ntpdir-users` is meant for a group in Active Directory, so the directory group cannot be hidden by a local group of the same name. A group that does not exist on a node is skipped (the log warns only when none exists). The Users page, the command line and the installer keep working with the first login group that is local. An existing configuration is not changed.
+
+## [v115] - 2026-10-18 — sssd.conf is fixed at start; directory accounts can be added to the group
+
+### Added
+- **The daemon now adds the mapping to sssd.conf itself**: at start (and whenever the web listener is set up again) it checks sssd.conf and, when an AD domain enforces group policy and has no mapping for the PAM service, adds `ad_gpo_map_interactive = +ntpdir` to that domain's section (an existing line gets `, +ntpdir` appended), keeps the old file as `sssd.conf.ntpdir.bak` (once) and runs `systemctl try-restart sssd`. A node where it is already mapped, or has no sssd, or has a domain that is not AD, is left alone; a domain defined only in a `conf.d` snippet is not edited and the log says what to add. The file keeps its owner and mode.
+- **Users: an account from a directory can be added to the group**: "Add an existing account" accepts Active Directory / LDAP names (upper case, dots, `@`, `DOMAIN\\name`) and adds them to the local ntpdir group with `gpasswd -a`, which works where `usermod` refused them; the other nodes do the same. Such an account's password and expiry are kept in the directory, so those buttons refuse it with a message; Remove from the group works as for any account.
+
+## [v114] - 2026-10-18 — Active Directory logins through sssd: the daemon now says what is wrong
+
+### Added
+- **A GUI login of an Active Directory user (Samba AD, Windows AD, `realm join`) failed with "pam: Permission denied" although ssh worked**: sssd enforces the domain's group policy and refuses a PAM service it has no logon right for, which includes `ntpdir`. The log now tells the two PAM steps apart (`authentication failed: pam account check (password accepted): ...` means the password was right and the account was refused), and when sssd.conf shows an AD domain with enforced group policy and no mapping for the service, the daemon says so at start and on the failed login, with the line to add: `ad_gpo_map_interactive = +ntpdir` in the domain's section, then restart sssd. The README and the help (Settings, PAM service) have the same advice. Nothing in sssd.conf is changed by the daemon.
+
+## [v113] - 2026-10-18 — AND and OR in the Log filter
+
+### Changed
+- **Monitor ▸ Log: the filter takes AND and OR**, like the Statistics filters: `error OR warn` shows lines with either, `dns AND timeout OR ntp` is (dns and timeout) or ntp, AND binding first. Words with no operator are still all required, in any order, and any case, so existing filters give the same lines.
+
+## [v112] - 2026-10-18 — A wider filter box with AND and OR
+
+### Changed
+- **The filter boxes of Top Clients and Top Servers are twice as wide, and take AND and OR**: `ubuntu AND ntp` keeps what contains both, `ubuntu OR debian` what contains either; AND binds first, so `a AND b OR c` is (a and b) or c. The words may be in any case. A client matches a word by its address, its name or any of its host names, and each word may be found in a different one of them. Text with no operator is looked for as typed, as before. The longest text is now 200 characters.
+
+## [v111] - 2026-10-18 — Ctrl-click several clients or servers
+
+### Added
+- **Statistics: Ctrl-click (Cmd-click on a Mac) adds more rows to a picked client or server**: pick several clients and the list beside them shows what any of them asked for (counts added together); pick several servers and it shows who asked for any of them. Ctrl-click a picked row again to take it off; a plain click picks that row alone, and clicking the only picked row clears it. The picks travel as a comma-separated list in the existing `client` / `server` parameters (up to 100), so the CLI takes the same.
+
+## [v110] - 2026-10-18 — The whole list for a picked server or client
+
+### Changed
+- **Picking a server in Top Servers (or a client in Top Clients) lists up to 5000 entries, not 500.** The pairs are on disk since v109, so the lists can be that long; the ordinary top lists stay at 500. In a cluster each node sends up to 5000 and the merged list keeps 5000.
+- Names (reverse DNS) are looked up for the first 500 rows only, so a long list does not queue lookups for minutes; the rest show their names once they are known from the lookups of other lists.
+
+## [v109] - 2026-10-18 — Who asked for what is kept on disk, all of it
+
+### Changed
+- **Picking a domain in Top Domains (or a client in Top Clients) now lists every client (or domain), not the first few and "(others)".** The (client, domain) pairs behind it are no longer a capped table in memory: each 10-minute unit is written to its own file, `<state-dir>/pairs/p<unit>.gz` (gzip, a string table and varint rows, private to root), and read back only when you pick something. The 30 days of the statistics are kept; older files are deleted as new ones are written. A unit stops taking new pairs after 400,000 (a flood of random names), and what it could not keep still shows as "(others)". Memory for the statistics drops by what the pair tables took, and the open unit's pairs are saved with the statistics every five minutes and at stop.
+- **Clear removes the pair files too**, with the rest of the statistics.
+- The pairs the earlier versions had saved in `stats.json.gz` are moved into the new files at the first start; from then on the file does not hold them. Pairs already dropped by the old caps are not recoverable: the lists fill in properly from this version on.
+- Replaces the larger pair caps of v456.
+
+### Notes
+- Disk use grows with the number of distinct pairs: roughly 5 bytes per pair per 10-minute unit before compression, so a busy server can use hundreds of MB over 30 days (an estimate, not measured).
+
+## [v108] - 2026-10-18 — Gateways in the Node menu of Host
+
+### Added
+- **Monitor ▸ Host offers the gateways in the Node menu too**, as Statistics does: the nodes that serve the gateway, added together (`gw` on `/api/clusterhost`).
+
+## [v107] - 2026-10-18 — Gateway entries in the Node menu
+
+### Changed
+- **A gateway in the Node menu of Statistics reads "Gateway ptx.int (4)"**, the number of nodes in brackets as Cluster has it, not "(4 nodes)".
+
+## [v106] - 2026-10-18 — Packaging only
+
+### Changed
+- No code change from the previous version. The source archive no longer carries a compiled program by mistake.
+
+## [v105] - 2026-10-18 — Node menu order on Statistics
+
+### Changed
+- **The Node menu on Statistics lists the nodes first, then the gateways, then Cluster last.**
+
+## [v104] - 2026-10-18 — Who asked for a domain: more of them listed
+
+### Changed
+- **Picking a domain in Top Domains (or a client in Top Clients) showed most of the answer as "(others)".** Each 10-minute slot kept only the first 500 client / domain pairs, so on a busy server everything after them was lumped together. A short-range slot (up to the last day) now keeps up to 3000 pairs and an hour slot (longer ranges) 1000; the failure kinds scale the same way. Memory for the statistics grows with it (up to roughly 100 MB when every slot is full). A pair beyond the cap is still counted under "(others)", so on a very busy server some of it can remain.
+
+## [v103] - 2026-10-18 — Gateways in the Node menu of Statistics
+
+### Added
+- **Monitor ▸ Statistics: the Node menu lists each gateway after Cluster** ("Gateway ptx.int (2 nodes)"). It shows the statistics of the nodes that serve that gateway (every node except those removed from it) added together, the way Cluster adds all of them. The numbers are kept per node, not per gateway, so a node that serves several gateways counts all of its traffic in each. Clear is not offered for a gateway (pick the node or Cluster). `gw` on `/api/clusterstats`. `TestGatewayNodesSkipsTheRemovedOnes`.
+
+## [v102] - 2026-10-18 — Statistics page error fixed
+
+### Fixed
+- **Statistics showed "partialLast is not defined"** (v101): the helper that leaves the unfinished last step out of the charts was declared inside one function and used by another. It is now declared once where both can see it.
+
+## [v101] - 2026-10-18 — No false drop at the end of the charts
+
+### Fixed
+- **The time charts (Statistics, and the per-gateway and per-server charts) no longer end in a drop to nearly nothing.** The last point was the step still in progress, holding only the part of it that has passed. It is now left out until it is complete.
+
+## [v100] - 2026-10-18 — Controller mark on a node whose gateway is drawn from it
+
+### Fixed
+- **The topology drawing could leave the controller dot off the only node of a gateway.** For a gateway the signed-in node does not serve, the picture is taken from a node that does, and that node's own entry was matched to nodes by address only; when the address on the gateway subnet is not one the signed-in node knows for it, no node got the dot even though Monitor ▸ Gateways showed it as the controller. The serving node's own entry is now flagged (`via_local`) and matched to that node directly. `TestTakeFromClearsLocalOnMembers` checks the flag.
+
+## [v99] - 2026-10-18 — The log filters stay when the node changes
+
+### Changed
+- **Monitor ▸ Log keeps its filter words, level, time range, number of lines and the Live box when another node is picked** (or another page and back), and applies them to the new node's log. They were reset to the defaults each time. They are kept until the page is reloaded.
+
+## [v98] - 2026-10-18 — The Age column is gone
+
+### Changed
+- **Monitor ▸ Gateways and the CLI tables no longer have an Age column** (the time since the last packet at the instant of the refresh, a random point inside the hello gap). `Hello avg / max` replaces it, and its maximum now counts a silence still in progress, so a node that has gone quiet shows a growing maximum at once instead of only when its next hello arrives. `--show-neighbors` prints the same column. `age_ms` stays in the API.
+
+## [v97] - 2026-10-18 — Live hello timing
+
+### Added
+- **Monitor ▸ Gateways shows what each peer's hellos really do**: `Hello avg / max (ms)` is the average gap between the peer's hellos and the largest gap in the last 30 to 60 seconds, measured on this node from the hellos that arrive (the configured interval is in the gateway's edit form). `--show-gateways` prints it as `HELLO avg/max`; the gateway snapshot has `hello_avg_ms` and `hello_max_ms`. A maximum near the hold time means hellos are being lost or delayed. `TestHelloGapStats`.
+
+### Notes
+- It is measured by this node, so each node can show different numbers for the same peer; a gap seen here may be a lost frame or a stall on either side.
+
+## [v96] - 2026-10-18 — Faster gateway timers; hello can no longer exceed hold
+
+### Changed
+- **New gateways start with hello 150 ms and hold 750 ms** (were 333 and 999): a lost hello or two no longer matters (hold is five hellos) and a dead node is noticed in under a second. Gateways that already exist keep the values they have; change them under the gateway's edit dialog or with the CLI.
+- **`hello_ms` larger than `hold_ms` is refused** (in the form, the CLI and a loaded configuration), because the neighbour would be declared gone between two hellos. `TestHelloNotLargerThanHold`.
+
+### Notes
+- A configuration file that already has hello above hold is now refused when loaded; fix it by lowering hello or raising hold.
+
+## [v95] - 2026-10-18 — Menu order
+
+### Changed
+- The menu groups are now in the order Topology, Configure, Operate, Monitor (Monitor was second).
+
+## [v94] - 2026-10-18 — A node no longer probes the servers of gateways it was removed from
+
+### Fixed
+- **A node removed from a gateway (`excluded_nodes`) still probed that gateway's NTP servers** and used them as time sources for its own chrony: a node serving only `phx` logged `europe.pool.ntp.org` and `in.pool.ntp.org` going up and down, and its chrony sources listed them. The pools now start only for the gateways the node has not been removed from. A node removed from every gateway has no pool at all, and so no NTP server for its own chrony either (its chrony is given no sources, as for a topology with no server at all, until the node is put back on a gateway). `TestPoolsSkipExcludedGateways`.
+
+## [v92] - 2026-10-17 — Months in two even rows
+
+### Changed
+- The `Only in` months are laid out as two rows of six (Jan to Jun, Jul to Dec) instead of wrapping wherever the width ran out.
+
+## [v91] - 2026-10-17 — Scheduler column headings
+
+### Changed
+- The scheduler table's headings read `Next run` / `Last run` with `(this node)` on a second line, instead of wrapping in the middle of the phrase.
+
+## [v90] - 2026-10-17 — Only in these months
+
+### Added
+- **Daily, weekly and monthly tasks can be limited to months of the year** (`months`, 1 to 12; the form's `Only in` row has a box for each month, none ticked meaning every month). A task for the 2nd or 3rd Saturday or Sunday, 01:00 to 06:00, April to October is now one task. All twelve ticked is saved as none; the field is dropped from other frequencies; the description ends with e.g. `April to October`. `TestMonthsLimitATask`.
+
+### Notes
+- A node on an older version ignores `months` and would run the task in every month until it is upgraded.
+- Not seen in a real browser; not tried on a live multi-node cluster.
+
+## [v89] - 2026-10-17 — The online update is for one node when auto-update is on
+
+### Changed
+- **With auto-update on, the `Update from online` task is for one node of a cluster.** The task fetches the newest release and stages it on the node it runs on; with auto-update on, every other node then updates itself from that. On every node, each would fetch the release itself and queue its own update outside the cluster's one-at-a-time order. So in the task form, when the action is `Update from online`, auto-update is on and the cluster has more than one node, `Runs on` offers only one node at a time (this node is the default) and no `Every node`. The server refuses the task for every node (or for several) in the same situation, with a message that says what to do. A cluster of one node, or auto-update off, is not asked anything.
+- The scheduler's status says whether auto-update is on (`auto_update`), which is how the form knows. `TestOnlineUpdateNeedsOneNode`; the help says it.
+
+### Notes
+- Nothing is checked for a task saved before this version, or when auto-update is turned on after the task was made: it keeps its nodes until it is edited.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+- One `-race` run of the dnsdir tests failed in a test whose name I did not capture; the next run passed. The tests that look for a free port and bind it later (`freeAddr`) are known to lose the port now and then; not changed here.
+
+### Not verified
+- The task form in a browser, and the refusal on a real cluster with auto-update on: the rule is covered as a function (`onlineUpdateNeedsOneNode`), not through two clustered nodes.
+
+## [v88] - 2026-10-17 — Clearing a To time now clears it
+
+### Fixed
+- **Removing the To time of a task and saving kept the old window.** The task form sent back the window the server had worked out from the To time (4 hours for 09:00 to 13:00, say), so the task came back with a To time again and it had to be removed a second time. A task that has a To time now sends no window when To is cleared.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race` for the web, session, scheduler and help tests, `node --check` on `app.js`. The full suite was not run again: only `app.js` changed since v87, which passed it.
+
+### Not verified
+- The fix itself in a browser: the form is JavaScript with no test; checked by reading the code path (the stored window is dropped when the task has a To time).
+
+## [v87] - 2026-10-17 — One of those days, chosen per node
+
+### Added
+- **A monthly or yearly task that names several days (the 1st or 2nd Friday or Saturday) can run on one of them, a different one on each node.** In the task form, `run on` has a third choice, `one of those days, chosen per node` (`"pick_day": true` in the settings). Each node takes one matching day of the month, worked out from the node, the task and the month, so a node keeps its day all month and the nodes do not all act on the same day. `At` and `To` still set the time of day. Before, the choices were the first of those days (every node on the same day) or each of them (every node on every one).
+- The task list says it as `one day per node out of the 1st, 2nd, 3rd or 4th Sunday or Saturdays`. The next-run time shown is the node's own. `TestPickDayPerNode`; help and README say it.
+
+### Notes
+- The day is picked by a hash, not handed out in turn, so with few nodes two can land on the same day. Nodes on the same day run it at the same time unless `To` spreads them.
+- A cluster of mixed versions: a node older than v87 does not know `pick_day` and runs the task on the first of the days.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+- One run of the `CGO_ENABLED=0` tests in dnsdir failed in `TestRegisterHostNameSigned` ("bind: address already in use"): a test that looks for a free port and binds it afterwards, which can lose the port to another test. It passed on the next run. Not changed here.
+
+### Not verified
+- The task form was not looked at in a browser, and the day choice was not seen across a real cluster. The mixed-version behaviour above is from reading the code, not tried.
+
+## [v86] - 2026-10-17 — Version bump to test the page reload
+
+### Changed
+- Nothing but the version number, so an open page loaded from v85 can be seen reloading itself after the upgrade.
+
+### Verified
+- `go build`, `go vet`, gofmt, and the web tests (`go test -race -run 'Web|Security|Session' ./...`). The full suite was not run again: only `VERSION` and this file changed since v85, which passed it.
+
+### Not verified
+- The reload in a browser.
+
+## [v85] - 2026-10-17 — The web page reloads itself after an upgrade
+
+### Added
+- **An open web page reloads itself after an upgrade.** The daemon puts its version into `app.js` when it serves it. The page asks the daemon for its session (the same call it makes when it loads) every 15 seconds while the tab is visible, and again after a login; when the version differs from the one the page was loaded with, it reloads. It waits while a dialog is open, a text field or list has the keyboard, or a Configure page is open (it may hold changes not yet saved), and tries again every 3 seconds. While the daemon restarts the check simply fails and tries again later.
+- `TestSecurityHeadersAndStatic` also checks that `app.js` carries the daemon's version.
+
+### Not verified
+- The reload itself was not seen in a browser, and not across a real upgrade; only that the served file carries the version and the script parses. A page open on a version older than this one still needs one manual refresh to get this behaviour.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js`.
+
+## [v84] - 2026-10-17 — Local time box also changes next run and last run
+
+### Changed
+- The `Local time` box on the scheduler's History header now switches **every** time on the page: the next run and last run of the task list as well as the history. Before it changed the history only. Unticked, all of them are UTC.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The page was not looked at in a browser.
+
+## [v83] - 2026-10-17 — One-time tasks
+
+### Added
+- **Once** in the scheduler's How often list: a task that runs one time, on a date you pick (UTC) at the time of day you set, with the same optional To window as the other frequencies. It is shown in the task list as `once on 2026-11-14 at 03:30` (or `between 03:30 and 05:00 UTC`) and does not come round again. dnsdir has had it for a long time; the code is the same.
+- `TestOnceRunsOnlyOnItsDate`; help and README name it.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The task form was not looked at in a browser, and a one-time task was not run live on a cluster.
+- A cluster of mixed versions: a node older than v83 does not know `once` (its check refuses the frequency), so update every node before adding a one-time task. What an old node does with the task was not tried.
+
+## [v82] - 2026-10-17 — The offset window is gone: At and To are the window
+
+### Changed
+- **The task form has no Offset window.** `At` is when the task is due and `To` (optional) ends the window: each node runs it at a time of its own between the two, the same as before. Without `To` every node runs it at `At`. The offset only said the same thing a different way.
+- **An hourly task can have a To minute** (`At minute` and `To minute`, both minutes past the hour). The window is at most 59 minutes, and the next hour when To is earlier than At; To equal to At is refused. Shown in the task list as `every hour between minute 10 and minute 40`.
+- **Tasks saved by an older version keep working.** The server still reads `window_sec`. The form shows an offset window of whole minutes (under a day, under an hour for an hourly task) as its To time; one that does not fit (several days, or odd seconds) is kept as it was until the task gets a To time.
+- Help and README say it in terms of At and To.
+
+### Added
+- `TestHourlyToMinute`.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The task form was not looked at in a browser; the offset-to-To conversion in the form is JavaScript with no test.
+
+## [v81] - 2026-10-17 — The online update task names the release once
+
+### Fixed
+- The history line of the **Update from online** task said the release twice (`v80 (v80) staged; ...`, and `newest release v80 (v80)` when up to date). It now says `v80 staged; this node is queued to update (running v78)`. The version in brackets is shown only when it differs from the tag. Added `TestReleaseNameSaysItOnce`.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64.
+
+### Not verified
+- A real online update was not run (no network access to GitHub from the build sandbox); the message is covered by the unit test only.
+
+## [v80] - 2026-10-17 — Shorter task names in the scheduler's "Does" list
+
+### Changed
+- The notes in brackets are gone from the task names in the **Does** list (`Update from online`, `Reboot this node`). The help now says what they said: a restart or reboot waits until it is safe for the node to go down, and the online update installs the newest release only when it is newer than the one running.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `help.js`.
+
+### Not verified
+- The page was not looked at in a browser.
+
+## [v79] - 2026-10-17 — Scheduler page: UTC times, Local time box, cleaner forms
+
+### Changed
+- **The scheduler page shows times in UTC**, the zone the schedules are set in (the task times were UTC but the run times followed the browser, which was confusing). The next-run and last-run times of the task list are always UTC, and each says `UTC`.
+- **A `Local time` box on the right of the History header** shows the history's times in this browser's time zone instead. The choice is kept in this browser.
+- **Runs on** lists the node names, or `every node`; the `(this one)` after this node's name is gone.
+- **The task form hides Offset window** while a To time is filled in (the window is then At to To, so the offset was not used; before, the field was greyed out).
+- **Three hints are gone** (under the task list, under the offset window, under the shell command); the help now says them: the right-click menu, UTC times and the Local time box, how the window works with a To time and a node that was off, and how a shell command runs.
+- A little more space between the weekday boxes and the "of the month, run on" line in the task form.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64; `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The page was not looked at in a browser.
+- `--schedule` and `--schedule-history` on the command line still print the machine's local time; not changed.
+
+## [v78] - 2026-10-16 — Gateway messages cannot be replayed; keys; crash safety net; fuzz targets
+
+### Changed
+- **Protocol version 3: a signed timestamp in every gateway message.** The message grew from 79 to 87 bytes. The 8-byte Unix-millisecond time sits under the HMAC. A receiver drops a message more than 30 seconds off its own clock, and a message from a sender that is not newer than the last one it took from that sender, so a recorded message can no longer be replayed to win an election or move the virtual address. The table of senders is bounded (4096). A skewed clock is logged once a minute per sender.
+- **Version 2 nodes and version 3 nodes do not hear each other.** During a rolling update the two halves each see no peer and may both take the controller role until all nodes are updated. Update all nodes of a gateway within a short window.
+- **A gateway you add (GUI, `--canvas-add`, `--configure`) gets a random 128-bit key** instead of `ntpdir`. Existing gateways and the first-start default keep their key, so nothing running changes key.
+- A well-known or short (under 12 characters) key is logged at start-up, flagged in the GUI beside the key field, and flagged in the CLI canvas listing. It is a warning, not a refusal.
+
+### Added
+- **Crash safety net.** A panic in a gateway packet, a DNS/NTP query handler, a probe goroutine or a raw responder is logged with its stack (at most once a second) and the daemon carries on, instead of the process dying.
+- **Fuzz targets** in `fuzz_test.go` (parsers, the gateway packet and frame handling), with a two-second slow-input check. Run with `go test -fuzz=<name>`.
+- Tests for replay, stale and future stamps, the sender table bound, weak keys, random keys and panic containment.
+- README section "The gateway key, clocks and replay" and a rewritten help entry for the shared key.
+
+### Fixed
+- Anyone on the network who knew the key (or the default one) could replay captured gateway messages. See above.
+
+### Wire change
+- **Golden vectors are new**: `testdata/testdata_v4.hex` and `testdata_v6.hex` are protocol 3 (stamp 2026-10-16T12:00:00Z). The protocol 2 vectors are kept as `testdata_proto2_v4.hex` and `testdata_proto2_v6.hex` and are tested as refused.
+
+### Verified
+- gofmt clean, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, cross-builds for linux/amd64, arm64, arm, 386, riscv64.
+
+### Not verified
+- No live multi-node election or rolling-update test (no `ip`/network namespaces in the build sandbox).
+- Cluster key push, PAM login, the installer and the GUI were not run live; the GUI change was not looked at in a browser.
+- Non-amd64 cross-builds use the PAM stub.
+
+## [v77] - 2026-10-16 — Memory, CPU and disk tuning
+
+### Changed
+- **One `chronyc` run per look instead of two.** The daemon reads chrony's state every two seconds, which was two forks and execs (`tracking`, then `sources`). It is now one run, `chronyc -c -m tracking "sources -n"`: the sources stay numeric as before and tracking still names the reference. If the combined run fails, the two are asked for one at a time as before, so a chrony that answers one and not the other reads as it did.
+- **Garbage collector soft memory limit.** At start-up the daemon sets a soft limit of 75% of the cgroup memory limit or, without one, of the machine's memory (`memlimit.go`; a `GOMEMLIMIT` in the environment wins). Garbage on a big heap (30 days of statistics) counted as memory in use and could make the memory guard drop statistics that were not a problem. It is soft: the collector never takes more than half the CPU to keep to it. Logged at start-up.
+- **Cheaper statistics saves.** `stats.json.gz` is compressed at gzip's fastest level, and the save made by the five-minute timer no longer fsyncs before the rename (the saves before a stop, a restart and an update still do). The file format is unchanged and old files still load.
+- **`/proc/cpuinfo` is read once** for the core count instead of at every host sample (every 10 seconds).
+
+### Added
+- `TestSoftMemLimit`, and a fallback case in the chrony state test.
 
 ### Not changed
-- A key made in v4 to v6 has only its hash, so it cannot be shown. The row shows a dash; Replace key makes a new one.
+- ntpdir has no answer cache (chrony answers clients), so the cache changes made to its sibling dnsdir do not apply.
 
 ### Verified
-- Go: the key check keeps the key and works out the hash; a key set through `edit_config` is in the file and in no `get_config` answer; the read-only and secret-hiding tests pass; `go test -race ./...`, `go vet`, `gofmt`, `CGO_ENABLED=0`, the five cross-builds.
-- Chromium against a mocked API: Show opens the stored key and command; a hash-only row shows a dash; Replace key shows a new key and the save sends the new key for that row.
+- `gofmt -l .` empty, `go build`, `go vet ./...`, `go test -race -count=1 ./...` and `CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` all pass (native amd64 with PAM headers).
+- Cross-compiled for linux/amd64, arm64, arm, 386 and riscv64.
+- Live run against a real private `chronyd -x` (chrony 4.5) with two stub NTP servers on `lo`: the sources were written and chrony took both; the combined call returned tracking and the sources together; killing one stub removed it from `chronyc sources` and the log said "sources now 127.0.0.2"; `--show-ntp` showed chrony synchronised and the IN CHRONY column; `stats.json.gz` was written.
 
 ### Not verified
-- Nothing on a real daemon or a cluster: that a replica receives the key was not run (the shared settings are copied as a whole, which is why it should).
+- No load measurement, so the gain from fewer forks, the memory limit and the faster saves is not measured.
+- Serving clients through chrony was not tested (the private chronyd had its NTP port off). Chrony versions before 4.0 were not tried; `-m` has been in chronyc for a long time but was only run against 4.5.
+- The cluster, web GUI, PAM, installer and BGP paths were not touched and not re-run live. Cross-compiled targets other than amd64 build the PAM stub.
 
-## [v6] - 2026-11-01 — MCP on its own listener on the gateway addresses (443); the GUI is not served there
-
-### Changed
-- **`/mcp` is served by a listener of its own on every gateway address** (the VIPs, the further addresses and the anycast addresses), port **443** by default, and that listener serves `/mcp` and nothing else (anything else is 404). Each is bound with `IP_FREEBIND`, so it exists before the address does and survives the address moving with the election. The set follows the configuration within 3 s; a gateway paused on this node, or one this node does not serve, has none. New file `mcplisten.go`.
-- **The GUI refuses a connection that arrives on a gateway address** (`noGatewayListener`). It keeps its port (22161) on the node's own addresses. It is checked per connection against the running configuration, so no per-node address has to be set and a VIP that moves needs no rebind. An explicit `web.listen` of `host:port` still works as before. `/metrics` and the rest of the GUI's routes are therefore no longer reachable on a VIP: scrape and sign in on the node's address.
-- **A node is fit to carry the gateways while the MCP listeners serve** (`mcpServing`), not while the GUI does: a stopped GUI no longer withdraws anycast addresses, and a failed bind or missing certificate does. The GUI also starts without PAM concerns for MCP.
-- **Monitoring ▸ MCP** shows and uses `https://VIP/mcp` (the port only when it is not 443), in the page, the key window and the Claude Code command. Help, README, QUICKSTART, the usage text and the installer's firewall hints follow (tcp/443).
+## [v76] - 2026-10-16 — Scheduler: first day or each day
 
 ### Added
-- **`settings.mcp_port`** (shared, empty is 443), as **Port on the gateway addresses** on Monitoring ▸ MCP. It must be 1–65535 and not the GUI's port.
-- Tests: the gateway address set, the port setting, the GUI listener refusing a gateway address, and a real listener per address serving only `/mcp`, following a pause.
+- A monthly or yearly task that names several occurrences or weekdays has a new choice, **run on: first of those days only / each of those days**. The first is the v75 behaviour (once a month); *each* runs on every matching day, so *the 2nd or 3rd Saturday or Sunday* can run on all four. The list describes the task as "the first of the…" or "each of the…". Saved as `"each_day": true`.
 
-### Verified
-- `go test -race ./...`, `go vet`, `gofmt`, `CGO_ENABLED=0 go vet` and `go test`, the five cross-builds, `node --check`.
-- A listener bound to the non-local address 192.0.2.55 (IP_FREEBIND) in a throwaway test; a second bind to it fails as in use.
-- Chromium against a mocked API: the MCP page shows `https://192.168.5.24/mcp`, the port field saves `mcp_port` 8443.
-
-### Not verified
-- IPv6 (no IPv6 in the sandbox: the v6 bind returned "address family not supported"). Nothing on a real daemon with PAM, a real VIP, a failover, or a client reaching `/mcp` on a VIP. Binding 443 as the non-root user is not an issue (the daemon runs as root) but another service already on 443 of a VIP would make the node report itself down.
-
-## [v5] - 2026-11-01 — The 37 stale tests removed
-
-### Removed
-- **37 Go tests that already failed in v3 and v4.** They tested pages and routes that are gone (`/api/ntp`, `/api/qstats`, the NTP alert rules, the chrony and upstream metrics in the example files, `get_ntp`, AnyName) or the scheduler's removed `stats_clear` action (17 scheduler tests), plus a few whose expectations no longer match: the two-gateway anycast pause, the history summary wording, `TestMCPGatewayDevice` (its test config has no gateway to attach to; `TestGatewayDeviceEditsAndTarget` still covers device attach/move/remove and `gateway:N`). Imports left unused were removed.
+## [v75] - 2026-10-16 — Scheduler: once a month
 
 ### Fixed
-- `TestNewGatewayGetsRandomKey` expected the old default key `"netdir"`; the default is `"ntpdir"`, as CLAUDE.md says. The test now says so.
+- A monthly or yearly task set to several occurrences and weekdays, such as *the 2nd or 3rd Saturday or Sunday*, ran on every one of those days (four times a month). It now runs **once** in the month, on the first of the days that match; the *At* to *To* window still spreads the nodes. A single occurrence and weekday behaves as before.
 
-### Verified
-- `go test -race -count=1 ./...` passes, `go vet`, `gofmt -l` empty, `CGO_ENABLED=0 go vet` and `go test`, and the five cross-builds.
-
-### Not verified
-- Nothing in this version changes the program, so no daemon or browser run. The removed tests' subjects (the anycast two-gateway pause, the history summary) are no longer covered by a test.
-
-## [v4] - 2026-11-01 — New ports, gateways from 161, devices stay on their gateways, Show buttons, the MCP key
-
-### Added
-- **Show / Hide button beside every password, token and secret box** (device logins, SSO and LDAP secrets, BGP/OSPF keys, backup and Users passwords), so a saved value can be read. The sign-in box has none. One observer in `app.js` adds it to every `input[type=password]`, including ones drawn later.
-- **A new gateway made on Topology gets a random gateway key** (32 hex characters) instead of the well-known default, as the daemon's own add already did.
-- **The first gateway also makes one MCP key**, `default`, access `ro`, shown once in the usual key window. Only when there are no MCP keys yet. The key is still kept as a hash, so it can be seen only then; Show cannot read it back.
+## [v74] - 2026-10-16 — Scheduler: one minute apart
 
 ### Changed
-- **Ports**: the web GUI listens on **22161** (was 12380), the cluster on **22162** (was 12381). Defaults in the daemon, the example config, `install.sh` (and its firewall hints), README, QUICKSTART, the help panels and the tests. The gateway protocol stays on UDP 12382: it is protocol identity. An existing config that names a port keeps it.
-- **Gateways are numbered from 161** (`firstGroupID`; was 100), in the daemon, `--canvas-add`, `--configure` and the Topology form.
-- **Monitoring ▸ MCP**: the address under the keys, and the one in the key window and its Claude Code command, is now the first gateway's shared (VIP) address on the GUI port, e.g. `https://192.168.5.24:22161/mcp`, not the node the page was opened on. With no gateway it falls back to the node's address.
-- **Configure ▸ Devices**: the Devices table is 50% wider (42 to 63 rem), and its column is **Login**, like the **Logins** card.
+- The gap used to stagger jobs is now 1 minute instead of 30 seconds: between the nodes of *Run now on… ▸ all nodes* (a reboot needs longer than 30 seconds), and between jobs whose windows overlap on a node (a smaller gap when a window is too small to fit them).
+
+## [v73] - 2026-10-16 — Scheduler: run now on all nodes
+
+### Changed
+- The right-click entry *Run now on this node* is now a sub-menu, **Run now on… ▸ this node / all nodes**. *All nodes* asks each node the task is for to run it now, one after another 30 seconds apart in node-ID order; each node queues it behind whatever it is running. A node that already has the task running or waiting says so in the result. The sub-menu works with the mouse and with the arrow keys.
+
+## [v72] - 2026-10-16 — Scheduler: one job at a time
+
+### Changed
+- Only one scheduled job runs at a time on a node. A job that falls due while another is running waits in a queue (kept across a restart, first come, first served) and starts as soon as the previous one has finished, however late that is. The task table shows *waiting for another task*. *Run now* is refused while a job is running. A task whose own previous run is still going or waiting skips its next occurrence, as before. The 30-second staggering of overlapping windows stays; it only makes it less likely that jobs queue behind each other.
+
+## [v71] - 2026-10-16 — Scheduler: no Paste button
+
+### Removed
+- The Paste button next to New task on the Scheduler page. Paste is in the right-click menu (on a task or on the empty table).
+
+## [v70] - 2026-10-16 — Scheduler: no seconds
+
+### Changed
+- The At field of a task takes hours and minutes only (it showed seconds). Tasks saved with seconds keep them.
+
+## [v70] - 2026-10-16 — Scheduler: no seconds, history stays open
+
+### Changed
+- The At field of a task takes hours and minutes only (it showed seconds). Tasks saved with seconds keep them.
 
 ### Fixed
-- **Devices attached to a gateway on Topology disappeared.** Every save from a Configure page (Settings, Devices, Monitoring, …) rebuilt the gateways from its own fields and left out `devices`, so the next change on any of those pages wiped them. The page now carries each gateway's devices through, less any the Devices table no longer lists. Checked against the old `app.js` with the same mock: the old page saved the gateway without `devices`, the new one with `["sw1"]`.
+- An expanded output in the scheduler history closed again after a few seconds, when the page refreshed. It stays open until you close it, and the page no longer redraws when only the clock has moved.
 
-### Verified
-- Linux: `gofmt -l` empty, `go build`, `go vet`, the five cross-builds, `CGO_ENABLED=0 go vet`, `node --check webui/app.js`.
-- `go test -race ./...`: the 37 tests that failed before this change (they still test the removed NTP pages and scheduler action `stats_clear`) fail the same way; nothing new fails, apart from `TestBGPOperateAPIAndStatus` once in a full run (it passes alone, three times). `TestApplyCanvasEdit` followed the new first number.
-- Chromium (light and dark) against a mocked API: the Devices table 1008 px wide, the column named Login, Show/Hide reading a saved password, the MCP address `https://192.168.5.24:22161/mcp`, a save from Configure ▸ Devices keeping the gateway's devices, a new gateway saved with a random key and the `default` MCP key window.
-
-### Not verified
-- No real daemon, PAM sign-in, cluster, device or two-node run (none of this was tried on a live host). The CLI `--canvas-add gateway` does not make an MCP key: it has no way to show it once.
-- The 37 old test failures were not fixed.
-
-## [v3] - 2026-11-01 — Devices on the Topology page, per gateway, with health checks
-
-### Added
-- **Each gateway has its own devices** (`groups[].devices`, by name, shared by the cluster; checked against `settings.devices`). A device may be on several gateways. The target `gateway:N` picks the devices of gateway N (API, MCP, Monitor ▸ Devices).
-- **Device health checks** (`device/health.go`): every node opens a TCP connection to each device's API port every 30 s and asks its facts every 5 minutes (and at once when it comes back). Green answering, amber login or API refused, red unreachable, grey not checked, dashed disabled. On `/api/devices`, in the canvas data, as the alert **Device not answering** (after 3 minutes), and as Monitor ▸ Devices' State column.
-- **Topology**: the gateway's devices as squares under the circle, coloured by health, with a tooltip of model, OS, uptime and last answer; drag to reorder. Right-click a device: Facts, Interfaces, Neighbors, Configuration, Show command, Network tools, Edit, Copy device, Remove from this gateway (also the Delete key), Delete device. Right-click the circle: Add device (one from the inventory, or a new one with a new login), Paste device, Ask its devices ▸ Facts / Interfaces / Neighbors (opens Monitor ▸ Devices with the question asked).
-- CLI `--canvas-add|--canvas-del|--canvas-move device --group N --device NAME`, devices in `--canvas`; MCP tool `set_gateway_device`.
-
-### Verified
-- macOS: `go test -race ./device` (the health monitor against a TLS stub: ok, disabled, unreachable, facts not re-asked early, a wrong password amber with the last facts kept and the password not shown).
-- Linux: the five cross-builds, `go vet`, `go test -c` (the new tests compile: gateway device validation and replication, canvas edits, `gateway:N`, the canvas's device squares, MCP `set_gateway_device`).
-- Built-in browser against a mocked API: the squares and their colours and tooltips, the device menu, Facts in a popup, Copy device on one gateway and Paste device on another (greyed out where it already is), Add device with a new token login, a rename that follows the device onto both gateways, the Delete key taking it off one gateway only, Delete device everywhere, Show command, Ask its devices handing over to Monitor ▸ Devices. No script errors.
-- The help tests' checks in Python: 87 fields covered.
-
-### Not verified
-- No test of the daemon ran (Linux only), and nothing against a real daemon or real devices.
-
-## [v2] - 2026-11-01 — The web GUI converted to netdir
-
-### Added
-- **Monitor ▸ Devices.** The inventory, and a form that asks the devices a target picks (`all`, a name, `tag:…`, `platform:…`) for facts, interfaces, neighbors, the configuration (with Copy and Download) or one show command. Every device answers on its own row or card, with its time or why it failed. Nothing is polled.
-- **Network tools there**: an address box with Ping, Traceroute, Scan, Lookup and Whois, and the same on a device row's right-click. They were on the Statistics page, which is gone; they keep the CLI's `--ping`, `--traceroute`, `--scan`, `--host-lookup` and `--whois` reachable from the GUI.
-- **Configure ▸ Devices.** A table of devices (name, platform, address, port, login, tags, certificate check) and a table of logins (user name, password, token; the secrets are password fields and are not copied by Copy row). Options, `ca_pem` and `disabled`, which have no column, are kept from the saved device of the same name.
-- Help panels `devices` and `config_devices`.
+## [v69] - 2026-10-16 — Scheduler: overlapping tasks are staggered
 
 ### Changed
-- **The Settings pages save the `settings` block** and read it, instead of `ntp`. The Topology page saves the gateways without any NTP block.
-- **Topology**: the gateway circle shows its name and addresses. The NTP server squares are gone, and so are their menus, copy and paste, graphs, the fallback and health-check fields of the gateway form, the AnyName (dnsdir) gateway, the clock and its time-zone picker, and the "used for time" legend. A gateway is red when it runs but this node's MCP and web listener is not serving.
-- **Monitor ▸ Gateways**: the NTP column is now Service.
-- **Cluster tables**: the clock column and the clock-spread line are gone.
-- Monitor ▸ Node and Capture still offer Cluster and the gateways in the Node menu; Statistics did too and is gone.
-- The scheduler's new-task form starts with **backup** instead of clearing the statistics.
-- The help: the topology panel is rewritten; NTP wording is gone from the other panels. `help_test.go` and `help_fields_test.go` follow the new pages.
+- Tasks whose windows overlap no longer start at the same time. On each node the jobs whose windows overlap are placed together: a task with no window keeps its time, the others take their usual hashed place or, if another job starts less than 30 seconds away, the next free place in their window (a smaller gap when a window is very small). The result is the same every time it is worked out, so a run is never moved once calculated, and each node still has its own order.
 
-### Removed
-- Monitor ▸ NTP, Monitor ▸ Statistics, Configure ▸ NTP (five tabs), the self-check card, and their help panels.
-
-### Verified
-- **In the built-in browser (Chromium)** against a mocked API (a script that stands in for the daemon and keeps every config the page saves):
-  - Every page opens with no script error. The one rejection seen comes from the Anycast pages asking the mock for `/api/bgp`; those pages are unchanged.
-  - Topology draws the gateway, its nodes and its anycast pill, and its menus offer only what exists. Editing the gateway saves a config with `settings` and no `ntp` anywhere, keeping the anycast addresses and the node order.
-  - Configure ▸ Devices: changing a device's address saves it, keeps the FortiGate's `options.vdom`, the logins and every other shared setting.
-  - Monitor ▸ Devices: facts (with a failed device's error across its row), interfaces, configuration (Copy, Download), a refused `reload` shown beside the form, and Ping in its popup.
-  - The help panel for Configure ▸ Devices, in light and dark.
-- The checks of `help_test.go` and `help_fields_test.go`, run with a Python copy of their logic: 38 panels, 75 labelled fields, all covered.
-- `gofmt`, the five Linux cross-builds, `go vet` and `go test -c` for Linux; `go test -race ./device` on macOS.
-
-### Not verified
-- **Against a real daemon.** The GUI was only driven against the mock, and none of the daemon's tests ran (no Linux here).
-- `node --check` (no Node.js here). The browser parsing the file, and every page running, stand in for it.
-- The Anycast pages with real BGP and OSPF answers, and the page at phone width.
-
-## [v1] - 2026-11-01 — MCP Network Director: the first release
-
-netdir is forked from the AnyTime NTP Director v201. The VIP election, anycast with BGP and OSPF, LLDP, clustering, the GUI's sign-in, users, history, certificates, updates, backups and the scheduler are carried over. The NTP serving is removed, and an MCP gateway to switches and firewalls is added.
-
-### Added
-- **Managed devices.** The package `source/device/` has a driver interface, the inventory (`settings.devices`) and credentials (`settings.device_credentials`), target selection, and fan-out to 16 devices at a time with a time limit per device. `CheckShow` lets through only read-only commands.
-  - `iosxe`: Cisco Catalyst over RESTCONF.
-  - `fortios`: FortiGate over the REST API with a token.
-- **MCP tools**: `list_devices`, `device_facts`, `device_interfaces`, `device_neighbors`, `device_config` (read-write callers only) and `device_show`.
-- **API**: `GET /api/devices` and `GET /api/devices/query`.
-- **`source/tools/devprobe`**: the same drivers from any machine, against an inventory file.
-- **Gateway health from the web listener** (`health.go`). A node carries a gateway's addresses while its MCP and web listener serves. Anycast addresses are withdrawn, and the canvas turns red, when it does not.
+## [v68] - 2026-10-16 — Scheduler shell environment
 
 ### Changed
-- **Name**: MCP Network Director, `netdir`. Binary, paths (`/var/lib/netdir`, `/run/netdir`), group, PAM service, unit, environment (`NETDIR_*`) and metrics (`netdir_*`) are renamed. The wire protocol, its magic and the default gateway key `"ntpdir"` are protocol identity and are unchanged.
-- **Shared settings.** The `ntp` block is now `settings` and holds only access lists, devices, SNMP, LLDP, alerts, backups and the schedule. A configuration that still has an `ntp` block is refused with a message saying so. This means the old GUI pages, which still write it, cannot drop the settings in silence.
-- **Installer and uninstaller** no longer install or touch chrony.
+- A scheduled shell command gets the usual command directories on its PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, added to whatever the daemon has) and `HOME=/root` when unset, so `ls`, `systemctl` and the like are found as in a root shell. It does not read a login profile (`~/.bashrc`, `/etc/profile`); use full paths or source one in the command. `NTPDIR_TASK` holds the task name.
 
-### Removed
-- chrony management, upstream NTP pools and probing, NTP wire handling, fallback servers, per-gateway pools and health checks, client access and rate limits, NTS and leap seconds, the self-check, the node clock, query statistics and server history, the dnsdir piggyback gateway, and the CLI and API for all of these (`--show-ntp`, `--stats`, `--server-stats`, `/api/ntp`, `/api/qstats`, …).
-- NTP-only tests. Core tests that used NTP only as a probe were rewritten instead of dropped: cluster join and sync, config validation and round trip, MCP secret hiding (now with device credentials), anycast pause and sharing, canvas colours and edits, history, scheduler and capture.
+## [v67] - 2026-10-16 — Scheduler: update, reboot, UTC
+
+### Added
+- Two built-in scheduler actions. **Update from online** looks up the newest release the way the Upgrade page's *Fetch from online* does and, when it is newer than the running version, stages it and queues this node for the normal update (one node at a time, canary, rollback); nothing is downloaded when the node is current. **Reboot this node** restarts the host once no gateway would lose its last serving member.
+
+### Changed
+- Scheduler times are UTC on every node and the per-task time zone field is gone (a zone saved by v65 or v66 is ignored, so such a task now runs at its UTC time).
+
+## [v66] - 2026-10-16 — Scheduler rules, join fix
+
+### Added
+- **Scheduler rules**: a monthly or yearly task can pick several occurrences and several weekdays at once ("the 2nd or 3rd Saturday or Sunday of every month"), and the offset window can be stated as an end time ("between 01:00 and 10:00", running into the next day if the end is not later than the start) instead of "up to N after". Each node still runs once, at a time of its own inside the window. Tasks saved with the single `nth`/`weekday` form are converted when loaded.
+
+### Fixed
+- A node that joins the cluster through a replica is no longer added to every gateway: the primary now excludes it when it learns of the newcomer from the replica's broadcast, as it already did when the node joined the primary directly.
+
+## [v65] - 2026-10-16 — Scheduler
+
+### Added
+- **Operate ▸ Scheduler**: tasks that run on every cluster node or on chosen nodes. Frequencies: hourly, daily, weekly (chosen days), monthly (a day of the month, the last day, or the 1st to 4th / last weekday, e.g. the 3rd Saturday) and yearly, each "every N". All times are UTC.
+- **Offset window**: a task is due at its time and each node runs it at its own stable place (a hash of node, task and occurrence) inside that window, so the nodes do not all run it at once. A node that was down runs a missed task once on return if still inside the window; older runs are skipped and logged. A task that is still running is not started again.
+- Actions: restart chrony, pause or resume the node, clear the statistics, update from online (fetches the newest release and queues this node for the normal, one-at-a-time update when it is newer), reboot the host (once it is safe), or a shell command (`/bin/sh -c`, as root, with a time limit; the whole process group is stopped on timeout). Output and result of the last 300 runs are kept per node (`scheduler.json` in the state directory).
+- The list: New task, and right-click ▸ Edit, Copy, Paste, Run now on this node, Disable/Enable, Delete (Paste adds a copy with a new name; double-click edits). The task list is part of the shared `ntp` settings (`schedule`) and replicates; a replica's change goes through the primary like any shared edit.
+- CLI: `--schedule`, `--schedule-history`, `--schedule-set JSON`, `--schedule-del ID`, `--schedule-run ID`. Help topic, README section.
+
+### Changed
+- README: the anycast section now says an address also needs BGP to be able to carry it (v60 behaviour).
 
 ### Verified
-- On macOS (go1.27.3):
-  - `gofmt -l .` is empty.
-  - `go vet ./device ./tools/...`.
-  - `go test -race -count=1 ./device`: drivers against TLS stub devices, wrong password or token, no redirect followed, self-signed certificate refused, fan-out, secret scrubbing, `CheckShow`.
-- For Linux: `GOOS=linux CGO_ENABLED=0 go build` for amd64, arm64, arm, 386 and riscv64, `go vet ./...`, and `go test -c` (every test of the daemon compiles).
-- `bash -n` on `install.sh`, `uninstall.sh` and `get.sh`.
+- `go test -race ./...` passes, with tests for every frequency, the 3rd Saturday of each month of 2026, last days and day clamping, every-N, offsets (stable, inside the window, different per node), catch-up inside and outside the window, nodes the task is not for, shell output/timeout/exit status, history across a restart, validation, config save and the shared hash.
+- A real daemon: tasks added over the CLI, a shell task run now and one that fired on its schedule about twelve seconds later, history kept across a restart. Headless Chromium: New, Edit, Copy, Paste, Delete, the form for each frequency.
 
 ### Not verified
-- **No test of the daemon was run.** The main package is Linux-only and no Linux machine was available, so this release has only been compiled.
-- No native build with PAM, no live daemon, no cluster run, no shellcheck, no installer run.
-- **The drivers have not met a real Catalyst or FortiGate**, only stubs written from the vendors' documented models.
-- **The web GUI is not converted.** It still shows the NTP and Statistics pages and builds an `ntp` block when it saves settings. The daemon refuses that block, so the Settings pages cannot save until the GUI is reworked. `node --check` was not run (no Node.js here).
+- Not run on a cluster of real nodes (replication of the list uses the same path as other shared settings). Built-in actions other than the statistics were not run against real chrony.
+- Daylight-saving changes were not tested; a time that does not exist that day runs an hour later.
+
+## [v64] - 2026-10-16 — A shared address cannot be a node's address
+
+### Added
+- Saving a gateway is refused when a shared address (VIP, more addresses) or an anycast address that is new in the change is an address a node already has: this host's own interface addresses, and the addresses the cluster members are reached on. A shared address moves between nodes, so a member's own address used as one ends up answered by whichever node holds it, and that member then fails the cluster identity check ("peer identity does not match the pinned fingerprint"). Addresses already in the saved configuration are not checked, so such a configuration can still be saved and fixed.
+
+### Verified
+- `go test -race .` passes, with a test for shared and anycast addresses and for an existing address still saving.
+
+### Not verified
+- The cluster-member side of the check (peer addresses) is not covered by a test; names are not resolved, only addresses.
+
+## [v63] - 2026-10-16 — Traceroute: resolve names
+
+### Added
+- The traceroute popup has a **Resolve names** tickbox. Ticked, each hop is shown by its reverse-DNS name where it has one; unticked, by its address. It can be switched while the trace runs or after it ends, with no new trace; the choice is remembered in the browser. The node looks the hop names up in the background as hops appear (the job now also carries the table as data: `hops` in `/api/nettool`).
+
+### Verified
+- `go test -race .` passes, with a test that a hop's table row and background name arrive; headless Chromium check of the tickbox switching names and addresses.
+
+### Not verified
+- Not run with a real `mtr`; the sandbox has none.
+
+## [v62] - 2026-10-16 — Lookup on clients and servers
+
+### Added
+- Statistics ▸ Top Clients and Top Servers: right-click ▸ **Lookup** (as in dnsdir). A client address shows its reverse (PTR) names as this node's resolver answers; a server name shows its addresses, canonical name, mail servers, name servers and text records. Asked once when requested; nothing is stored. `GET /api/dnslookup/full?lookup=…`.
+
+### Verified
+- `go test -race .` passes, with a test of both lookup kinds; `node --check` on the UI scripts.
+
+### Not verified
+- Not clicked through in a browser against a live node.
+
+## [v61] - 2026-10-16 — Server tags no longer cut off
+
+### Fixed
+- Server table: the tags after a server address (v4, v6, NTS/key, fallback) were clipped when the address was long, leaving a half-drawn tag. The Server IP cell now wraps the tags onto a second line instead.
+
+### Verified
+- Rendered the table at its real column widths in headless Chromium: address plus three tags wraps with every tag whole. Go suite unchanged from v60.
+
+### Verified
+- `go test -race .` passes, with a new test that closes the gate for no BGP, disabled BGP, and no established neighbor and reopens it on Established. Browser check of the per-topology time zone (e2e/t23.py).
+
+### Not verified
+- Not run against a real FRR with live sessions or on a real `lo`; the sandbox has neither.
+
+## [v60] - 2026-10-16 — Anycast addresses follow BGP
+
+### Changed
+- An anycast address is now held on `lo` (and answered) only while BGP can carry it: BGP anycast is configured and enabled on the node, and at least one BGP neighbor of the address's family is in the Established state. With BGP not configured, disabled, or every neighbor of that family down, the address is removed and stops answering; it returns within a few seconds of a session coming up. Partly established sets stay up and show amber.
+- The time zone chosen for the graphs is remembered separately for each topology (gateway); a gateway with none picked uses the last global choice, then UTC.
+
+## [v59] - 2026-10-15 — Clock difference between nodes
+
+### Added
+- The members table (Operate ▸ Cluster and the Monitor page) has a **Clock vs this node (ms)** column: how far each member's clock is from the node you are logged in to, and under the table **Largest difference between nodes** with the two members furthest apart. Each node reports how far its clock is from the time chrony believes (`chronyc tracking`) in its cluster status; every node measures against the same servers, so the difference of two readings is the difference of the clocks, to within chrony's own estimate error (hover a figure for both readings). Members that are not synchronised, not reachable or on an older version are marked and left out of the comparison.
+
+### Verified
+- Go tests: the comparison (reachable, synchronised nodes only; nothing with fewer than two; older nodes left out) and the status message carrying the reading. Headless Chromium: the column, the "this node" / "not synchronised" / "–" states and the summary line.
+
+## [v58] - 2026-10-15 — Authentication status in the server table
+
+### Added
+- The server table (Monitor) shows, after the Server IP of a server set to use NTS or a key, whether the authentication works: a green **NTS** or **key** tag when chrony authenticates with it (hover: the number of NTS cookies), a red tag with a cross when it does not (NTS key establishment failed, the key is refused or unanswered, or chrony uses the server without it), a grey tag with dots while chrony has not yet restarted with the setting. It reads `chronyc authdata`, only while a server is set to be authenticated.
+
+### Verified
+- Go tests: the authdata parser and every state (pending, working, no cookies, key not answered, used without authentication, not yet a source, server not set to be authenticated).
+
+### Not verified
+- The exact column layout of `chronyc -c authdata` on every chrony version (written from chrony's documented columns; an older chrony without `authdata` shows no tag).
+
+## [v57] - 2026-10-15 — NTS, symmetric keys and leap-second handling
+
+### Added
+- Configure ▸ NTP ▸ **Security**: **Keys** (chrony key-file lines, `ID HASH KEY`, validated: IDs, hash names, ASCII or HEX keys, no duplicates, at most 64); **Authenticated servers** (`host nts` or `host key N`, the key must exist); **Serve NTS to clients** (chrony's NTS-KE on TCP 4460 with the web GUI certificate, copied to `/etc/chrony/ntpdir.auth.d/` for chrony's group and followed when the certificate is renewed).
+- Configure ▸ NTP ▸ **Leap seconds**: **Leap second table** (`leapsectz`, e.g. `right/UTC`), **Leap second mode** (`leapsecmode`: system, step, slew, ignore) and **Smear leap seconds** (`smoothtime 400 0.001 leaponly`).
+- All shared by the cluster. They go into the chrony client file and, because chrony reads them only at start, a change rolls a chrony restart through the nodes one at a time (the same mechanism as a new port). An authenticated server stays out of chrony's sources until chrony has been restarted with its key or NTS setting, so it is never used without authentication.
+- Safeguards: a leap table that is not on a node, or NTS on a chrony built without it, is left out with a Log warning instead of stopping chrony from starting. The keys are redacted in support bundles and the history says only how many there are.
+- Help pages for the two tabs; the NTP page now has five tabs.
+- Uninstall `--purge` removes `/etc/chrony/ntpdir.auth.d`.
+
+### Changed
+- A gateway's own NTP pool and the probe pool no longer carry copies of the node-wide settings (SNMP, keys, NTS, leap seconds).
+
+### Verified
+- Go tests: validation (good and bad keys, server_auth, leap values), the chrony file (keyfile, ntsservercert/key, leapsectz, leapsecmode, smoothtime, the sum that makes a renewed certificate restart chrony), the files' permissions and removal when switched off, a missing leap table, chrony without NTS, source lines with `nts` / `key N`, the authenticated server waiting for the restart, replication, redaction and history. Headless Chromium: both tabs, saving through `/api/config`.
+
+### Not verified
+- Not run against a real chrony: NTS key establishment, key-signed answers and leap-second behaviour were not exercised (the sandbox has no chrony, systemd or NTS servers).
+
+## [v56] - 2026-10-15 — Server table: tags no longer run into the State column
+
+### Fixed
+- Topology/NTP server table: the "fallback" tag (and the v4/v6 tags) spilled over the State pill because the Server IP column was too narrow. The column is wider and anything that still does not fit is cut with an ellipsis instead of overlapping.
+
+### Verified
+- Headless Chromium at a narrow width: no overlap.
+
+## [v55] - 2026-10-15 — SNMP: nothing under the form
+
+### Changed
+- Configure ▸ SNMP: the last note ("Could not read what snmpd is doing on this node") is removed too. The ACTIVE tag beside the heading is the only status; no tag when snmpd is not running or the node cannot be asked.
+
+### Verified
+- The page in headless Chromium.
+
+## [v54] - 2026-10-15 — SNMP: no status notes
+
+### Changed
+- Configure ▸ SNMP: the notes under the form ("SNMP is off", "snmpd is not installed", "snmpd is not running yet") are removed. The ACTIVE tag beside the heading is the only status; no tag means SNMP is not answering. A node that cannot be asked (an older version) still says so.
+
+### Verified
+- The page in headless Chromium; the help tests.
+
+## [v53] - 2026-10-15 — SNMP: ACTIVE tag
+
+### Changed
+- Configure ▸ SNMP: a green ACTIVE tag sits beside the heading while snmpd is running, and is gone when it is not. The line "snmpd is on and answering SNMP on UDP 161." is removed. The warnings (not installed, not running) and the "SNMP is off" note stay.
+
+### Verified
+- The page in headless Chromium (tag shown once snmpd runs); the help tests.
+
+## [v52] - 2026-10-15 — SNMP status of the node picked in the top bar
+
+### Fixed
+- Configure ▸ SNMP: the line under the form (snmpd installed / running / on / off) now follows the node picked in the top bar. Before, the request was refused for any node but the one you are logged in to and the line stayed empty. If a node cannot answer (an older version), the page now says so instead of staying blank.
+
+### Verified
+- A test that the status request is relayable; the page in headless Chromium.
+
+## [v51] - 2026-10-15 — SNMP field descriptions are in Help
+
+### Changed
+- Configure ▸ SNMP: the explanations under the Community strings, Location and Contact boxes moved into Help (they were already there; the examples and the shared / not-shared notes were added). The page shows just the boxes.
+
+### Verified
+- The help tests (every field has an entry); the page loads and saves in headless Chromium.
+
+## [v50] - 2026-10-15 — SNMP community strings and contact are shared
+
+### Changed
+- Configure ▸ SNMP: the **community strings and the contact are now cluster settings** (replicated like Allowed clients: edit them on any node, every node answers the same communities and reports the same contact; a node that is the only member behaves as before). The **location stays local** to each node. They moved from the node's `snmp` block to `ntp.snmp_communities` and `ntp.snmp_contact`; a v49 config's local communities and contact are moved there automatically on the first start.
+- The community strings still stay out of support bundles, and the history says only how many there are.
+
+### Verified
+- Go tests: replication to a replica (location untouched), emptying on the primary, the v49 migration, validation of the shared strings, history never showing the strings.
+
+## [v49] - 2026-10-15 — SNMP
+
+### Added
+- Configure ▸ SNMP: community strings (any number, one per line, up to 16), a Location and a Contact. **A community string set: snmpd is enabled and running. None: snmpd is disabled.** Each community gives read-only access over IPv4 and IPv6 on UDP 161; Location and Contact become `sysLocation` and `sysContact`. The page also says whether snmpd is installed and running.
+- ntpdir writes `/etc/snmp/snmpd.conf` (mode 0600, first line marks it as managed) and enables/restarts/disables `snmpd` when the settings change and when it starts. An existing `snmpd.conf` is kept once as `snmpd.conf.ntpdir-orig` and put back when the communities are emptied; an snmpd that ntpdir never took over is left alone.
+- Installer prerequisite: `snmpd` (`net-snmp` on Fedora, RHEL and Arch). A failed install is a warning. A freshly installed snmpd is switched off at once (Debian starts it on install), so with no community string SNMP is off. The uninstaller switches snmpd off again and puts the original `snmpd.conf` back; snmpd stays installed.
+- The settings are local to the node (a location differs per node) and not replicated. The community strings are left out of support bundles, and the history says only how many there are.
+
+### Verified
+- Go tests (with `-race`): validation, the generated snmpd.conf, enable / restart only when the file changed / disable and restore the original, a foreign snmpd left alone, snmpd not installed, redaction and history wording. Headless Chromium: the page, saving through `/api/config`, the status line. The uninstall step on temporary files; the installer in `--dry-run`.
+- The full suite passes.
+
+### Not verified
+- Not run against a real snmpd (no snmpd or systemd in the build sandbox): the `agentaddress`, `rocommunity` and `rocommunity6` lines are from net-snmp's documentation. Try `snmpwalk -v2c -c <community> <node> system` after setting a community.
+
+## [v48] - 2026-10-15 — Configure ▸ NTP: the Servers tab has its cards again
+
+### Fixed
+- Configure ▸ NTP: the Servers tab was empty because its card (Upstream Servers, with Servers and Fallback servers) sat under Clients. The card headings went to title case in v38 and the tab code matched cards to tabs by their exact old spelling. The match now ignores case, and the tab shows its card.
+- (v47 hid the tab while the shared lists were empty; that is undone. The tab is always there, as before.)
+
+### Verified
+- Headless Chromium: the Servers tab holds Upstream Servers, Health holds Health and Timing, Clients holds Serving and Client Rate Limiting; no script errors. The project builds.
+
+### Not verified
+- Go tests not re-run (UI-only change; they passed on v46).
+
+## [v46] - 2026-10-15 — Block a client from Statistics
+
+### Added
+- Blocked clients: `blocked_clients` in the `ntp` block (Configure ▸ Settings ▸ Blocked clients, one address or network per line). Written to chrony's client file as `deny all <net>` after the `allow` lines and put into the running chrony at once, without a restart. A block wins over Allowed clients, also for a network inside an allowed one. Loopback (this node) cannot be blocked. Shared by the cluster like Allowed clients.
+- Statistics ▸ Top Clients ▸ right-click a client: **Block** (adds its address), **Unblock** (removes it), or, when a network in the list holds it, a line saying which one. A 🚫 marks blocked clients (dim when a network holds the address).
+- There is no per-client limit: chrony has only one rate limit for all clients (Configure ▸ Settings ▸ client rate), so the menu has Block but no Limit.
+
+### Verified
+- Go tests (with `-race`): the deny lines in the file and in the live rules, after the allows; the muted file has none; validation rejects loopback, whole-internet and malformed entries and normalises the rest. Headless Chromium: marks, the three menu variants, Block saving `blocked_clients` through `/api/config`.
+
+### Not verified
+- Not run against a real chrony: the `deny all` syntax is from chrony's documentation.
+
+## [v45] - 2026-10-15 — Server statistics: the clock offset graph has data
+
+### Fixed
+- Topology ▸ right-click a server ▸ Statistics: the *Clock offset* graph was always empty. The probes measured each server's offset but never put it into the server's history (only the gateway's graph was fed, from chrony). Every real, synchronised answer now adds its offset to the minute under way — a falseticker's too, which is what the graph is for; a refusal (kiss-o'-death) or an unsynchronised clock is left out.
+- The graph fills from now on; the minutes recorded before this version have no offset to show.
+
+### Verified
+- Go tests (with `-race`): a probe of a server 250 ms ahead leaves one offset sample of about 250 ms; an unsynchronised server leaves none. The full suite passes.
+
+### Not verified
+- The graph itself was not looked at in a browser.
+
+## [v44] - 2026-10-15 — Eye button on the BGP neighbor password
+
+### Changed
+- Configure ▸ Anycast ▸ Neighbors: the Password box of each neighbor (and of the new-neighbor row) has an eye button beside it. Click it to see the password, click again to hide it. The box still starts hidden, and the toggle changes nothing that is saved.
+
+### Verified
+- Headless Chromium: the box is `password` at first, `text` after one click (aria-pressed true, label “Hide password”), `password` after the second; no script errors; the layout looks right.
+
+### Not verified
+- The Go test suite was not re-run for this UI-only change (it passed on v43).
+
+## [v43] - 2026-10-15 — Servers are probed over IPv4 and IPv6; IPv4 preferred
+
+### Changed
+- A server named by host name is probed over IPv4 (its A record) and over IPv6 (its AAAA record), each on its own socket, at the same time. Before, the system picked one address and only that family was ever tested.
+- The server is up when either family answers well. IPv4 is preferred: the round trip, offset, stratum and root distance that are shown and used (ranking, falseticker check) are IPv4's whenever IPv4 passes, and IPv6's only when it does not. A dead IPv6 path no longer shows as an error on a server that IPv4 reaches; both failing gives `IPv4: …; IPv6: …`.
+- The server list marks `v4` / `v6` next to the address of a host-named server (green: the family the numbers come from; red: it failed, hover for the reason). `/api/ntp` and the status data carry `via` and `families` for each server. A server given as an address is probed over its own family only, as before.
+
+### Verified
+- Go tests (with `-race`), including: both families answering with IPv4 chosen although slower; IPv6 dead while the server stays up; IPv4 dead and IPv6 carrying the server; neither answering; a name that does not resolve. In this sandbox (no IPv6 in the kernel) the tests stand in for an AAAA record with a second loopback address, since the family is the one the name was looked up as.
+
+### Not verified
+- Not run over a real IPv6 network, and the literal-IPv6-address server test is skipped where the machine has no IPv6.
+- The `v4` / `v6` marks were not looked at in a browser.
+
+## [v42] - 2026-10-15 — Top lists hold 500 names
+
+### Changed
+- Top Clients and Top Servers return the top 500 names (was 100), plus the “(others)” row, ten or twelve to a page. Also applies to the cluster-wide totals.
+- How many distinct names each time slot remembers is unchanged (it bounds memory), so a list can hold fewer than 500 when few names were seen.
+
+### Verified
+- Go test suite.
+
+### Not verified
+- Not run with real traffic; the larger reply is a few tens of KB more JSON per refresh.
+
+## [v41] - 2026-10-15 — Top cards keep one size
+
+### Changed
+- The Top Clients and Top Servers cards are always the same height and the page buttons (“1–10 of n”, ‹ ›) always sit in the same place at the foot, whatever the number of results; a card with one page shows them disabled.
+- Client rows (which can show a host name underneath) are taller than servers rows, so Top Servers lists 12 to a page against 10 for Top Clients, which makes the two lists equally tall.
+
+### Verified
+- Headless Chromium with 25 clients and 30 servers: both cards 697 px high, tables 546 px, footers at the same offset. The projects build.
+
+### Not verified
+- Not looked at with real host names under the client addresses, and the Go test suite was not re-run for this UI-only change (it passed on v40).
+
+## [v40] - 2026-10-15 — Top cards: page controls at the bottom
+
+### Changed
+- The page controls of the Top Clients / Top Servers cards moved from the card header to a footer at the bottom of the card.
+
+### Verified
+- Headless Chromium with 25 clients: the footer shows "1–10 of 25", Page 1 of 3, and ‹ › step through the pages; a single page shows no footer. The project builds.
+
+### Not verified
+- The full Go test suite was not re-run for this UI-only change (it passed on v39).
+
+## [v39] - 2026-10-15 — Top Clients / Top Servers paginate
+
+### Changed
+- The Top Clients / Top Servers cards no longer have More / Fewer buttons. They list every result the server returns (up to 100 names plus “(others)”), ten to a page, with ‹ › buttons and “1–10 of n” at the bottom of the card. A new filter, tile, pick or range starts again on page one.
+
+### Verified
+- Headless Chromium with 25 clients: ten rows a page, "1–10 of 25", Page 1 of 3, ‹ › step through, the last page holds 5, a new filter or pick returns to page one, no More/Fewer button left.
+
+### Not verified
+- Not run against a live daemon with real traffic.
+
+## [v38] - 2026-10-15 — Card headings in title case; Statistics: "Top Clients: Answered"
+
+### Changed
+- Every card heading on every page is in title case: "Upload a Release", "Join an Existing Cluster", "Anycast Addresses", the Configure sections, the Statistics donuts and charts ("IP Family", "Clock Offset"), the Host charts, and so on. Short joining words stay small (a, an, of, on, per, the …) except first; a word with a capital inside it (BGP, NTS, GUI) and anything after a hyphen ("Kiss-o'-death", "Policy-Based") are left alone. Headings that are data (a user name, a gateway's own name) and dialog titles are unchanged. One helper, `tc()`, does it where the headings are built, so a new card is covered too. Ported from dnsdir v400.
+- Statistics: with a tile picked, the two top lists are titled `Top Clients: Answered` and `Top Servers: Answered` (also Kiss-o'-death, Refused, Failed), not `Top clients — Answered`. The two donuts (Outcome, IP Family) and the chart keep the dash. The help and README say Top Clients / Top Servers too.
+
+### Verified
+- `node --check`, gofmt, vet, `go test -race -count=1`. `tc()` on sample headings. Headless Chromium against the real `app.js` with a mocked Statistics answer: clicking each of the four tiles gave exactly the eight list titles above, and the donuts read Outcome and IP Family.
+
+### Not verified
+- Every page was not opened in a browser: the other pages' headings follow from the code (every card-heading constructor goes through `tc()`), not from looking at them.
+
+## [v37] - 2026-10-15 — The IPv6 controller is drawn in blue
+
+### Changed
+- Topology: when a dual-stack gateway has its IPv4 and IPv6 controllers on two different nodes, the dot of the node that is only the IPv6 controller is soft blue, and its tooltip says "Gateway controller (IPv6)". A node that is the IPv4 controller, or both, keeps the plain dot. Ported from dnsdir v398. New field `agc_afs` on a gateway member ("v4", "v6" or "v4+v6"), kept through the per-node merge of v35.
+
+### Verified
+- gofmt, vet, `go test` of the canvas and member tests (new: `TestMergeFamilyMembersKeepsControllerFamilies`: controllers on two nodes, and both on one); `node --check` of `app.js`.
+- Headless Chromium (light and dark) against the real `app.js` and `style.css` with a mocked API: split controllers draw one plain and one blue dot, both on one node draws a single plain dot.
+
+### Not verified
+- A live dual-stack cluster. A node that sits in a gateway only by its IPv6 address is still not matched to its shape, as before.
+
+## [v36] - 2026-10-15 — "New gateway" without the dots
+
+### Changed
+- The sidebar's **＋ New gateway**, the right-click menu entry on the empty drawing, the text on the empty Topology page, the help, README and QUICKSTART no longer end in "…". The other right-click entries are unchanged.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+
+### Not verified
+- The page in a browser (a text change only).
+- Flaky tests: in two full `-race` runs, `TestBGPOperateAPIAndStatus` (v35's run) and `TestLogServerFlips` (this one) each failed once and passed on their own and on a rerun. Neither is touched by these changes; the causes were not found.
+
+## [v35] - 2026-10-15 — Help: a Find box; the circle's tooltip counts nodes, not nodes × families
+
+### Added
+- The help panel (the **?** at the top right) has a **Find** box above the text, ported from dnsdir v396. Typing marks every match in the page's help (not case sensitive) and shows `1 / 12`; Enter goes to the next match, Shift+Enter to the one before, and the current one has its own colour and is scrolled into view. Esc empties the box (a second Esc closes the panel). The word stays marked when the help changes to another page's. A match is found inside one piece of text, so a phrase that runs from plain text into bold or code is not found as one. The help code in `app.js` is the same as dnsdir's apart from the names.
+
+### Fixed
+- Topology: the gateway circle's tooltip said "Serving nodes: 8" for 4 nodes. A gateway with IPv4 and IPv6 runs one engine per address family on each node, each speaking from its own address, and the members were told apart by that address, so every node was counted once per family. `canvasGroups` now merges the members that belong to one node (by the node names the cluster already works out from the nodes' addresses, `nodeNamesByIP`): one member per node, listed by its IPv4 address with both families (`v4+v6`), local and controller kept. An address that belongs to no known node stays its own member.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- New test `TestMergeFamilyMembersCountsNodes` (4 nodes × 2 families and an unknown address: 9 entries before, 5 after, IPv4 address and `v4+v6` kept, local and controller kept).
+- Live, with a real daemon (real PAM, a throwaway user; user, group and `/etc/pam.d/ntpdir` removed afterwards), in headless Chromium against the real `app.js`, `style.css` and `help.js` (light and dark): typing marked the matches (89 for "gateway" on the Topology help) with the counter, Enter and Shift+Enter moved through them, upper case found the same matches, an unknown word marked nothing and said `0`, the word stayed marked on another page's help (102 for "the" on Statistics), Esc emptied the box and left the panel open, a second Esc closed it, and the help's text was the same after marking and unmarking. No page errors.
+
+### Not verified
+- A flaky test: in one of the full `go test -race` runs `TestBGPOperateAPIAndStatus` failed once (BGP code is untouched here). It then passed five times on its own with `-race` and in a second full run; the cause was not found.
+- The member count on a real dual-stack cluster: the sandbox has no IPv6 and one node, so the fix is covered by the unit test only. It relies on the nodes' IPv6 gateway addresses being known to the cluster (`gw_ips`); a node that does not send them yet (an older version) keeps its IPv6 entry apart until it is updated.
+
+## [v34] - 2026-10-15 — A new gateway starts with four public NTP servers
+
+### Added
+- A gateway you create now starts with the NTP servers `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`. This is the GUI's **New gateway** form and `--canvas-add gateway`. They are ordinary servers of the gateway (probed, named and paused like any other), so a server you do not want is removed the usual way: right-click it ▸ **Delete**, or `--canvas-del server --group N --server ADDR`. A server named with `--server` at creation is added to them, and not twice when it is one of them. The CLI's reply lists the servers and how to remove one. The New gateway form checks a fallback server against the four, since a fallback may not also be a normal server.
+- The same list is in `config.go` (`defaultGatewayServers`) and `webui/app.js` (`DEFAULT_SERVERS`); a test keeps the two equal.
+
+### Changed
+- QUICKSTART, README and the Topology help topic say that a new gateway comes with these servers (the quick start no longer says the circle is amber for lack of a server).
+- Not changed on purpose: a gateway already in a config file, a gateway read from a file that lists no servers, the shared server list (Configure ▸ NTP ▸ Servers) and `defaultNTP`, so an upgrade and an existing config see no new servers. The first-start default gateway and `--configure` also stay as they were: they have no servers of their own.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- Tests: `TestNewGatewayStartsWithDefaultServers` (the four servers, removing one, naming one of them at creation, a file read gets none), `TestDefaultServersMatchTheGUI`; `TestApplyCanvasEdit` and `TestCanvasDualStackAndStratumEdits` now expect the four first.
+- Live, with a real daemon (`"groups": []`, real PAM, a throwaway user in the `ntpdir` group; user, group and `/etc/pam.d/ntpdir` removed afterwards): `--canvas-add gateway` wrote the four servers to the config file; the PAM login over HTTPS gave 200; in headless Chromium (light and dark) the New gateway form created gateways whose circle has the four squares and whose config file has the four servers; `--canvas-del gateway --yes` removed one.
+
+### Not verified
+- The four servers answering: the sandbox has no DNS, so they showed as down there. A deleted server and a second node in a cluster were not tried in the GUI (server delete is unchanged code, covered by `TestApplyCanvasEdit`).
+- The other PAM cases (wrong password, a valid user outside the group, root): only the login of a member was checked, as nothing in the login code changed.
+
+## [v33] - 2026-10-14 — Statistics: Top servers names the node that answered
+
+### Changed
+- Monitor ▸ Statistics: **Top servers** lists the node that answered, by its host name, instead of the fixed word "chrony". chrony answers the clients on every node, so "chrony" told the nodes apart from nothing; with the Node menu on **Cluster** the list now has one row per node, and picking a row filters Top clients to the clients that node answered. The name is read each time the counts are taken, so a renamed node counts under its new name; a node with no host name still counts as "chrony". Counts recorded before this version stay under "chrony" until they age out of the history (or **Clear**). Two nodes with the same host name count as one row.
+- The Statistics help topic says so.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check` of `app.js` and `help.js`.
+- New test `TestSampleClientsNamesTheNode`.
+- Live: a private `chronyd -x` as the node (sources and clients through `NTPDIR_CHRONY_SOURCEDIR`, `NTPDIR_CHRONY_CONFDIR` and `NTPDIR_CHRONYC_ARGS`), a second one as the upstream, and one real daemon with a gateway on `lo`. 30 NTP requests were answered and `--stats` listed 30 answered under Top servers as the host name (`vm`). Daemon, chronyds and the VIP removed afterwards.
+
+### Not verified
+- The Statistics page and the help panel in a browser, the Real PAM login check (only help text changed in `webui/`), and the Cluster view with more than one node (the per-node rows are the same host names the cluster view already adds up; not run with two daemons).
+
+## [v32] - 2026-10-14 — Fix: the chart tooltip did not show
+
+### Fixed
+- Monitor ▸ Statistics: hovering the chart showed no tooltip since v31. The RPS row was added in the wrong chart's code (the server/gateway statistics chart) and left out of the Statistics chart, so the hover handler hit an undefined name. The row now lives only in the Statistics chart; the other chart's code is as in v30. Checked by diffing `app.js` against v30: the only differences are the Now button and the RPS row.
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`, diff of `app.js` against v30.
+
+### Not verified
+- In a browser. The v31 mistake got through because the page was never opened; this fix was found by reading the code and the diff.
+
+## [v31] - 2026-10-14 — Statistics: a "Now" range, RPS in the chart tooltip
+
+### Added
+- **Now** button before **Last Hour** on the Statistics page; CLI `--stats --stats-range now`. It covers the current 10-minute period so far, and reaches back one more period when fewer than 5 minutes of it have passed (so 5 to 15 minutes). The top lists are stored in 10-minute slots, so this is the closest they can come to the present; starting on a slot boundary makes the totals, the chart (one point per minute) and the top lists cover the same period. In a cluster the receiving node fixes the period once.
+- Hovering the Statistics chart in the counts view shows an **RPS** line, with a black box in front of it, under the values (of the picked outcome when a tile is picked, otherwise of all requests).
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
+
+### Not verified
+- In a browser, and on a live multi-node cluster.
+
+## [v30] - 2026-10-14 — Stray dot on the statistics chart
+
+### Fixed
+- Monitor ▸ Statistics: a small coloured dot sat in the top-left corner of the chart. It was the hover marker of each line, drawn at (0, 0) and never hidden until the mouse was over the chart. The markers are hidden until hovered, and now hidden again when the mouse leaves (this also applies to the gateway and host charts, whose markers stayed where the mouse left them).
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The chart in a browser.
+
+## [v29] - 2026-10-13 — README and screenshots brought up to date
+
+### Changed
+- README: the container install (`chronyd -x`), the FRR reload script and where it is looked for, "Serving only with the right time" (`serve_offset_ms`), the time and the Time zone picker, what the server boxes show (offset, name, address, `*`) and the blue links, the gateway clock offset and root delay charts, the Outcome donut, and the refusal to join at the same cluster address. The quick start has the same notes in short.
+- Every screenshot under `snaps/` was taken again from the current build.
+
+### Verified
+- The screenshots come from a two-node demo cluster (network namespaces, stub NTP servers, generated client traffic) running this build.
+
+### Verified (tests)
+- gofmt, vet, `go test -count=1 ./...` and the five cross-builds pass. `TestAddVIPDoesNotStealOutboundRoute` fails while the demo network (198.51.100.0/24) exists on the same machine, so the full suite was run after it was removed.
+
+### Not verified
+- In that demo a small script stands in for `chronyc`, because chrony in the sandbox does not open its command socket; the numbers on the NTP, Statistics and clock pages are therefore simulated, not real chrony output.
+
+## [v28] - 2026-10-13 — FRR reload script found on RPM-style paths
+
+### Fixed
+- FRR's `frr-reload.py` is also looked for in `/usr/libexec/frr` (where Ubuntu 26.04 and the RPM distributions put it); the "cannot reload" warning no longer appears when it is there, and the installer no longer tries `frr-pythontools` on RPM distributions.
+
+## [v27] - 2026-10-13 — Name above the addresses
+
+### Changed
+- Topology: in the gateway circle and the server boxes the name now sits above the IP addresses.
+
+## [v26] - 2026-10-13 — The star on the offset
+
+### Changed
+- The star that marks the source chrony has selected is after the offset (`-0.23 ms *`), no longer after the address.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+## [v25] - 2026-10-13 — Topology: addresses like the names
+
+### Changed
+- The IP addresses in the gateway circle and in the server boxes are drawn like the names: the same size and the same muted colour. The circle is sized for the clock line.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+## [v24] - 2026-10-13 — Topology: lines reordered
+
+### Changed
+- Gateway circle: the time is the top line, then the IPv4 and IPv6 addresses (no longer bold), then the name.
+- Server boxes: the offset is the top line, in bold, then the address (no longer bold), then the name. The round trip stays in the tooltip.
+
+### Verified
+- Both shapes rendered with the real stylesheet in Chromium; `node --check`, gofmt, vet, tests, cross-builds.
+
+## [v23] - 2026-10-13 — Type in the Time zone box
+
+### Changed
+- The Time zone picker is a box you can type in: it shows the whole list when you click it and narrows as you type (the browser filters the list; each entry shows its UTC offset). Picking an entry, or typing a full zone name, applies it; anything else you typed is put back to the zone in use when you leave the box.
+
+### Verified
+- The box's focus, typing and blur logic in headless Chromium; `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- How the narrowing list looks in Firefox and Safari (it is the browser's own list).
+
+## [v22] - 2026-10-13 — Pickers stay open while the page refreshes
+
+### Fixed
+- The Time zone and Node pickers closed themselves when the node list refreshed (every 6 s), because the whole bar was redrawn each time. It is now redrawn only when what it shows changes (page, node picked, node list), and never while one of its pickers has the focus.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- In a browser with a list held open across a refresh.
+
+## [v21] - 2026-10-13 — Time zone picker beside the node picker
+
+### Changed
+- The Time zone picker is on the same line as the node picker, at the left of the Topology page (the node picker stays at the right), instead of in a second row under it.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds. The layout was agreed from a mockup.
+
+### Not verified
+- The layout in the real page.
+
+## [v20] - 2026-10-13 — Time zone picker
+
+### Added
+- Topology: a **Time zone** picker under the node picker (the bar is also shown on a single node). It lists UTC and every zone the browser knows (`Intl.supportedValuesOf`), each with its current UTC offset; picking one changes the zone of the time in the gateway circle at once. The choice is stored in the cookie `ntpdir_tz` (one year, `SameSite=Strict`, `Secure` over HTTPS; a plain cookie the page reads, holding only the zone name), so each person's browser keeps the zone they last chose. UTC until one is chosen. The node's time itself is unchanged: only its display.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The picker and the cookie in a browser (layout of the two rows, light and dark; a cookie that is refused falls back to UTC).
+
+## [v19] - 2026-10-13 — Serve only with a good clock; offset on the server boxes
+
+### Added
+- `serve_offset_ms` (Configure ▸ NTP ▸ Health, "Serve only within (ms, 0 = off)", default 50): a node serves, and keeps the gateway address and anycast addresses, only while its clock is within that of what chrony measures against the servers. Beyond it chrony is told to answer nobody and the node leaves like one whose chrony is down; it comes back once within 80% of the limit (no flapping at the edge). In a container this is the host's clock against the servers, which `-x` chrony measures but cannot correct. The gateway's tooltip says why a node is not serving.
+
+### Changed
+- The third line of a server box on the Topology page is the server's clock offset (`+1.25 ms`), no longer the round trip; the round trip stays in the tooltip.
+
+### Verified
+- A test for the limit (edge, hysteresis, off), gofmt, vet, tests, cross-builds.
+
+### Not verified
+- Against a real chronyd with a skewed clock, and the drawing in a browser.
+
+## [v18] - 2026-10-13 — The time in the gateway circle
+
+### Added
+- The gateway circle on the Topology page shows the time of the node being looked at (UTC, to the second); the tooltip gives the date and chrony's stratum, reference and offset. It is asked of the node every 15 s (`GET /api/time`, relayed to the picked node) and counted locally in between. `ntpdir --show-ntp` prints the time too. The circle is a little taller to fit the extra line.
+
+### Verified
+- gofmt, vet, tests, `node --check`, cross-builds.
+
+### Not verified
+- The drawing in a browser (circle size with the extra line, light and dark).
+
+## [v17] - 2026-10-12 — Topology: a star on the selected source
+
+### Added
+- A server box shows a star after its address when it is the source chrony has selected (`*` in `chronyc sources`); the blue links still mark every source the time comes from. The tooltip says "the selected source".
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The drawing in a browser.
+
+## [v16] - 2026-10-12 — Topology: the servers chrony uses are blue
+
+### Fixed
+- The links from the gateway to its servers were never blue any more: the highlight belonged to the old relay and nothing set it after chrony replaced it. A link is now blue (with a "used for time" entry in the legend) when chrony on the node being viewed has that server as its selected (`*`) or combined (`+`) source, and the server's tooltip says so. Servers chrony has but does not use (not combined, falseticker, unreachable) stay grey.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The drawing in a browser, and against a real chronyd (the marks come from `chronyc sources` as before).
+
+## [v15] - 2026-10-12 — Statistics: outcome card
+
+### Changed
+- Monitor ▸ Statistics: the "NTP versions" card always read 100% Other, because chrony reports a client's address and packet counts but not the NTP version. It is replaced by an **Outcome** card (answered, refused, kiss-o'-death, failed). The screenshots under `snaps/` are still the old ones.
+
+### Verified
+- `node --check`, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- The card in a browser (checked by reading the code only).
+
+## [v14] - 2026-10-12 — A red gateway answers nobody
+
+### Changed
+- When no server is in service and no fallback is configured (every server down or paused), the gateway is red, and the node now also stops answering clients: chrony is told `deny all` live and the `allow` lines are left out of its file (so a restart does not bring them back). The allowed clients return, without a restart, as soon as a server passes. Before, chrony kept answering from its holdover while the gateway showed red.
+
+### Added
+- A gateway's Statistics dialog (right-click ▸ Statistics…) now shows the time itself, not only availability: **Clock offset** (this node's clock against what chrony believes; with chrony `-x` in a container, the host's error) and **Root delay** (average and worst), one point a minute, all nodes of the cluster together. Recorded from chrony's tracking while the gateway is up and chrony is synchronised.
+
+### Verified
+- A test for the mute and the restore (file, live rules, no restart), gofmt, vet, tests, cross-builds.
+
+### Not verified
+- A live run against a real chronyd (the live rule is the same `deny all` that was checked in v8).
+
+## [v13] - 2026-10-12 — Chrony in containers, corrected
+
+### Fixed
+- v12's chrony drop-in did not work: Ubuntu starts chronyd with `ExecStart=!…` (full privileges), the drop-in dropped the `!`, and chronyd then failed with "Not superuser". The drop-in keeps the `!` and also clears `ConditionVirtualization`.
+- v12 decided "container" only from the installer's own capabilities. The installer now also reads PID 1's capabilities and, after starting chrony, asks systemd whether the unit was skipped (`ConditionResult=no`); if so it writes the drop-in and restarts chrony.
+
+### Added
+- The troubleshooting bundle has `system/chrony-service.txt`: `systemctl status` and `systemctl cat` of the chrony unit (drop-ins included), its last 100 journal lines, who holds UDP 123, and `chronyc tracking`.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function with the skipped/not-skipped answers forced, gofmt, vet, tests, cross-builds. The `!` fix follows a real failure log from an Ubuntu 26.04 LXC node.
+
+### Not verified
+- A full installer run in a container (the manual drop-in with `!` was given to the owner to try).
+
+## [v13] - 2026-10-12 — Detect a skipped chrony unit
+
+### Fixed
+- v12 decided whether the machine was a container from the installer's own capabilities; on some LXC setups systemd still skipped the chrony unit and no drop-in was written. The installer now also reads PID 1's capabilities and, after starting chrony, asks systemd whether the unit was skipped (`ConditionResult=no`); if so it writes the `chronyd -x` drop-in and restarts chrony.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function with the skipped/not-skipped answers forced, gofmt, vet, tests, cross-builds.
+
+### Not verified
+- A real install in a container.
+
+## [v12] - 2026-10-12 — Chrony in containers
+
+### Fixed
+- In an LXC or other container without `CAP_SYS_TIME`, Ubuntu's chrony unit is skipped by systemd ("start condition unmet"), so no node ever answered NTP and the gateways stayed amber. The installer now detects a machine that cannot set the clock and writes a drop-in (`/etc/systemd/system/<chrony unit>.d/ntpdir.conf`) that removes the condition and runs `chronyd -x`: chrony tracks the servers and answers clients, and the clock comes from the host. The uninstaller removes the drop-in. The chrony-not-running message now says what to do.
+
+### Verified
+- `bash -n`, shellcheck, the drop-in function in isolation (written only when the clock cannot be set), gofmt, vet, `go test -race -count=1 ./...`, the five cross-builds, `CGO_ENABLED=0` vet and test.
+
+### Not verified
+- A full install in a real container; the generated unit text matches Ubuntu's chrony unit (`ExecStart=!/usr/sbin/chronyd $DAEMON_OPTS`) and the Red Hat family's (`$OPTIONS`) but was not run under systemd here.
+
+## [v11] - 2026-10-12 — Host lookup fix
+
+### Fixed
+- Add NTP server: filling in a name or an address showed "Lookup failed: unknown command: ntp.lookup". The route `/api/hostlookup` named an operation that does not exist; it now calls `host.lookup`. A test checks that every operation a web route names is handled.
+
+### Verified
+- gofmt, `go vet`, `go test -race -count=1 ./...`, the five cross-builds, `CGO_ENABLED=0` vet and test.
+
+## [v10] - 2026-10-12
+
+### Removed
+- The cluster **Failover** drop-down (Auto/On/Off), `--cluster-failover`, `POST /api/cluster/failover` and the `cluster.failover` operation. Failover is always automatic: on from three members, off with two (promote by hand). Old files that carry a `failover` value are accepted and ignored.
+
+### Fixed
+- A node whose saved state said it was a replica of its own address showed "the primary … is not reachable" and "Last sync failed: the primary … is not a known peer" while it was in fact alone. It now becomes the primary at start and on the next sync (no epoch change), and the warning is never shown for one's own address.
+
+## [v9] - 2026-10-13 — Clean re-release of v8
+
+No code change. The v8 tag on GitHub contained files that v8 had deleted (`ntpfront.go`, `fwdfail.go`, `upstreamudp.go` and others from the old relay), so `get.sh` and `install.sh` failed to build it with "dialUDP redeclared" and "undefined: ntpVersion". This archive is the v8 tree, built from an empty directory, with the version raised so that a new tag is unambiguous.
+
+### Packaging fix
+- When publishing, replace the repository's tree instead of copying over it (`git rm -rf . && tar xzf ntpdir_v9.tgz --strip-components=1 && git add -A`), and tag that commit. Files removed by a release must be deleted from the repository, or the web installer builds a mixture of old and new source.
+
+### Verified
+- gofmt, `go build`, `go vet`, `go test -race -count=1 ./...`, the five cross-builds and `CGO_ENABLED=0` vet and test; the archive contains none of the removed relay files.
+
+### Not verified
+- The GitHub tag and `curl | bash` path (the sandbox cannot reach the repository).
+
+## [v9] - 2026-10-13 — Clean re-release of v8
+
+No code change. The v8 tag on GitHub contained files v8 had deleted (`ntpfront.go`, `fwdfail.go`, `upstreamudp.go`), so the web installer failed to build it. This archive is the v8 tree with the version raised, so a new tag is unambiguous.
+
+### Packaging fix
+- Publish by replacing the repository's tree (`git rm -rf .`, extract, `git add -A`), so files removed by a release are deleted from the repository.
+
+## [v8] - 2026-10-13 — chrony answers the clients; AnyTime keeps its sources healthy
+
+The forwarding NTP relay is gone. Each node's chrony answers clients, and AnyTime decides which upstream servers chrony may use: servers that test good are chrony's sources on every node, and a server that fails, is a falseticker, is too far out of sync or is too slow is removed from them within seconds and added again when it recovers.
+
+### Added
+- `chrony` source management (`chronysrc.go`, `chronyloop.go`): every 2 seconds AnyTime writes the healthy servers to `<sourcedir>/ntpdir.sources` (chrony's `sourcedir`) and runs `chronyc reload sources`. If no normal server passes, chrony keeps what it has and the fallback servers become sources only for that time; with everything paused the file is emptied. A write that chrony was not there to receive is retried.
+- **Rolling chrony restart** (`chronyroll.go`): a changed port or rate limit is applied by restarting chrony node by node. Each node pauses itself, restarts chrony, waits (up to 3 minutes) until it is synchronised, and resumes; nodes go in order of address, and nobody starts while another is restarting, has failed, or is updating. A node that cannot be paused (alone, or the last one serving a gateway) restarts without pausing. A node that fails to synchronise resumes anyway, shows `failed`, and holds the others for 10 minutes. The state is in the cluster status (`chrony_roll`), the NTP page tile and `--show-ntp`; a roll cut short by a daemon stop resumes the node afterwards (`chrony-roll.json`).
+- Client settings go to `<confdir>/ntpdir.conf` (`port`, `allow`, `ratelimit`); a new `allowed_clients` list is applied to the running chrony with `chronyc deny all` / `allow all NET` (verified against a real chronyd with `accheck`) and chrony is restarted only when the port or the rate limit changes, since chrony has no command for those. `allowed_clients` is `allow`; `client_rate`, `client_burst` and `client_action` are `ratelimit` (interval from the rate rounded to a power of two, burst, leak 4 for drop and 2 for kod).
+- `max_rtt_ms` (default 500, 0 = off): a server whose round trip is longer counts as down ("too slow"). Configure ▸ NTP ▸ Health.
+- The NTP page and `--show-ntp` show chrony's state (synchronised, stratum, offset, synchronised to, requests handled and dropped) and an **In chrony** column per server. `chrony.json`, `chrony-sources.txt` and `chrony-sourcestats.txt` are in the troubleshooting bundle.
+- Statistics are read from `chronyc clients` every 10 seconds (answered = packets minus drops, refused = drops).
+- Installer: requires chrony 4.0 or newer; adds `sourcedir` and `confdir` to chrony's marked block, creates both directories, and switches off chrony's own servers (`pool`/`server`/`peer` lines marked `#ntpdir-off#`, distribution `sources.d/*.sources` renamed `*.ntpdir-off`). The uninstaller puts them back; `--purge` also removes the two directories.
+
+### Changed
+- A gateway or anycast address counts as healthy only while chrony runs and is synchronised, as well as a server passing.
+- Pools are kept for paused gateways and paused nodes too (a paused node still needs its time sources); two tests that expected no pool were changed.
+- With no gateway there is no pool, so chrony gets no sources: draw a gateway first.
+- Configure ▸ NTP is now Servers, Health and Clients tabs; per-gateway "Load balancing" is "Health checks".
+- A node's sources are only the servers of the topology: each gateway's own servers, or the shared list for a gateway without its own, from gateways that are not paused; the same on every node. A shared list that no gateway uses is not given to chrony. chrony has one set of sources, so with several gateways the node uses all their healthy servers together.
+- Test floor in `TestHelpCoversEveryField` lowered from 70 to 55 labelled fields, because the spread/attempts/alpha/timeout/limit fields were removed.
+
+### Removed
+- The relay (`ntpfront.go`, `upstreamudp.go`, `udpreply.go`, `loopguard.go`, `fwdfail.go`), the in-process client limiter, ranking, spread and the `NTPDIR_CHRONY_IFACE` / `bindaddress` logic. `spread`, `spread_band`, `max_attempts`, `latency_alpha`, `query_timeout_ms`, `client_exempt` and `client_limits` are still accepted in a file but do nothing. Their CLI flags and GUI fields are gone.
+- Recorded per-gateway answer time, errors and request rate, and a server's failed requests: chrony does not report them. The topology gateway/server statistics windows show availability, round trip, offset and failed probes only. Statistics show "Failed" and "Kiss-o'-death" as 0, the top-servers list as one `chrony` entry and the NTP version as "Other".
+
+### Fixed
+- The NTP page and `--show-ntp` showed the default port and client settings instead of the configured ones.
+- The Topology legend is hidden until a gateway exists.
+
+### Verified
+- gofmt, `go build`, `go vet`, `go test -race -count=1 ./...` pass, with new tests for the sources file, client config, state parsing and statistics sampling; cross-builds and `CGO_ENABLED=0` vet/test as listed below.
+- Live, with a real chronyd 4.5 (private instance, `-x`), three stub NTP servers and the daemon: the three servers appear as sources; a dead server, a server 0.6 s slow (limit 300 ms) and a server 5 s off are each removed from `chronyc sources` within about 10 s and added back on recovery; with all servers dead chrony keeps its sources; a node started before chronyd got its sources once chronyd came up; a gateway on `lo` answered on the VIP through chrony; allowed clients and rate limit reached `ntpdir.conf`, and the allowed-clients rules applied to a real running chronyd (`accheck`).
+- Installer: dry-run, a real install with a shim `systemctl` against a fake `chrony.conf` and `sources.d`, an idempotent re-run, and an uninstall with `--purge` that restored `chrony.conf` byte for byte.
+- Live, two real daemons clustered, each with its own real chronyd and shim `systemctl`: a shared rate-limit change rolled through the nodes in order: the first node paused, chrony restarted, resumed when synchronised (about 12 s), and only then the second; the primary role was handed over on each pause; a fresh node started with a non-default port restarted chrony once.
+- GUI in headless Chromium, light and dark: NTP page, Configure ▸ NTP, Statistics, Topology.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- A real cluster of several nodes with chrony (each node's chrony run by systemd), a real `chronyd` restart through systemd, chrony older than 4.5, and the installer on a distribution other than a sandbox with a fake Ubuntu `os-release` (no real apt/dnf chrony install, no shellcheck-clean run on other families beyond `shellcheck -S warning`).
+- chrony's own `clientloglimit` caps the clients it counts, so the statistics undercount on a very busy node.
+- The screenshots under `snaps/` were not retaken: `ntp.png`, `topology.png` and `statistics.png` show the old relay pages. `ntp-relay.png` was removed.
+- Cross-platform builds use the PAM stub (see v1); only the native amd64 build is verified with PAM.
+
+## [v7] - 2026-10-12 — Updates: "Downloading…"; Controller greyed with several gateways
+
+Taken from the Anyname DNS Director v379. Its other recent changes (server names registered in DNS, Rename registering in DNS, policy-based resolution) are DNS-only; its v369-v374 changes were already here.
+
+### Changed
+- Fetching an update from online says "Downloading…" while it works, not "Downloading from GitHub…".
+
+### Fixed
+- With more than one gateway, a node that was already the controller (and primary) still offered **Controller** in its menu, because the check also counted gateways the node is not a member of (another subnet, removed from it), where it can never hold the role. It now counts only the gateways the node is a member of. A paused node still shows "Paused: resume it first".
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1`, CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- In a browser; the multi-gateway case was reasoned from the code, not reproduced.
+
+## [v6] - 2026-10-12 — README and screenshots refreshed for NTP
+
+### Changed
+- All 18 screenshots in `snaps/` regenerated from a live two-node NTP cluster (anycast, capture, cluster, gateway-stats, gateways, history, host, log, login, node, ntp-relay, ntp, statistics, topology-menu, topology, upgrade, users, web-certificate).
+- README gained two images: `snaps/ntp.png` (Monitor ▸ NTP) and `snaps/ntp-relay.png` (Configure ▸ NTP relay).
+
+### Fixed
+- Leftover DNS wording: the cluster-join prompts in `cli.go` ("NTP block" not "DNS block"), two README sentences ("NTP servers", "NTP pool"), the capture filter and anycast address placeholders in `app.js`, and the capture examples in `help.js` (`port 123` not `port 53`).
+
+### Verified
+- Screenshots taken in Chromium (dark, 1280x760) against a two-node cluster with stub NTP servers, generated client traffic, real PAM users and a real update push.
+- gofmt, build, vet, `go test -race -count=1`, cross-compile amd64/arm64/arm/386/riscv64, `CGO_ENABLED=0` vet and test, `node --check` on `app.js` and `help.js`.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- The screenshots were taken from a build with the `cli.go` fix but before the final `app.js`/`help.js` placeholder edits.
+- The Upgrade shot's newest event is a "cancelled" entry from a mistaken demo command; History shows setup BGP entries; the NTP page's right-hand columns clip at 1280px.
+- The first `go test -race` run failed once (failing test not captured); the rerun passed. Timing-sensitive tests have been flaky before (`TestLogServerFlips`, `TestSpreadSharesRealQueries`).
+- dnsdir on a real host.
+
+## [v5] - 2026-10-12 — Fix: pausing a server could pause the whole node; controller mark on a paused node
+
+### Fixed
+- Pausing or resuming a server (or anything else) in the Topology saved the page's copy of the whole configuration, which still carried the node's pause flag from before the node was last paused or resumed from its menu. The save then paused the node (its history read "Groups changed … ; Node: paused — this node is out of service" and its gateways stopped). Whether the node is paused is now changed only by pausing or resuming the node (node menu, Operate ▸ Node, `--node-pause`/`--node-resume`): a saved configuration from the web page, an import and a restored version all keep the node's live state. The same fix as dnsdir v374, where a real node showed it.
+- Topology on a paused node (or one that does not serve a gateway): the picture of a serving node was borrowed with that node's own member still marked "local", so the controller dot and the star landed on the paused node instead of the real controller. Borrowed members are no longer marked local (dnsdir v369).
+
+### Verified
+- gofmt, build, vet, `go test -race -count=1` (new `TestConfigSaveNeverChangesTheNodePause`, `TestTakeFromClearsLocalOnMembers`; one run failed once with the output not captured and passed on three reruns, so it is treated as a flaky timing test), CGO-off vet and test, cross-compiles for amd64, arm64, arm, 386 and riscv64, `node --check`.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- In a browser or on a live cluster. A node paused by this bug stays paused until it is resumed from its menu.
+
+## [v4] - 2026-10-12 — A gateway can answer NTP on dnsdir's anycast addresses
+
+### Added
+- **dnsdir addresses.** With the Anyname DNS Director installed on the same host, a gateway can also answer NTP on anycast addresses dnsdir announces (`groups[].dnsdir_vips`, shared by the cluster). The addresses on offer are read from dnsdir's configuration (`/var/lib/dnsdir/dnsdir.conf`, `extra_vips` of its gateways). ntpdir **only listens** (freebind, the gateway's NTP port, the gateway's pool): it never adds the address to `lo`, takes it off, renews it or announces it, and never touches FRR, so it cannot interfere with dnsdir's BGP. Every 3 s it checks whether dnsdir is still installed, still announces the address and has it on `lo`; the listener follows (no restart needed when dnsdir is installed or removed).
+- GUI: right-click the gateway ▸ *Add dnsdir address* (only while dnsdir is installed; a choice of the addresses it announces that are free). Each shows as a pill under the anycast pills: green answering, amber when dnsdir holds it but no NTP server answers (dnsdir still announces it), grey when dnsdir does not hold it, no longer announces it, or is gone. Right-click a pill ▸ Delete, or the Delete key. CLI: `--canvas-add dnsdirvip --group N --address ADDR`, `--canvas-del dnsdirvip ...`; `--canvas` lists them. `GET /api/canvas` carries `dnsdir` (`present`, `offered`).
+- `AnycastState.external` marks them; they are left out of the cluster's anycast report and of the BGP colouring.
+
+### Changed
+- Adding a dnsdir address is refused unless dnsdir is installed here and announces it (GUI, CLI and API: `PUT /api/config` and the canvas edits). Addresses already saved are not re-checked, so a config stays loadable while dnsdir is away, and the listener returns when it comes back. Validation: a dnsdir address cannot equal a gateway's shared address or an anycast address of ntpdir, cannot be listed twice, and only one gateway may answer on it.
+- The settings form carries `dnsdir_vips` through like `extra_vips`; the loop guard counts them as this host's own addresses.
+- BGP stays unavailable in ntpdir while dnsdir is installed (v3); standalone, ntpdir runs BGP and its own anycast as before.
+
+### Verified
+- New tests (`dnsdir_vips_test.go`): reading dnsdir's offered list (junk, unreadable file, dnsdir absent); config rules; the cluster hash and merge; the check on add (not installed, not announced, announced, already saved); canvas add/delete; the listener follows dnsdir (not on `lo` yet, held, dead pool, dropped from dnsdir's list, dnsdir removed) and `lo` is never touched (no adds, no deletes, also on stop).
+- Live run of the real daemon with a stub NTP server, a fake dnsdir marker and configuration: an address dnsdir does not announce is refused; an announced one is added and reports "not announcing it right now" until it is put on `lo`, then an NTP request to it is answered (origin timestamp echoed) from the gateway's pool; it is still on `lo` afterwards (ntpdir never removes it); removing the marker stops the listener and bringing it back restarts it; deleting works. The sandbox was restored.
+- Chromium (light and dark), signed in through real PAM: the menu item appears, the form offers only free addresses, the pill is drawn with its label and tooltip, Delete removes it.
+- `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, `node --check`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- Two flaky tests: one full `-race` run reported a race in `TestLogServerFlips`, and one non-race run missed a timing bound in `TestSpreadSharesRealQueries`. Neither recurred in 40 isolated race runs, 3 isolated runs and the full runs that followed (all green), and neither touches this change, but the race report was not investigated.
+- A real dnsdir install: dnsdir was simulated by a marker file, a configuration file and an address added to `lo` by hand. BGP announcements, and what dnsdir does with the address when its own DNS is unhealthy, were not exercised.
+- More than one node: the shared list is covered by tests of the hash and merge, not by a live cluster run.
+- IPv6 dnsdir addresses (the sandbox has no IPv6).
+
+## [v3] - 2026-10-12 — BGP is switched off while dnsdir is installed on the host
+
+### Changed
+- ntpdir looks for the Anyname DNS Director (`/usr/local/sbin/dnsdir`, `/usr/local/share/dnsdir`, `/etc/systemd/system/dnsdir.service`) at start-up and each time BGP is applied or changed. While one is present, BGP is unavailable: ntpdir does not touch `/etc/frr/frr.conf`, `/etc/frr/daemons`, its marker or the FRR service (even if it managed FRR before dnsdir was installed, so it cannot wipe dnsdir's BGP section), treats BGP as inactive (the drawing shows no BGP colouring), and refuses to set it up or enable it from the GUI, the API (`PUT /api/bgp`, `POST /api/bgp/operate`) and the CLI (`--asn`, `--bgp-neighbor-add`, `--bgp-enable`). Clearing the settings and disabling still work; settings already in the config are kept and have no effect. Removing dnsdir lifts the block without a restart.
+- `GET /api/bgp` has a new `blocked` field; the three Anycast pages and `--bgp` say BGP is unavailable. The README, the Anycast help topic and the v2 note on running both products are updated.
+- Anycast addresses are unaffected: without BGP they are plain addresses on `lo`.
+
+### Verified
+- New tests: the check follows the marker files; with dnsdir present `applyNow` leaves `frr.conf`, `daemons`, the marker and the FRR calls untouched, for BGP on and off, after ntpdir had managed FRR; setting an AS or neighbor and enabling BGP are refused over the API while clearing and disabling work; `blocked` is in the status.
+- Live run of the real daemon with a scratch config: `--asn 64512` works, then with a marker file at `/usr/local/sbin/dnsdir` `--bgp` reports BGP unavailable, `--asn 64513` and `--bgp-enable` are refused, `--asn off` is accepted; after removing the marker `--asn` works again. The marker and test state were removed afterwards.
+- `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`, `node --check webui/app.js`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- The three Anycast pages in Chromium with the block shown (only `node --check` and the API/CLI were run).
+- A real dnsdir install on the same host; the check is by file presence only, so a dnsdir that was removed by hand but left its unit file behind keeps BGP blocked.
+- dnsdir v373 was not changed and has no matching check for ntpdir, so it would still take over `frr.conf` on its own; only ntpdir backs off.
+
+## [v2] - 2026-10-12 — Own gateway port and multicast addresses, so ntpdir can share a host with dnsdir
+
+### Changed
+- The gateway protocol (election, heartbeats, hand-overs) now uses **UDP 12382** and the multicast groups **224.1.3.123** and **ff02::1:123**. They were 4729, 224.1.3.7 and ff02::1:307, the same as the Anyname DNS Director's. Both daemons open that socket with `SO_REUSEPORT`, so on one host the kernel split unicast packets between them and each saw the other's multicast (rejected by the HMAC, but the lost packets broke elections). The packet format and magic are unchanged.
+- Upgrade note: the new port is not compatible with v1, so **every node of a gateway must run v2**. A rolling update leaves the nodes unable to see each other until all have restarted, and each may then briefly claim the controller role.
+- The installer's firewall hints say `12382/udp`; the README describes the port and the multicast groups next to the cluster settings.
+
+### Still to watch when running both products on one host
+- Only one of them may manage BGP: each owns `/etc/frr/frr.conf` and rewrites it.
+- Their gateway ids must differ (dnsdir defaults to 1, ntpdir to 100): the virtual MAC is derived from the group id and slot only.
+
+### Verified
+- `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, `CGO_ENABLED=0 go vet` and `go test`; cross-compiles for linux/amd64, arm64, arm, 386 and riscv64; `bash -n install.sh`.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- Running ntpdir and dnsdir together on one host: the conflict was found by reading both sources, and the fix was not tried against a running dnsdir.
+- A rolling v1 to v2 update on a live multi-node cluster.
+
+## [v1] - 2026-10-12 — AnyTime NTP Director: the DNS gateway becomes an NTP relay
+
+The project is now **AnyTime NTP Director** (`ntpdir`), built from the Anyname DNS Director v365 code base. The numbering restarts at 1 and the earlier changelog was removed on purpose.
+
+### Added
+- **NTP relay** in place of the DNS proxy. Each gateway forwards a client's NTP packet (RFC 5905) unchanged to the fastest healthy upstream server and returns the answer, accepted only if it echoes the client's transmit timestamp. Modes 6 and 7 are never relayed. A loop guard never forwards to the asker or to this host's own addresses.
+- **NTP health checks** with real NTP requests: highest stratum (default 15), largest root distance (default 1500 ms), kiss-o'-death and unsynchronised-clock detection, and **falseticker** detection against the median offset (default 128 ms, needs three or more servers). Ranking by smoothed round trip, spread over servers within a band, fallback servers, per-server pause, per-client allow list and rate limits (`drop` or `kod`).
+- **chrony as a prerequisite.** The installer installs it (apt, dnf, pacman), enables it and writes a marked block into its configuration: `bindaddress` for the first IPv4 and the first IPv6 address of the first Ethernet interface, `allow ::/0` and `allow 0.0.0.0/0`. chrony is restarted when the block changes. The uninstaller removes only the block and leaves chrony installed.
+- **Statistics, Topology, NTP page, Capture and help** rewritten for NTP: outcomes (answered, failed, kiss-o'-death, refused), NTP versions and IP families, top clients and top servers, NTP packet decoding in Capture, `--show-ntp`, `--stats-outcome`, `--stats-server`, `--host-lookup`.
+- **Rename a node** (Topology ▸ right-click a node ▸ Rename, or `--node-rename NAME`): sets the operating system host name (`hostnamectl`, or `hostname` plus `/etc/hostname` without systemd) and rewrites the old name in `/etc/hosts` (a `127.0.1.1` line is added when none names the host). The name is validated before it reaches a command, files are replaced atomically with their mode kept, and `/etc/hosts` is restored if the host name cannot be set. It works on any cluster member through the node picker.
+- **Pausing a node moves the roles.** The primary role is handed to a reachable node that is not paused, and the gateway controller moves because the paused node's gateways resign. A paused node cannot be made primary or controller (CLI, GUI and menu items are refused or greyed). The Topology no longer shows the controller dot on a paused node.
+
+### Changed
+- Name, binary, service, group, PAM service, state directory (`/var/lib/ntpdir`), Go module and config keys are `ntpdir` / `ntp`; the brand is written "AnyTime" everywhere. Web GUI port **12380** and cluster port **12381** (were 53853 and 53854); the relay listens on UDP 123 by default.
+- New gateways are numbered from **100** (101, 102, …); `--group N` still picks another number (1 to 255).
+- Cluster strings were renamed, so nodes of the old DNS Director cannot join an ntpdir cluster. The wire protocol and packet magic are unchanged. The default HMAC key is now `ntpdir` (was `dgw`): a gateway with no explicit `key` must have the same default on every node, and a config that sets `key` keeps working as before.
+- The installer no longer aborts when a service restart itself returns an error: the active check decides, and the rollback runs.
+- The default update repository is `micush/ntpdir`; the GitHub repository must be renamed to match.
+- README, QUICKSTART, CLAUDE.md, the example config and `help.js` were rewritten for NTP. The screenshots in `snaps/` still show the DNS pages (the DNS and policy pictures were removed), so most of them are out of date.
+
+### Verified
+- `gofmt -l` empty, `go build`, `go vet`, `go test -race -count=1 ./...`, and `CGO_ENABLED=0 go vet` plus `go test`. Cross-compiles for linux/amd64, arm64, arm, 386 and riscv64.
+- New and ported tests cover the NTP wire format, probing, falseticker, spread, fallback, loop guard, client limits, canvas edits, group numbering from 100 and primary hand-over skipping paused nodes.
+- Smoke run with three stub NTP servers on `lo`: a client request through the VIP is answered by the fastest server; killing it fails over to the next; an atomic config rename hot-reloads; `--show-ntp` shows the ranking.
+- Real PAM check: a group member signs in; a wrong password and a valid user outside the group get the same message; repeated failures lock out the source (root was then refused too).
+- Chromium, light and dark: Topology (servers, controller dot), NTP, Statistics and the help panel.
+- Live cluster run with two real daemons: join, a shared edit on the replica reaching both files, pausing the primary (the role moved to the other node), a paused node refusing promotion, and an update pushed from the replica (both nodes built v2, re-exec'd and were confirmed by the boot guard; the second needed `--update-apply --yes` because the soak gate held it back).
+- Rename: unit tests for name validation, the `/etc/hosts` rewrite, the command sequence and the restore on failure; a live run renamed the sandbox host through the CLI (host name, `/etc/hostname` and `/etc/hosts` changed, then were restored) and through the Chromium dialog (a bad name shows the reason, a valid one is applied).
+- Installer: `bash -n` and `shellcheck -x -S warning` clean; dry runs for ubuntu, debian, linuxmint, fedora, rocky, almalinux, centos, arch, manjaro and endeavouros (alpine refused); a real run with a shim `systemctl`: fresh install, no-op, upgrade, forced-failure rollback, downgrade refusal, uninstall with and without `--purge`, a customised PAM file kept, and chrony's configuration restored byte for byte.
+
+### Not verified
+- The failure path of the roll (chrony never synchronising) and the recovery after a daemon stop mid-roll were run only in unit tests, not live; three or more nodes; a real systemd restart.
+- The IPv6 branch of the chrony block (the sandbox has no IPv6) and a real chrony package install and restart; only the configuration edit with a shim was run.
+- The installer's Go download against a local server was not re-run for this release (that code is unchanged).
+- Real multi-host behaviour: election on a real wire, ARP/NS steering to virtual MACs, an AFN answering through `lo` and `arp_ignore`, real public NTP servers, and relay behaviour behind rate-limiting upstreams. Upstream servers see the relay's address for every client.
+- The certificate, history restore and users flows of the cluster were not exercised again in this release.
+- Binaries cross-compiled with cgo off use the fail-closed PAM stub; only the native amd64 build was run with PAM.

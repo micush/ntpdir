@@ -9,11 +9,11 @@ import (
 func TestTshootRedactsSecrets(t *testing.T) {
 	var v any
 	json.Unmarshal([]byte(`{"groups":[{"key":"dgw","priority":100,"neighbors":[]}],"bgp":{"neighbors":[{"peer":"192.0.2.1","password":"hunter2","multihop":0}]},
-		"web":{"key_file":"/x/key.pem","listen":"127.0.0.1:1"},"cluster":{"join_code":"netdir-join-v1:abc","token":"zzz","code":""},"rcode":"NOERROR"}`), &v)
+		"web":{"key_file":"/x/key.pem","listen":"127.0.0.1:1"},"cluster":{"join_code":"ntpdir-join-v1:abc","token":"zzz","code":""},"rcode":"NOERROR"}`), &v)
 	out, n := redactJSON(v)
 	raw, _ := json.Marshal(out)
 	s := string(raw)
-	for _, leak := range []string{"dgw\"", "hunter2", "netdir-join-v1:abc", "zzz", "/x/key.pem"} {
+	for _, leak := range []string{"dgw\"", "hunter2", "ntpdir-join-v1:abc", "zzz", "/x/key.pem"} {
 		if leak == "dgw\"" {
 			if strings.Contains(s, `"key":"dgw"`) {
 				t.Errorf("the gateway key leaked: %s", s)
@@ -35,10 +35,16 @@ func TestTshootRedactsSecrets(t *testing.T) {
 }
 
 func TestTshootRedactsText(t *testing.T) {
-	in := "router bgp 65001\n neighbor 192.0.2.1 password hunter2\n neighbor 192.0.2.2 password 7 0822455D0A16\n ip prefix-list x\nsnmp community public\n"
+	in := "router bgp 65001\n neighbor 192.0.2.1 password hunter2\n neighbor 192.0.2.2 password 7 0822455D0A16\n ip prefix-list x\nsnmp community public\n" +
+		"interface eth0\n ip ospf message-digest-key 1 md5 ospfpw1\n ip ospf message-digest-key 22 md5 7 0ABCDEF123\n ip ospf authentication-key simplepw\n"
 	out, n := redactText(in)
 	if strings.Contains(out, "hunter2") || strings.Contains(out, "0822455D0A16") || n < 2 {
 		t.Fatalf("secrets left (%d): %s", n, out)
+	}
+	for _, s := range []string{"ospfpw1", "0ABCDEF123", "simplepw"} {
+		if strings.Contains(out, s) {
+			t.Fatalf("the OSPF key %q is left: %s", s, out)
+		}
 	}
 	if !strings.Contains(out, "router bgp 65001") || !strings.Contains(out, "ip prefix-list x") {
 		t.Fatalf("too much removed: %s", out)
@@ -70,15 +76,15 @@ func TestTshootNodeBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"README.txt", "netdir/config.json", "netdir/cluster.json", "system/system.txt", "net/ip-addr.txt", "netdir/virtual-mac-tests.json", "netdir/goroutines.txt"} {
+	for _, want := range []string{"README.txt", "ntpdir/config.json", "ntpdir/cluster.json", "system/system.txt", "net/ip-addr.txt", "ntpdir/virtual-mac-tests.json", "ntpdir/goroutines.txt"} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("%s is missing; have %d files", want, len(files))
 		}
 	}
-	if g := string(files["netdir/goroutines.txt"]); !strings.Contains(g, "goroutine ") || !strings.Contains(g, "TestTshootNodeBundle") {
+	if g := string(files["ntpdir/goroutines.txt"]); !strings.Contains(g, "goroutine ") || !strings.Contains(g, "TestTshootNodeBundle") {
 		t.Fatalf("the goroutine dump is missing or empty: %.200s", g)
 	}
-	if c := string(files["netdir/config.json"]); strings.Contains(c, `"key": "dgw"`) {
+	if c := string(files["ntpdir/config.json"]); strings.Contains(c, `"key": "dgw"`) {
 		t.Errorf("the gateway key is in the bundle: %s", c)
 	}
 	if !strings.Contains(string(files["README.txt"]), "secrets were removed") {
@@ -106,9 +112,9 @@ func TestTshootClusterBundle(t *testing.T) {
 	var mine, theirs int
 	for n := range files {
 		switch {
-		case strings.Contains(n, "-this-node/netdir/config.json"):
+		case strings.Contains(n, "-this-node/ntpdir/config.json"):
 			mine++
-		case strings.HasSuffix(n, "/netdir/config.json"):
+		case strings.HasSuffix(n, "/ntpdir/config.json"):
 			theirs++
 		}
 	}

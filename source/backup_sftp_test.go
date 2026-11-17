@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// Against a real sshd on 127.0.0.1:2222 (set NETDIR_TEST_SFTP=2222:USER, USER being an account whose home it may write; the
+// Against a real sshd on 127.0.0.1:2222 (set NTPDIR_TEST_SFTP=2222:USER, USER being an account whose home it may write; the
 // test authorizes the node's key itself).  Skipped otherwise.
 func TestBackupRealSFTP(t *testing.T) {
-	spec := os.Getenv("NETDIR_TEST_SFTP")
+	spec := os.Getenv("NTPDIR_TEST_SFTP")
 	if spec == "" {
 		t.Skip("no sshd")
 	}
@@ -23,14 +23,14 @@ func TestBackupRealSFTP(t *testing.T) {
 	cfg := &BackupConfig{Enabled: true, Targets: []BackupTarget{{Host: "127.0.0.1", Port: port, User: user, Dir: "bk/dns", Keep: 2}}, Password: "longenough"}
 	tg := &cfg.Targets[0]
 	state := filepath.Join(t.TempDir(), "state")
-	writeTree(t, state, map[string]string{"netdir.conf": "C", "webcert/k": "KEY"})
-	e := NewBackupEngine(state, filepath.Join(state, "netdir.conf"), "real1", func() *BackupConfig { return cfg })
+	writeTree(t, state, map[string]string{"ntpdir.conf": "C", "webcert/k": "KEY"})
+	e := NewBackupEngine(state, filepath.Join(state, "ntpdir.conf"), "real1", func() *BackupConfig { return cfg })
 	if err := e.ensureKey(); err != nil {
 		t.Fatal(err)
 	}
 	pub, _ := os.ReadFile(filepath.Join(e.dir, "id_ed25519.pub"))
 	os.RemoveAll("/home/" + user + "/.ssh")
-	if pw := os.Getenv("NETDIR_TEST_SFTP_PASSWORD"); pw != "" {
+	if pw := os.Getenv("NTPDIR_TEST_SFTP_PASSWORD"); pw != "" {
 		// the keys go to the server with the account's password: an authorized_keys that is there already is kept
 		os.MkdirAll("/home/"+user+"/.ssh", 0o700)
 		os.WriteFile("/home/"+user+"/.ssh/authorized_keys", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXISTINGKEYEXISTINGKEYEXISTINGKEYEXIST old@laptop\n"), 0o600)

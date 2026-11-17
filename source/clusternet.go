@@ -26,7 +26,7 @@ import (
 )
 
 // The cluster network layer.  Peers talk to each other on a dedicated TLS
-// listener (default :22162).  Each node has its own long-lived identity
+// listener (default :12381).  Each node has its own long-lived identity
 // certificate whose SHA-256 fingerprint the other members pin (learned from
 // the join code and then gossiped), so the channel does not depend on the GUI
 // certificate, which admins may replace at will.  On top of that every request
@@ -34,7 +34,7 @@ import (
 // and a nonce.  Nothing here uses the PAM/GUI login.
 
 const (
-	joinCodePrefix  = "netdir-join-v1:"
+	joinCodePrefix  = "ntpdir-join-v1:"
 	clockSkew       = 90 * time.Second
 	nonceTTL        = 5 * time.Minute
 	nonceSweepEvery = time.Second
@@ -72,8 +72,13 @@ type PeerStatusMsg struct {
 	Gateways []GwState `json:"gateways,omitempty"`
 	// NodePaused: the whole node is paused (Operate ▸ Node); shown on the Topology drawing.
 	NodePaused bool `json:"node_paused,omitempty"`
+	// ChronyRoll is this node's part in the rolling chrony restart: pending, restarting or failed (absent: nothing to do).
+	ChronyRoll string `json:"chrony_roll,omitempty"`
 	// Host is this node's CPU, memory and disk use, for the Topology drawing (absent on older nodes).
 	Host *HostLoad `json:"host,omitempty"`
+	// Clock is how far this node's clock is from the time chrony believes (absent when chrony is not running, and on older
+	// nodes); the Cluster page compares the nodes with it.
+	Clock *ClockReading `json:"clock,omitempty"`
 	// Addrs are this node's Ethernet interfaces with their IPv4 and IPv6 GUA addresses, for the node's tooltip on the
 	// Topology drawing (absent on older nodes).
 	Addrs []NodeIface `json:"addrs,omitempty"`
@@ -252,6 +257,7 @@ func (c *Cluster) applyListener() {
 	mux.HandleFunc("POST /cluster/admin", c.peerAuth(c.handleAdmin))
 	mux.HandleFunc("GET /cluster/source", c.peerAuth(c.handleSource))
 	mux.HandleFunc("POST /cluster/proxy", c.peerAuth(c.handleProxy))
+	mux.HandleFunc("POST /cluster/hist", c.peerAuth(c.handleHist))
 	mux.HandleFunc("POST /cluster/users", c.peerAuth(c.handleUsers))
 	srv := &http.Server{
 		ErrorLog: log.New(io.Discard, "", 0), Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
@@ -294,15 +300,15 @@ func signMessage(secret []byte, peerHdr, ts, nonce, method, path string, body []
 }
 
 // signMessageHash is signMessage with the hex SHA-256 of the body already known.  A request carries that hash in
-// X-Netdir-Body, so the signature can be checked before the body is read; the body is then held to the hash.
+// X-Ntpdir-Body, so the signature can be checked before the body is read; the body is then held to the hash.
 func signMessageHash(secret []byte, peerHdr, ts, nonce, method, path, bodyHash string) string {
 	mac := hmac.New(sha256.New, secret)
-	fmt.Fprintf(mac, "netdir-cluster-v1\n%s\n%s\n%s\n%s\n%s\n%s", ts, nonce, method, path, peerHdr, bodyHash)
+	fmt.Fprintf(mac, "ntpdir-cluster-v1\n%s\n%s\n%s\n%s\n%s\n%s", ts, nonce, method, path, peerHdr, bodyHash)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // legacyPreAuthBody is how much of a request body is read from a caller that cannot be told apart from a stranger
-// before its signature is checked: a peer older than v194 does not send X-Netdir-Body, so its signature covers a
+// before its signature is checked: a peer older than v194 does not send X-Ntpdir-Body, so its signature covers a
 // body that has to be read first.  A member known by its certificate may send up to maxPeerBody.
 const legacyPreAuthBody = 64 << 10
 
@@ -316,7 +322,7 @@ func isHexHash(s string) bool {
 
 func (c *Cluster) peerAuth(h func(http.ResponseWriter, *http.Request, ClusterPeer, []byte)) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		ts, nonce, sig, peerHdr := r.Header.Get("X-Netdir-Ts"), r.Header.Get("X-Netdir-Nonce"), r.Header.Get("X-Netdir-Sig"), r.Header.Get("X-Netdir-Peer")
+		ts, nonce, sig, peerHdr := r.Header.Get("X-Ntpdir-Ts"), r.Header.Get("X-Ntpdir-Nonce"), r.Header.Get("X-Ntpdir-Sig"), r.Header.Get("X-Ntpdir-Peer")
 		t, err := strconv.ParseInt(ts, 10, 64)
 		if err != nil || nonce == "" || len(nonce) > 64 || sig == "" {
 			jsonError(rw, http.StatusUnauthorized, "unauthenticated")
@@ -331,7 +337,7 @@ func (c *Cluster) peerAuth(h func(http.ResponseWriter, *http.Request, ClusterPee
 		// the hash.  A request from a peer that predates that header can only be checked after its body is
 		// read, so that is limited to a small size unless the TLS client certificate is a known member's.
 		var body []byte
-		if bodyHash := r.Header.Get("X-Netdir-Body"); isHexHash(bodyHash) {
+		if bodyHash := r.Header.Get("X-Ntpdir-Body"); isHexHash(bodyHash) {
 			want := signMessageHash(c.node.Secret(), peerHdr, ts, nonce, r.Method, r.URL.Path, bodyHash)
 			if subtle.ConstantTimeCompare([]byte(want), []byte(sig)) != 1 {
 				jsonError(rw, http.StatusUnauthorized, "unauthenticated")
@@ -580,13 +586,13 @@ func (c *Cluster) callAddr(ctx context.Context, addr string, peer ClusterPeer, m
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Netdir-Peer", peerHdr)
-	req.Header.Set("X-Netdir-Ts", ts)
-	req.Header.Set("X-Netdir-Nonce", nonce)
+	req.Header.Set("X-Ntpdir-Peer", peerHdr)
+	req.Header.Set("X-Ntpdir-Ts", ts)
+	req.Header.Set("X-Ntpdir-Nonce", nonce)
 	bsum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(bsum[:])
-	req.Header.Set("X-Netdir-Body", bodyHash)
-	req.Header.Set("X-Netdir-Sig", signMessageHash(c.node.Secret(), peerHdr, ts, nonce, method, path, bodyHash))
+	req.Header.Set("X-Ntpdir-Body", bodyHash)
+	req.Header.Set("X-Ntpdir-Sig", signMessageHash(c.node.Secret(), peerHdr, ts, nonce, method, path, bodyHash))
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -626,7 +632,7 @@ func (c *Cluster) statusMsg() PeerStatusMsg {
 		Peers: append(c.knownPeers(snap), c.node.Self()), Removed: snap.Removed,
 		Version: version(), SourceVersion: c.mg.upd.OfferedSource(), Updating: c.mg.upd.Busy(),
 		UpdateFailed: c.mg.upd.FailedFor(), UptimeSec: int64(time.Since(processStart) / time.Second), AnycastUp: c.mg.anycastReport(), SharedRev: snap.SharedRev, Intent: c.mg.upd.Intent(), PrimaryDownSec: c.primaryDownSec(),
-		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), Host: hostLoadPtr(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
+		GwKnown: c.mg.gwFn != nil, Gateways: c.mg.localGateways(), NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Host: hostLoadPtr(), Clock: clockReading(), Addrs: ethernetAddrs(), GwIPs: c.mg.localGwIPs(),
 	}
 }
 
@@ -782,7 +788,7 @@ func (c *Cluster) handleSource(rw http.ResponseWriter, r *http.Request, caller C
 		return
 	}
 	rw.Header().Set("Content-Type", "application/gzip")
-	rw.Header().Set("X-Netdir-Version", ver)
+	rw.Header().Set("X-Ntpdir-Version", ver)
 	rw.Write(data)
 }
 
@@ -888,7 +894,7 @@ func (c *Cluster) sharedAddrs() map[string]bool {
 				out[a.String()] = true
 			}
 		}
-		for _, x := range g.ExtraVIPs {
+		for _, x := range append(append([]string{}, g.ExtraVIPs...), g.DNSDirVIPs...) {
 			if a, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimSuffix(x, "/32"), "/128")); err == nil {
 				out[a.String()] = true
 			}
@@ -918,7 +924,7 @@ type ifaceAddrs struct {
 
 // nodeAddrCandidates is the addresses this node tells the others it can be reached on: its cluster address, its host name
 // and the addresses of its interfaces, each with the cluster port.  Left out: the loopback and its addresses (the anycast
-// addresses live there), the virtual-MAC interfaces netdirN.M (the VIP lives there), link-local addresses, and any address
+// addresses live there), the virtual-MAC interfaces ntpdirN.M (the VIP lives there), link-local addresses, and any address
 // in shared (the VIPs and anycast addresses of the gateways, which every node answers on).  A peer that dialled one of
 // those would reach whichever node holds it at the moment, and be refused there for the certificate.
 func nodeAddrCandidates(self, host string, ifs []ifaceAddrs, shared map[string]bool) []string {
@@ -928,7 +934,7 @@ func nodeAddrCandidates(self, host string, ifs []ifaceAddrs, shared map[string]b
 		addrs = append(addrs, net.JoinHostPort(host, port))
 	}
 	for _, i := range ifs {
-		if i.Loopback || strings.HasPrefix(i.Name, "netdir") {
+		if i.Loopback || strings.HasPrefix(i.Name, "ntpdir") {
 			continue
 		}
 		for _, a := range i.Addrs {
@@ -981,23 +987,11 @@ func (c *Cluster) MintJoinCode(by string) (string, time.Time, error) {
 	return joinCodePrefix + base64.RawURLEncoding.EncodeToString(b), exp, nil
 }
 
-// ClearJoinCodes withdraws every join code this node has handed out that was not used yet; it reports how many.
-func (c *Cluster) ClearJoinCodes(by string) (int, error) {
-	if err := c.requireEnabled(); err != nil {
-		return 0, err
-	}
-	n, err := c.node.ClearTokens()
-	if err == nil {
-		infof("cluster: %d unused join code(s) cleared by %s", n, by)
-	}
-	return n, err
-}
-
 func decodeJoinCode(code string) (joinCode, error) {
 	var jc joinCode
 	code = strings.TrimSpace(code)
 	if !strings.HasPrefix(code, joinCodePrefix) {
-		return jc, errors.New("not a netdir join code (expected it to start with \"" + joinCodePrefix + "\")")
+		return jc, errors.New("not a ntpdir join code (expected it to start with \"" + joinCodePrefix + "\")")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(code, joinCodePrefix))
 	if err != nil || json.Unmarshal(raw, &jc) != nil || jc.Token == "" || len(jc.Fp) != 64 || len(jc.Addrs) == 0 || len(jc.Addrs) > 32 {
@@ -1301,6 +1295,7 @@ func (c *Cluster) Run(ctx context.Context) {
 		c.failoverTick()
 		c.mg.powerHandoverTick()
 		c.mg.updateTick(sctx)
+		c.mg.chronyRollTick(ctx)
 		cancel()
 		c.logStrain()
 	}
@@ -1487,6 +1482,7 @@ type PeerView struct {
 	Epoch         uint64 `json:"epoch"`
 	IsPrimary     bool   `json:"is_primary"`
 	NodePaused    bool   `json:"node_paused,omitempty"` // the whole node is paused: it cannot take the primary role
+	ChronyRoll    string `json:"chrony_roll,omitempty"`
 	Version       string `json:"version"`
 	Hostname      string `json:"hostname,omitempty"`
 	SourceVersion string `json:"source_version"`
@@ -1502,6 +1498,8 @@ type PeerView struct {
 	// IPs are the node's addresses (IPv4, IPv6 global and unique local) and GwIPs the ones it uses in the gateway protocol
 	IPs   []string `json:"ips,omitempty"`
 	GwIPs []string `json:"gw_ips,omitempty"`
+	// Clock is the node's clock against the time chrony believes (see ClockReading); nil when the node cannot say.
+	Clock *ClockReading `json:"clock,omitempty"`
 }
 
 type ClusterView struct {
@@ -1523,13 +1521,12 @@ type ClusterView struct {
 	Warnings      []string   `json:"warnings"`
 	// FailoverOn says whether automatic failover is in force with this many members (from three)
 	FailoverOn bool `json:"failover_on"`
-	// JoinCodes is how many join codes this node has handed out that are unused and still valid
-	JoinCodes int `json:"join_codes"`
+	// ClockSpread is the largest difference between the clocks of the reachable, synchronised nodes (nil with fewer than two).
+	ClockSpread *ClockSpread `json:"clock_spread,omitempty"`
 }
 
 func (c *Cluster) View() ClusterView {
 	snap := c.node.Snapshot()
-	joinCodes := c.node.PendingTokens()
 	selfIPs, selfGw := addrList(ethernetAddrs()), c.mg.localGwIPs() // before c.mu: they ask the engines
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1541,12 +1538,11 @@ func (c *Cluster) View() ClusterView {
 	}
 	v.Joinable = snap.Role == RolePrimary && len(snap.Peers) == 0 && snap.Epoch == 1
 	v.FailoverOn = failoverEnabled(len(snap.Peers) + 1)
-	v.JoinCodes = joinCodes
 	v.Peers = append(v.Peers, PeerView{
 		Addr: snap.SelfAddr, NodeID: snap.NodeID, Fingerprint: c.node.Fingerprint(), Self: true, Reachable: true,
-		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), Version: version(),
+		Role: snap.Role, Epoch: snap.Epoch, IsPrimary: snap.Role == RolePrimary, NodePaused: c.mg.pausedFn != nil && c.mg.pausedFn(), ChronyRoll: c.mg.ChronyRollLabel(), Version: version(),
 		SourceVersion: c.mg.upd.SourceVersion(), Updating: c.mg.upd.Busy(), UpdateFailed: c.mg.upd.FailedFor(),
-		SharedRev: snap.SharedRev, LastSeen: time.Now(), Hostname: selfHost(), IPs: selfIPs, GwIPs: selfGw,
+		SharedRev: snap.SharedRev, LastSeen: time.Now(), Hostname: selfHost(), IPs: selfIPs, GwIPs: selfGw, Clock: clockReading(),
 	})
 	for _, p := range snap.Peers {
 		pv := PeerView{Addr: p.Addr, NodeID: p.NodeID, Fingerprint: p.Fp, IsPrimary: p.Addr == snap.PrimaryAddr}
@@ -1558,7 +1554,11 @@ func (c *Cluster) View() ClusterView {
 			pv.Updating, pv.UpdateFailed, pv.SharedRev = m.Updating, m.UpdateFailed, m.SharedRev
 			pv.Hostname = m.Hostname
 			pv.NodePaused = m.NodePaused
+			pv.ChronyRoll = m.ChronyRoll
 			pv.IPs, pv.GwIPs = addrList(m.Addrs), m.GwIPs
+			if pi.Reachable {
+				pv.Clock = m.Clock
+			}
 		}
 		v.Peers = append(v.Peers, pv)
 	}
@@ -1567,6 +1567,7 @@ func (c *Cluster) View() ClusterView {
 	for i := range v.Peers {
 		v.Peers[i].SoakSec = soak[v.Peers[i].Addr]
 	}
+	v.ClockSpread = clockSpread(v.Peers)
 	if !c.cfg.Enabled {
 		v.Warnings = append(v.Warnings, "clustering is disabled on this node (cluster.enabled is false)")
 	}
@@ -1918,7 +1919,7 @@ func max2(a, b string) string {
 
 // GwState says whether this node is serving one gateway right now: it holds the
 // address (AGC) or forwards for it (AFN) in every address family the gateway
-// has, and its web listener is serving (health.go).
+// has and, with chrony serving, the NTP service is up.
 type GwState struct {
 	GroupID int  `json:"group_id"`
 	Serving bool `json:"serving"`
@@ -1930,7 +1931,7 @@ type GwState struct {
 	// for another node.  Absent on older nodes.
 	Offnet bool `json:"offnet,omitempty"`
 	// Health is the gateway's colour on that node as its own drawing shows it (ok, warn, bad, idle) and
-	// HealthWhy the reason ("the gateway is up but this node's MCP and web listener is not serving").  Absent on older nodes.
+	// HealthWhy the reason ("running, but some NTP servers are down").  Absent on older nodes.
 	Health    string `json:"health,omitempty"`
 	HealthWhy string `json:"health_why,omitempty"`
 	// ServingSec is how long this node has served the gateway without a break (the gateway's uptime on this node); the
@@ -1958,7 +1959,7 @@ func gatewayStates(dc *DaemonConfig, rows []SnapshotRow) []GwState {
 		for _, r := range rows {
 			if r.GroupID == g.GroupID && r.Local {
 				serving[r.AF] = r.State == "active" || r.State == "forward"
-				ntpUp = ntpUp || r.ServiceUp
+				ntpUp = ntpUp || r.NTPUp
 			}
 		}
 		ok := true
@@ -2155,7 +2156,7 @@ func safeToTakeDown(mine []GwState, peers []peerGateways) (bool, string) {
 				case p.Serving[g.GroupID]:
 					who = append(who, p.Addr+" has only just started serving it")
 				default:
-					who = append(who, p.Addr+" is not serving it (paused, still recovering, or its listener is not serving)")
+					who = append(who, p.Addr+" is not serving it (paused, still recovering, or its NTP servers are down)")
 				}
 			}
 			detail := "this is the only member"

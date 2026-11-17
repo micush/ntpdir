@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"netdir/device"
 )
 
 var mgmtGETs = []string{
@@ -23,10 +21,44 @@ var mgmtGETs = []string{
 var mgmtPOSTs = []string{
 	"/api/versions/snapshot", "/api/versions/restore", "/api/versions/upload",
 	"/api/tls/install", "/api/tls/csr", "/api/tls/csr/cancel", "/api/tls/revert", "/api/tls/regenerate",
-	"/api/cluster/token", "/api/cluster/token/clear", "/api/cluster/join", "/api/cluster/promote", "/api/cluster/peers/remove",
+	"/api/cluster/token", "/api/cluster/join", "/api/cluster/promote", "/api/cluster/peers/remove",
 	"/api/cluster/peers/unremove", "/api/cluster/leave", "/api/cluster/sync",
 	"/api/update/upload", "/api/update/fetch", "/api/update/apply", "/api/update/push", "/api/update/cancel", "/api/update/auto",
 	"/api/nodepause",
+}
+
+func TestMgmtRoutesRequireSessionAndCSRF(t *testing.T) {
+	e := newWebEnv(t)
+	cookie = ""
+	for _, p := range mgmtGETs {
+		if r := e.do("GET", p, nil); r.code != 401 {
+			t.Errorf("GET %s without a session = %d", p, r.code)
+		}
+	}
+	for _, p := range mgmtPOSTs {
+		if r := e.do("POST", p, map[string]any{}); r.code != 401 {
+			t.Errorf("POST %s without a session = %d", p, r.code)
+		}
+	}
+	e.login("alice", "pw")
+	for _, p := range mgmtPOSTs {
+		if r := e.do("POST", p, map[string]any{}, withAuth(e, false)); r.code != 403 {
+			t.Errorf("POST %s without CSRF token = %d", p, r.code)
+		}
+		if r := e.do("POST", p, map[string]any{}, withAuth(e, true), func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") }); r.code != 403 {
+			t.Errorf("POST %s cross-origin = %d", p, r.code)
+		}
+	}
+	// only the archive upload may carry a non-JSON body
+	if r := e.do("POST", "/api/tls/revert", map[string]any{}, withAuth(e, true), func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }); r.code != 415 {
+		t.Errorf("non-JSON body accepted: %d", r.code)
+	}
+	if r := e.rawPost("/api/update/upload", []byte("junk"), true); r.code != 422 {
+		t.Errorf("raw upload with CSRF must reach the handler: %d %s", r.code, r.raw)
+	}
+	if r := e.rawPost("/api/update/upload", []byte("junk"), false); r.code != 403 {
+		t.Errorf("raw upload without CSRF = %d", r.code)
+	}
 }
 
 func (e *webEnv) rawPost(path string, body []byte, csrf bool) resp {
@@ -51,7 +83,7 @@ func putCfg(e *webEnv, mut func(*DaemonConfig)) resp {
 		mut(dc)
 	}
 	b, _ := json.Marshal(dc)
-	return e.do("PUT", "/api/config", map[string]any{"config": json.RawMessage(b), "note": "from test", "base": "force"}, withAuth(e, true))
+	return e.do("PUT", "/api/config", map[string]any{"config": json.RawMessage(b), "note": "from test"}, withAuth(e, true))
 }
 
 func TestWebVersionsFlow(t *testing.T) {
@@ -201,61 +233,5 @@ func TestWebClusterAndUpdateBasics(t *testing.T) {
 	}
 	if h := e.do("GET", "/api/update/history", nil, withAuth(e, false)); h.code != 200 || len(h.body["data"].([]any)) < 2 {
 		t.Fatalf("history: %s", h.raw)
-	}
-}
-
-// A page that read the configuration earlier cannot write its old copy over what was saved since (an import, another page, another
-// node): the save is refused with 409 and nothing changes.  A save without a base is refused too (a tab from before an update, a script); "force" overwrites.
-func TestWebConfigSaveRefusesStaleBase(t *testing.T) {
-	e := newWebEnv(t)
-	e.login("alice", "pw")
-	if r := putCfg(e, func(d *DaemonConfig) { d.Groups = []GroupConfig{defaultGroup()} }); r.code != 200 {
-		t.Fatalf("initial save: %d %s", r.code, r.raw)
-	}
-	g := e.do("GET", "/api/config", nil, withAuth(e, false))
-	base0, _ := g.body["base"].(string)
-	if g.code != 200 || base0 == "" {
-		t.Fatalf("GET /api/config has no base: %d %s", g.code, g.raw)
-	}
-	put := func(base string, mut func(*DaemonConfig)) resp {
-		dc, _, _ := e.mg.LiveConfig()
-		mut(dc)
-		b, _ := json.Marshal(dc)
-		body := map[string]any{"config": json.RawMessage(b), "note": "t"}
-		if base != "" {
-			body["base"] = base
-		}
-		return e.do("PUT", "/api/config", body, withAuth(e, true))
-	}
-	// a save made from what is current works and says what the saved configuration is now
-	r := put(base0, func(d *DaemonConfig) {
-		d.Settings.Devices = []device.Device{{Name: "sw1", Platform: "iosxe", Address: "10.0.0.1", Disabled: true}}
-	})
-	base1, _ := r.body["base"].(string)
-	if r.code != 200 || base1 == "" || base1 == base0 {
-		t.Fatalf("save with the current base: %d %s (base %q → %q)", r.code, r.raw, base0, base1)
-	}
-	// a page that still holds the first copy cannot save (it would drop sw1)
-	r = put(base0, func(d *DaemonConfig) { d.Settings.Devices = nil })
-	if r.code != http.StatusConflict {
-		t.Fatalf("a stale save: %d %s", r.code, r.raw)
-	}
-	if cur, _, _ := e.mg.LiveConfig(); len(cur.Settings.Devices) != 1 {
-		t.Errorf("the refused save changed the configuration: %d devices", len(cur.Settings.Devices))
-	}
-	// the new base works, and so does a save with none
-	if r = put(base1, func(d *DaemonConfig) { d.Settings.Devices[0].Address = "10.0.0.2" }); r.code != 200 {
-		t.Fatalf("save with the new base: %d %s", r.code, r.raw)
-	}
-	// a save that says nothing about what it read (a tab from before the update, a script) is refused too
-	if r = put("", func(d *DaemonConfig) { d.Settings.Devices = nil }); r.code != http.StatusConflict || !strings.Contains(string(r.raw), "Ctrl+F5") {
-		t.Fatalf("save without a base: %d %s", r.code, r.raw)
-	}
-	if cur, _, _ := e.mg.LiveConfig(); len(cur.Settings.Devices) != 1 {
-		t.Errorf("the save without a base changed the configuration: %d devices", len(cur.Settings.Devices))
-	}
-	// and a script that means it says "force"
-	if r = put("force", func(d *DaemonConfig) { d.Settings.Devices = nil }); r.code != 200 {
-		t.Fatalf("save with force: %d %s", r.code, r.raw)
 	}
 }

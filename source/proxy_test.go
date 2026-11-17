@@ -10,6 +10,35 @@ import (
 	"testing"
 )
 
+func TestProxyAllowed(t *testing.T) {
+	ok := []struct{ m, p string }{
+		{"GET", "/api/canvas"}, {"PUT", "/api/config"}, {"GET", "/api/versions/diff?a=1&b=2"},
+		{"POST", "/api/tls/install"}, {"GET", "/api/versions"}, {"POST", "/api/assert-agc"}, {"GET", "/api/ntp"},
+		// the Cluster and Upgrade pages follow the picked node too
+		{"GET", "/api/cluster"}, {"POST", "/api/cluster/leave"}, {"POST", "/api/cluster/promote"},
+		{"GET", "/api/update"}, {"POST", "/api/update/apply"}, {"POST", "/api/update/upload"}, {"POST", "/api/update/push"},
+		{"GET", "/api/power"}, {"POST", "/api/power"}, {"GET", "/api/nodepause"}, {"POST", "/api/nodepause"}, {"GET", "/api/log?level=warn&q=x"}, {"GET", "/api/qstats?from=1d"}, {"GET", "/api/whois?lookup=example.com"}, {"GET", "/api/host?from=1d"}, {"GET", "/api/hostlookup?lookup=127.0.0.1"},
+	}
+	for _, c := range ok {
+		if err := proxyAllowed(c.m, c.p); err != nil {
+			t.Errorf("%s %s refused: %v", c.m, c.p, err)
+		}
+	}
+	bad := []struct{ m, p string }{
+		{"POST", "/api/login"}, {"POST", "/api/logout"}, {"GET", "/api/clusterx"}, {"GET", "/api/updates"},
+		{"GET", "/api/session"}, {"POST", "/api/proxy"}, {"GET", "/api/proxy?node=x&path=/api/canvas"},
+		{"GET", "/api/../login"}, {"GET", "/api/canvas/../login"}, {"GET", "/api/%2e%2e/login"},
+		{"GET", "/api/canvas%2f..%2flogin"}, {"GET", "/api/configx"}, {"GET", "/api/"}, {"GET", "/"},
+		{"GET", "/app.js"}, {"GET", "//evil/api/canvas"}, {"GET", "http://evil/api/canvas"},
+		{"DELETE", "/api/config"}, {"GET", "/api/canvas\r\nX: y"}, {"GET", ""},
+	}
+	for _, c := range bad {
+		if err := proxyAllowed(c.m, c.p); err == nil {
+			t.Errorf("%s %q was allowed", c.m, c.p)
+		}
+	}
+}
+
 // A relayed request is attributed "user via node", needs no cookie or CSRF
 // token (the signed cluster channel vouches for it), and cannot reach the
 // local-only routes; a plain browser request carrying no session is still refused.
@@ -41,7 +70,7 @@ func TestProxyHandlerRunsAsViaUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(map[string]any{"config": dc, "note": "relayed", "base": "force"})
+	b, _ := json.Marshal(map[string]any{"config": dc, "note": "relayed"})
 	_, pr = call(proxyReq{User: "alice", Method: "PUT", Path: "/api/config", CT: "application/json", Body: b})
 	if pr.Status != 200 {
 		t.Fatalf("put config: %d %s", pr.Status, pr.Body)
@@ -73,7 +102,7 @@ func TestProxyHandlerRunsAsViaUser(t *testing.T) {
 func TestProxyAcceptsRawUploads(t *testing.T) {
 	e := newWebEnv(t)
 	e.login("alice", "pw")
-	r := e.do("POST", "/api/proxy?node=10.0.0.9:22162&path=/api/update/upload", nil, withAuth(e, true), func(q *http.Request) {
+	r := e.do("POST", "/api/proxy?node=10.0.0.9:12381&path=/api/update/upload", nil, withAuth(e, true), func(q *http.Request) {
 		q.Header.Set("Content-Type", "application/octet-stream")
 		q.Body = io.NopCloser(bytes.NewReader([]byte("not a real archive")))
 		q.ContentLength = 18

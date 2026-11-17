@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -68,6 +69,70 @@ func (g *alertRig) events() string {
 	return strings.Join(g.sent, ",")
 }
 
+func TestAlertAfterFailuresInARowAndClearAfterGoodChecks(t *testing.T) {
+	g := newAlertRig(t, "upstream_down", AlertRule{Mode: "in_a_row", After: 3, ClearMode: "checks", Clear: 2})
+	g.step(true, 2)
+	if g.open() != 0 {
+		t.Fatal("opened after 2 failures, the rule says 3")
+	}
+	g.step(false, 1)
+	g.step(true, 2)
+	if g.open() != 0 {
+		t.Fatal("a good check must restart the count")
+	}
+	g.step(true, 1)
+	if g.open() != 1 {
+		t.Fatal("not open after 3 in a row")
+	}
+	g.step(false, 1)
+	if a := g.e.View().Alerts[0]; a.Closed != 0 || !a.Recovering {
+		t.Fatalf("one good check is not enough: %+v", a)
+	}
+	g.step(true, 1)
+	if g.e.View().Alerts[0].Recovering {
+		t.Fatal("bad again: no longer recovering")
+	}
+	g.step(false, 2)
+	if g.open() != 0 || g.e.View().Alerts[0].Resolution != "cleared" {
+		t.Fatalf("not cleared after 2 good checks: %+v", g.e.View().Alerts[0])
+	}
+	if g.events() != "open,resolved" {
+		t.Fatalf("webhook events %q", g.events())
+	}
+}
+
+func TestAlertAfterMinutesAndMOfN(t *testing.T) {
+	g := newAlertRig(t, "upstream_down", AlertRule{Mode: "minutes", After: 2, ClearMode: "minutes", Clear: 1})
+	g.step(true, 7) // 6 checks = 90 s
+	if g.open() != 0 {
+		t.Fatal("open before 2 minutes")
+	}
+	g.step(true, 2)
+	if g.open() != 1 {
+		t.Fatal("not open after 2 minutes")
+	}
+	g.step(false, 3)
+	if g.open() != 1 {
+		t.Fatal("closed before a minute of good")
+	}
+	g.step(false, 2)
+	if g.open() != 0 {
+		t.Fatal("not closed after a minute of good")
+	}
+
+	m := newAlertRig(t, "upstream_down", AlertRule{Mode: "m_of_n", After: 3, Of: 5, ClearMode: "checks", Clear: 1})
+	for _, bad := range []bool{true, false, true, false} {
+		m.step(bad, 1)
+	}
+	if m.open() != 0 {
+		t.Fatal("2 of 4 is not 3 of 5")
+	}
+	m.step(true, 1) // bad,good,bad,good,bad = 3 of the last 5
+	if m.open() != 1 {
+		t.Fatal("3 of the last 5 should open")
+	}
+}
+
 func TestAlertValueNeedsToStayPastTheThreshold(t *testing.T) {
 	forMin := 1
 	g := newAlertRig(t, "cpu_high", AlertRule{Threshold: 80, ForMin: &forMin})
@@ -88,6 +153,169 @@ func TestAlertValueNeedsToStayPastTheThreshold(t *testing.T) {
 	g.step(false, 2)
 	if g.open() != 0 {
 		t.Fatal("not closed after 5 minutes of good")
+	}
+}
+
+func TestAlertAcknowledgeSilenceResolveAndComingBack(t *testing.T) {
+	g := newAlertRig(t, "upstream_down", AlertRule{After: 1, ClearMode: "checks", Clear: 1})
+	g.cfg.RepeatHours = 1
+	g.step(true, 1)
+	id := g.e.View().Alerts[0].ID
+	if a, _, _ := g.e.counts(); a["warning"] != 1 {
+		t.Fatalf("active %v", a)
+	}
+	if err := g.e.Ack(id, true, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if a, k, _ := g.e.counts(); a["warning"] != 0 || k["warning"] != 1 {
+		t.Fatalf("an acknowledged alert is counted as acknowledged: %v %v", a, k)
+	}
+	g.step(true, 4*60*1+1) // an hour: no repeat while acknowledged
+	if g.events() != "open" {
+		t.Fatalf("events %q", g.events())
+	}
+	if err := g.e.Ack(id, false, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	g.step(true, 1)
+	if g.events() != "open,repeat" {
+		t.Fatalf("an open alert nobody has acknowledged is repeated: %q", g.events())
+	}
+	// silenced: no message when it closes, not counted, still listed
+	if err := g.e.Silence(id, 60, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if v := g.e.View(); v.Alerts[0].Silenced == 0 || len(v.Silences) != 1 {
+		t.Fatalf("not shown as silenced: %+v", v)
+	}
+	if a, k, _ := g.e.counts(); a["warning"]+k["warning"] != 0 {
+		t.Fatal("a silenced alert is not counted")
+	}
+	g.step(false, 1)
+	if g.events() != "open,repeat" {
+		t.Fatalf("a silenced alert closes quietly: %q", g.events())
+	}
+	// it comes back within the hour: the same alert, counted again, and the acknowledgement is gone
+	g.e.Silence(id, 0, "ann")
+	g.step(true, 1)
+	v := g.e.View()
+	if len(v.Alerts) != 1 || v.Alerts[0].Count != 2 || v.Alerts[0].Acked {
+		t.Fatalf("flapping alert: %+v", v.Alerts)
+	}
+	// resolved by hand while the condition goes on: opens again after it holds again
+	if err := g.e.Resolve(id, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if g.open() != 0 || g.e.View().Alerts[0].Resolution != "manual" {
+		t.Fatal("not resolved")
+	}
+	g.step(true, 1)
+	if g.open() != 1 {
+		t.Fatal("a manual close of something still wrong must not stay closed")
+	}
+	if _, _, n := g.e.counts(); n != 3 {
+		t.Fatalf("opened %d times, want 3", n)
+	}
+}
+
+func TestAlertRuleSwitchedOffClosesItAndStateSurvivesARestart(t *testing.T) {
+	g := newAlertRig(t, "upstream_down", AlertRule{After: 1})
+	g.step(true, 1)
+	if g.open() != 1 {
+		t.Fatal("not open")
+	}
+	off := false
+	g.cfg.Rules["upstream_down"] = AlertRule{Enabled: &off}
+	g.step(true, 1)
+	if g.open() != 0 || g.e.View().Alerts[0].Resolution != "rule off" {
+		t.Fatalf("not closed when the rule went off: %+v", g.e.View().Alerts)
+	}
+	e2 := NewAlertEngine(strings.TrimSuffix(g.e.path, "/alerts.json"), "node1", func() *AlertsConfig { return g.cfg })
+	if len(e2.View().Alerts) != 1 {
+		t.Fatal("the alerts were not kept")
+	}
+}
+
+func TestAlertConfigIsChecked(t *testing.T) {
+	bad := []AlertsConfig{
+		{Webhook: "ftp://x"}, {Webhook: "nonsense"}, {RepeatHours: -1},
+		{Rules: map[string]AlertRule{"nope": {}}},
+		{Rules: map[string]AlertRule{"cpu_high": {Severity: "dire"}}},
+		{Rules: map[string]AlertRule{"cpu_high": {Mode: "sometimes"}}},
+		{Rules: map[string]AlertRule{"upstream_down": {Mode: "m_of_n", After: 6, Of: 5}}},
+		{Rules: map[string]AlertRule{"cpu_high": {Threshold: -1}}},
+	}
+	for i, c := range bad {
+		c := c
+		if c.Validate() == nil {
+			t.Errorf("case %d was accepted: %+v", i, c)
+		}
+	}
+	dc := newDaemonConfig()
+	dc.Groups = nil
+	on := true
+	dc.NTP.Alerts = &AlertsConfig{Webhook: " https://hooks.example/x ", Rules: map[string]AlertRule{"cpu_high": {Enabled: &on}}}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if dc.NTP.Alerts.Webhook != "https://hooks.example/x" {
+		t.Fatalf("webhook %q", dc.NTP.Alerts.Webhook)
+	}
+	// nothing set: no block in the file
+	dc.NTP.Alerts = &AlertsConfig{}
+	if err := dc.Validate(); err != nil || dc.NTP.Alerts != nil {
+		t.Fatalf("an empty block should go away: %v %+v", err, dc.NTP.Alerts)
+	}
+	// defaults
+	d, _ := alertDefByID("not_synchronised")
+	if v := (*AlertsConfig)(nil).rule(d); !v.Enabled || v.Mode != "minutes" || v.After != 10 {
+		t.Fatalf("not_synchronised defaults: %+v", v)
+	}
+	d, _ = alertDefByID("stratum_high")
+	if v := (*AlertsConfig)(nil).rule(d); v.Enabled {
+		t.Fatalf("stratum_high should be off by default: %+v", v)
+	}
+	body := string(alertWebhookBody("resolved", Alert{Title: "T", Severity: "warning", Message: "m", Opened: 10, Closed: 70, Resolution: "cleared"}, "n1"))
+	if !strings.Contains(body, `"duration_seconds":60`) || !strings.Contains(body, "RESOLVED") {
+		t.Fatalf("webhook body %s", body)
+	}
+}
+
+// The NTP rules read chrony and the upstream servers.
+func TestAlertNTPSamples(t *testing.T) {
+	dc := newDaemonConfig()
+	dc.Groups = nil
+	e := &AlertEngine{st: &StatusServer{sup: NewSupervisor(context.Background(), dc)}}
+	e.cfg = func() *AlertsConfig { return nil }
+	old := chronyNow
+	defer func() { chronyNow = old }()
+	rules := func() map[string]alertSample {
+		m := map[string]alertSample{}
+		for _, s := range e.sampleNode(time.Now()) {
+			m[s.Rule] = s
+		}
+		return m
+	}
+	chronyNow = func() ChronyState { return ChronyState{} }
+	if s := rules()["chrony_down"]; !s.Bad {
+		t.Fatalf("chrony not running should be bad: %+v", s)
+	}
+	chronyNow = func() ChronyState {
+		return ChronyState{Running: true, Synced: false, Sources: []ChronySrc{{Name: "a", Reach: 0}}}
+	}
+	m := rules()
+	if m["chrony_down"].Bad || !m["not_synchronised"].Bad || !m["no_reachable_source"].Bad {
+		t.Fatalf("running but unsynchronised and no source answers: %+v", m)
+	}
+	if _, ok := m["clock_offset"]; ok {
+		t.Fatal("no offset rule while the clock is not synchronised")
+	}
+	chronyNow = func() ChronyState {
+		return ChronyState{Running: true, Synced: true, Stratum: 3, OffsetMS: -250, Sources: []ChronySrc{{Name: "a", Reach: 7, State: "*"}}}
+	}
+	m = rules()
+	if m["not_synchronised"].Bad || m["no_reachable_source"].Bad || !m["clock_offset"].Bad || m["clock_offset"].Value != 250 || m["stratum_high"].Bad {
+		t.Fatalf("synchronised, 250 ms off: %+v", m)
 	}
 }
 
@@ -122,5 +350,59 @@ func TestAlertViewOrderStableForSameSecond(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("view %d: order %v, want %v", i, got, want)
 		}
+	}
+}
+
+// A fallback server that does not answer opens its own alert (after the failure threshold), while the
+// "upstream down" rule never looks at it.
+func TestAlertFallbackNotAnswering(t *testing.T) {
+	a, fb := newFakeNTP(t), newFakeNTP(t)
+	cfg := fbCfg([]string{a.addr}, []string{fb.addr})
+	p := NewPool(cfg)
+	dc := newDaemonConfig()
+	dc.Groups = nil
+	sup := NewSupervisor(context.Background(), dc)
+	sup.pools = map[int]*Pool{0: p}
+	e := &AlertEngine{st: &StatusServer{sup: sup}}
+	e.cfg = func() *AlertsConfig { return nil }
+	old := chronyNow
+	defer func() { chronyNow = old }()
+	chronyNow = func() ChronyState {
+		return ChronyState{Running: true, Synced: true, Sources: []ChronySrc{{Name: "a", Reach: 7}}}
+	}
+	bad := func() (fallbackDown, upstreamDown bool, n int) {
+		for _, s := range e.sampleNode(time.Now()) {
+			switch s.Rule {
+			case "fallback_down":
+				fallbackDown, n = s.Bad, n+1
+			case "upstream_down":
+				upstreamDown = upstreamDown || (s.Bad && strings.Contains(s.Subject, fb.addr))
+			}
+		}
+		return
+	}
+	if _, _, n := bad(); n != 0 {
+		t.Fatal("no verdict on a fallback before its first probe")
+	}
+	p.ProbeNow(context.Background())
+	if d, _, n := bad(); n != 1 || d {
+		t.Fatalf("an answering fallback: down=%v samples=%d", d, n)
+	}
+	fb.mode.Store(fakeKoD)
+	p.ProbeNow(context.Background()) // one failure: under the threshold
+	if d, _, _ := bad(); d && cfg.FailThreshold > 1 {
+		t.Fatal("one failed round is under the threshold")
+	}
+	for i := 0; i < cfg.FailThreshold; i++ {
+		p.ProbeNow(context.Background())
+	}
+	d, u, _ := bad()
+	if !d || u {
+		t.Fatalf("a silent fallback: fallback_down=%v upstream_down(fallback)=%v", d, u)
+	}
+	fb.mode.Store(0)
+	p.ProbeNow(context.Background())
+	if d, _, _ := bad(); d {
+		t.Fatal("the alert must clear once the fallback answers")
 	}
 }

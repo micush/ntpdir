@@ -17,6 +17,36 @@ import (
 	"time"
 )
 
+func FuzzNTPAndChronyParsers(f *testing.F) {
+	req := buildNTPRequest(0x1122334455667788)
+	f.Add(req, req)
+	f.Add(make([]byte, 48), make([]byte, 100))
+	f.Add([]byte("A9FE0101,ntp1,2,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.01,64.0,Normal\n^,*,10.0.0.1,2,6,377,12,0.0,0.0,0.0\n"), []byte("127.0.0.9,-,0,0,0,4294967295,0,0,0,0\n1.2.3.4,x,1,2\n"))
+	f.Fuzz(func(t *testing.T, a, b []byte) {
+		t0 := time.Now()
+		defer func() {
+			if d := time.Since(t0); d > 2*time.Second {
+				t.Fatalf("slow input: %v", d)
+			}
+		}()
+		if p, ok := parseNTP(a); ok {
+			refIDString(p.Stratum, p.RefID)
+			ntpToTime(p.Xmit)
+			ntpToTime(p.Orig)
+		}
+		ntpMode(a)
+		ntpAnswers(a, b)
+		ntpAnswers(b, a)
+		kodCode(a)
+		parseTracking(a)
+		parseSources(a)
+		parseClients(a)
+		parseAuthdata(b)
+		parseServerAuth([]string{string(a), string(b)}, nil)
+		parseServerAuth([]string{string(a)}, map[uint32]bool{1: true})
+	})
+}
+
 func FuzzEngineAndFrames(f *testing.F) {
 	e0 := newTestEngine()
 	for _, ip := range []string{"10.0.0.9"} {

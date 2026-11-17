@@ -1,6 +1,6 @@
 package main
 
-// Backups between the nodes of a cluster (Configure ▸ Backup ▸ Use the cluster nodes, netdir --backup-cluster).
+// Backups between the nodes of a cluster (Configure ▸ Backup ▸ Use the cluster nodes, ntpdir --backup-cluster).
 //
 // A node can keep the backups of the others.  Setting that up by hand means an account, a password, a directory and the keys
 // of every node, on every node.  One operation does it instead: every node makes itself a local account (backupAccount,
@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	backupAccount    = "netdirbackup"
+	backupAccount    = "ntpdirbackup"
 	backupClusterDir = "backups"
 	// what a key of a node may do with the account: file transfer, and nothing else
 	backupKeyOptions = `restrict,command="internal-sftp"`
@@ -62,7 +62,7 @@ func backupProvisionLocal(keys []string) (created bool, added int, err error) {
 			return false, 0, fmt.Errorf("looking up the account %s: %v", backupAccount, err)
 		}
 		// "*" as the password: no password opens it, and it is not locked (sshd refuses a locked account without PAM)
-		if out, rerr := usersRun("", "useradd", "--create-home", "--shell", "/bin/sh", "--password", "*", "--comment", "netdir backups", backupAccount); rerr != nil {
+		if out, rerr := usersRun("", "useradd", "--create-home", "--shell", "/bin/sh", "--password", "*", "--comment", "ntpdir backups", backupAccount); rerr != nil {
 			return false, 0, fmt.Errorf("useradd failed: %s", firstNonEmpty(out, rerr.Error()))
 		}
 		created = true
@@ -213,7 +213,7 @@ func (m *Mgmt) BackupCluster(actor string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	bc := dc.Settings.Backup.clone()
+	bc := dc.NTP.Backup.clone()
 	if bc == nil {
 		bc = &BackupConfig{}
 	}
@@ -239,7 +239,7 @@ func (m *Mgmt) BackupCluster(actor string) (map[string]any, error) {
 		}
 	}
 	if added > 0 {
-		dc.Settings.Backup = bc
+		dc.NTP.Backup = bc
 		if err := m.PutConfig(dc, actor, fmt.Sprintf("backup: %d cluster node(s) added as servers", added)); err != nil {
 			return nil, fmt.Errorf("the nodes are set up, but the list of servers could not be saved: %w", err)
 		}
@@ -258,7 +258,7 @@ func (m *Mgmt) BackupCluster(actor string) (map[string]any, error) {
 	return map[string]any{"ok": nfail == 0, "nodes": results, "added": added, "failed": nfail, "full": full, "targets": targets}, nil
 }
 
-// runBackupCluster is `netdir --backup-cluster`.
+// runBackupCluster is `ntpdir --backup-cluster`.
 func runBackupCluster(sock string) {
 	var v struct {
 		Nodes  []backupNodeResult `json:"nodes"`

@@ -30,7 +30,7 @@ func helpTopics(t *testing.T) map[string]string {
 }
 
 // The help topics every page, tab and sub-tab must have: the sidebar's pages, with the tabs of
-// Configure ▸ Settings, Monitoring and Users, each its own panel.
+// Configure ▸ NTP and Users, each its own panel.
 func expectedHelpTopics(sidebar []string) []string {
 	var want []string
 	for _, id := range sidebar {
@@ -52,13 +52,9 @@ func expectedHelpTopics(sidebar []string) []string {
 		case "cfg_backup":
 			want = append(want, "config_backup")
 		case "cfg_monitoring":
-			want = append(want, "config_snmp", "config_metrics")
-		case "cfg_mcp":
-			want = append(want, "config_mcp")
-		case "cfg_privacy":
-			want = append(want, "config_privacy")
-		case "cfg_devices":
-			want = append(want, "config_devices", "config_logins", "config_checks", "config_tags")
+			want = append(want, "config_snmp", "config_metrics", "config_mcp")
+		case "cfg_ntp":
+			want = append(want, "config_ntp0", "config_ntp1", "config_ntp2", "config_ntp3", "config_ntp4")
 		case "cfg_web":
 			want = append(want, "config_web")
 		default:
@@ -114,7 +110,7 @@ func TestEveryPageHasHelp(t *testing.T) {
 		t.Fatal("app.js does not choose the help panel by tab")
 	}
 	fn := app[at : at+strings.Index(app[at:], "function refreshHelp()")]
-	for _, frag := range []string{"config_logs", "config_upgrades", "config_groups", "config_web", "config_snmp", "config_metrics", "config_mcp", "config_cluster", "config_devices", "config_logins", "config_checks", "config_tags", "anycast_", "users_local", "users_sso", "users_ldap"} {
+	for _, frag := range []string{"config_logs", "config_upgrades", "config_groups", "config_web", "config_snmp", "config_metrics", "config_mcp", "config_cluster", "config_ntp", "anycast_", "users_local", "users_sso", "users_ldap"} {
 		if !strings.Contains(fn, frag) {
 			t.Errorf("helpTopicKey does not choose %s panels", frag)
 		}
@@ -148,7 +144,7 @@ func TestHelpPanelsFollowTheLayout(t *testing.T) {
 
 func TestHelpScriptServedAndOldEndpointGone(t *testing.T) {
 	e := newWebEnv(t)
-	if r := e.do("GET", "/help.js", nil); r.code != 200 || !strings.Contains(string(r.raw), "NETDIR_HELP") {
+	if r := e.do("GET", "/help.js", nil); r.code != 200 || !strings.Contains(string(r.raw), "NTPDIR_HELP") {
 		t.Fatalf("help.js: %d", r.code)
 	}
 	e.login("alice", "pw")

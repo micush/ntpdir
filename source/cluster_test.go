@@ -5,10 +5,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"net"
-	"netdir/device"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,7 +37,7 @@ func freeAddr(t *testing.T) string {
 func newTNode(t *testing.T, name string) *tnode {
 	t.Helper()
 	d := t.TempDir()
-	n := &tnode{t: t, name: name, dir: d, conf: filepath.Join(d, "etc", "netdir.conf"), addr: freeAddr(t)}
+	n := &tnode{t: t, name: name, dir: d, conf: filepath.Join(d, "etc", "ntpdir.conf"), addr: freeAddr(t)}
 	dc := newDaemonConfig()
 	dc.Groups[0].GroupID = 1
 	dc.Cluster.Listen, dc.Cluster.Self, dc.Cluster.SyncIntervalSec = n.addr, n.addr, 1
@@ -124,6 +123,131 @@ func hasPeer(n *tnode, addr string) bool {
 	return false
 }
 
+func TestClusterJoinSyncPromote(t *testing.T) {
+	failDelay = 0
+	a, b := newTNode(t, "A"), newTNode(t, "B")
+
+	if s := a.mg.cl.Snapshot(); s.Role != RolePrimary || s.Epoch != 1 {
+		t.Fatalf("a fresh node is a primary at epoch 1: %+v", s)
+	}
+	// seed distinct local settings
+	bc := b.cfg()
+	bc.Groups[0].Priority = 50
+	bc.Groups[0].Interface = "lo"
+	bc.save(b.conf)
+	b.mg.reloadFn()
+
+	a.join2(t, b)
+	if s := b.mg.cl.Snapshot(); s.Role != RoleReplica || s.PrimaryAddr != a.addr {
+		t.Fatalf("B must be a replica of A: %+v", s)
+	}
+	if !hasPeer(a, b.addr) {
+		t.Fatal("A must know B after the join")
+	}
+	// a node that already belongs to a cluster can't join another
+	code, _, _ := a.mg.cl.MintJoinCode("t")
+	if err := b.mg.cl.Join(context.Background(), code, "t"); err != ErrNotJoinable {
+		t.Fatalf("second join: %v", err)
+	}
+
+	// shared settings flow from the primary; local ones stay
+	ac := a.cfg()
+	ac.NTP.Servers = []string{"10.1.1.1", "10.1.1.2"}
+	ac.Groups[0].Key = "cluster-key"
+	ac.Groups[0].Priority = 200 // local to A
+	if err := a.mg.PutConfig(ac, "alice", "set upstreams"); err != nil {
+		t.Fatal(err)
+	}
+	b.sync()
+	got := b.cfg()
+	if got.Groups[0].Key != "cluster-key" || len(got.NTP.Servers) != 2 {
+		t.Fatalf("shared settings not replicated: %+v", got.Groups[0])
+	}
+	if got.Groups[0].Priority != 50 {
+		t.Fatalf("local priority must not be overwritten: %d", got.Groups[0].Priority)
+	}
+	vl := b.mg.VersionsList()
+	if len(vl) == 0 || vl[0].Actor != "cluster sync" {
+		t.Fatalf("the synced change must be recorded in B's history: %+v", vl)
+	}
+
+	// a replica's edit of shared settings goes through the primary
+	bc = b.cfg()
+	bc.Groups[0].HelloMS = 400
+	bc.Groups[0].Priority = 60
+	if err := b.mg.PutConfig(bc, "bob", ""); err != nil {
+		t.Fatal(err)
+	}
+	if a.cfg().Groups[0].HelloMS != 400 {
+		t.Fatal("the primary must have accepted the forwarded shared change")
+	}
+	if a.cfg().Groups[0].Priority != 200 {
+		t.Fatal("a replica's local field must not leak to the primary")
+	}
+	// an invalid shared change is refused by the primary and leaves B untouched
+	bc = b.cfg()
+	bc.Groups[0].HelloMS = 400
+	bc.NTP.Servers = []string{"not an ip!"}
+	before := b.cfg().NTP.Servers
+	if err := b.mg.PutConfig(bc, "bob", ""); err == nil {
+		t.Fatal("invalid dns server must be refused")
+	}
+	if strings.Join(b.cfg().NTP.Servers, ",") != strings.Join(before, ",") {
+		t.Fatal("a refused change must not be saved locally")
+	}
+
+	// third node joins through the replica B
+	c := newTNode(t, "C")
+	c.join(b)
+	c.sync()
+	if c.cfg().Groups[0].Key != "cluster-key" {
+		t.Fatal("C must pull the shared settings from the primary")
+	}
+	a.sync()
+	b.sync()
+	for _, pair := range [][2]*tnode{{a, c}, {b, c}, {c, a}, {c, b}, {a, b}, {b, a}} {
+		if !hasPeer(pair[0], pair[1].addr) {
+			t.Errorf("%s should know %s after gossip", pair[0].name, pair[1].name)
+		}
+	}
+
+	// promote B: epoch bump, everyone follows
+	if _, err := b.mg.cl.Promote("admin"); err != nil {
+		t.Fatal(err)
+	}
+	a.sync()
+	c.sync()
+	for _, n := range []*tnode{a, b, c} {
+		s := n.mg.cl.Snapshot()
+		if s.Epoch != 2 || s.PrimaryAddr != b.addr {
+			t.Errorf("%s: want epoch 2 / primary B, got %+v", n.name, s)
+		}
+	}
+	if a.mg.cl.Snapshot().Role != RoleReplica || b.mg.cl.Snapshot().Role != RolePrimary {
+		t.Error("roles after promotion")
+	}
+	// stale announce is rejected
+	if err := a.mg.cl.node.CheckEpoch(1); err != ErrStaleEpoch {
+		t.Errorf("stale epoch: %v", err)
+	}
+
+	// removing a member: it resets itself on its next sync
+	if err := b.mg.cl.RemovePeer(c.addr, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if hasPeer(b, c.addr) {
+		t.Fatal("removed peer still listed")
+	}
+	c.mg.cl.SyncOnce(context.Background())
+	if s := c.mg.cl.Snapshot(); s.Role != RolePrimary || len(s.Peers) != 0 || s.Epoch != 1 {
+		t.Fatalf("removed node must reset to a single-node cluster: %+v", s)
+	}
+	b.sync()
+	if hasPeer(b, c.addr) {
+		t.Fatal("a removed peer must not be re-added by gossip")
+	}
+}
+
 // join2 makes `via` (an untouched node) join this node's cluster.
 func (n *tnode) join2(t *testing.T, via *tnode) { t.Helper(); via.join(n); via.sync() }
 
@@ -165,7 +289,7 @@ func TestClusterAuthRejections(t *testing.T) {
 		t.Fatal("an unauthenticated caller must not be learned as a peer")
 	}
 	// garbage join code
-	if _, err := decodeJoinCode("netdir-join-v1:!!!"); err == nil {
+	if _, err := decodeJoinCode("ntpdir-join-v1:!!!"); err == nil {
 		t.Error("damaged code")
 	}
 	if _, err := decodeJoinCode("hello"); err == nil {
@@ -216,9 +340,9 @@ func TestClusterCertificateReplication(t *testing.T) {
 func fakeSourceTarball(t *testing.T, ver string) []byte {
 	t.Helper()
 	files := []srcFile{
-		{"netdir/source/go.mod", []byte("module netdir\n\ngo 1.24\n"), 0o644},
-		{"netdir/source/main.go", []byte("package main\nfunc main(){}\n"), 0o644},
-		{"netdir/source/VERSION", []byte(ver + "\n"), 0o644},
+		{"ntpdir/source/go.mod", []byte("module ntpdir\n\ngo 1.24\n"), 0o644},
+		{"ntpdir/source/main.go", []byte("package main\nfunc main(){}\n"), 0o644},
+		{"ntpdir/source/VERSION", []byte(ver + "\n"), 0o644},
 	}
 	return makeTgz(t, files)
 }
@@ -404,7 +528,7 @@ func TestGatewayStates(t *testing.T) {
 	dc := newDaemonConfig()
 	dc.Groups = []GroupConfig{g1, g2, g3}
 	rows := []SnapshotRow{
-		{GroupID: 1, AF: "v4", Local: true, State: "forward", ServiceUp: true},
+		{GroupID: 1, AF: "v4", Local: true, State: "forward", NTPUp: true},
 		{GroupID: 2, AF: "v4", Local: true, State: "active"},
 		{GroupID: 2, AF: "v6", Local: true, State: "speak"}, // v6 not yet elected
 		{GroupID: 1, AF: "v4", Local: false, State: "active"},
@@ -413,7 +537,7 @@ func TestGatewayStates(t *testing.T) {
 	if len(got) != 2 || got[0].GroupID != 1 || !got[0].Serving || got[1].GroupID != 2 || got[1].Serving {
 		t.Fatalf("gateway states (paused left out, dual-stack needs both, NTP must be up): %+v", got)
 	}
-	rows[0].ServiceUp = false
+	rows[0].NTPUp = false
 	if gatewayStates(dc, rows)[0].Serving {
 		t.Fatal("a gateway whose DNS listener is down is not serving")
 	}
@@ -499,6 +623,43 @@ func TestRollingUpdateWithPausedNodes(t *testing.T) {
 	}
 	if ok, why := active.mg.updateSafe(); ok || why == "" {
 		t.Fatalf("the only serving node must keep waiting: %v %q", ok, why)
+	}
+}
+
+// A gateway's statistics add up the history of every reachable node: over the real signed cluster call, two nodes of one
+// process (so they share the one history) count it twice, and a node that cannot be reached is reported, not hidden.
+func TestClusterGatewayStatsAddUpNodes(t *testing.T) {
+	failDelay = 0
+	a, b := newTNode(t, "A"), newTNode(t, "B")
+	a.join2(t, b)
+	a.sync()
+	b.sync()
+	key := gwKey(9992)
+	for i := 0; i < 5; i++ {
+		srvhist.series(key).addOK()
+	}
+	now := time.Now()
+	r, err := a.mg.cl.clusterStats(key, now.Add(-time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Nodes != 2 || r.NodesOff != 0 || r.Answered != 10 || !r.Known {
+		t.Fatalf("two nodes: nodes %d off %d answered %d known %v", r.Nodes, r.NodesOff, r.Answered, r.Known)
+	}
+	// through the operation the web page and the CLI use
+	res, err := a.mg.Op("ntp.serverstats", json.RawMessage(`{"addr":"`+key+`","from":"1h"}`), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.(ServerStatsResult); got.Nodes != 2 || got.Answered != 10 {
+		t.Fatalf("op: %+v", got)
+	}
+	// B goes away: A still answers, with one node, and says one did not answer
+	b.mg.cl.Stop()
+	a.sync()
+	r, err = a.mg.cl.clusterStats(key, now.Add(-time.Hour), now)
+	if err != nil || r.Nodes != 1 || r.NodesOff != 1 || r.Answered != 5 {
+		t.Fatalf("one node gone: %+v %v", r, err)
 	}
 }
 
@@ -832,6 +993,35 @@ func TestHandOverPrimary(t *testing.T) {
 	}
 }
 
+// A server's statistics count the nodes that have a history of it (in one process the two nodes share the one history, so
+// both count), and a node with none of its own is not counted.
+func TestClusterServerStatsCountNodesWithHistory(t *testing.T) {
+	failDelay = 0
+	a, b := newTNode(t, "A"), newTNode(t, "B")
+	a.join2(t, b)
+	a.sync()
+	b.sync()
+	key := "192.0.2.77:123"
+	for i := 0; i < 4; i++ {
+		srvhist.series(key).addPrOK()
+	}
+	now := time.Now()
+	r, err := a.mg.cl.clusterStats(key, now.Add(-time.Hour), now)
+	if err != nil || !r.Known || r.Nodes != 2 || r.NodesOff != 0 {
+		t.Fatalf("two nodes with history: %+v %v", r, err)
+	}
+	none := "192.0.2.78:123"
+	r, err = a.mg.cl.clusterStats(none, now.Add(-time.Hour), now)
+	if err != nil || r.Known || r.Nodes != 0 {
+		t.Fatalf("nobody has it: %+v %v", r, err)
+	}
+	// the operation does not mark a server this node has itself as coming from the cluster
+	res, err := a.mg.Op("ntp.serverstats", json.RawMessage(`{"addr":"`+key+`","from":"1h"}`), "t")
+	if err != nil || res.(ServerStatsResult).ViaCluster || !res.(ServerStatsResult).Known {
+		t.Fatalf("op: %+v %v", res, err)
+	}
+}
+
 // Delete drops a member for good and keeps no block on its address on any node; an address that is only on the removed list
 // (put there by Remove) is cleared by it.
 func TestClusterDeletePeerLeavesNothing(t *testing.T) {
@@ -930,173 +1120,6 @@ func TestUpdaterHoldsSource(t *testing.T) {
 	u.ReleaseSource()
 	if u.OfferedSource() != "10" {
 		t.Fatal("released")
-	}
-}
-
-func TestClusterJoinSyncPromote(t *testing.T) {
-	failDelay = 0
-	a, b := newTNode(t, "A"), newTNode(t, "B")
-
-	if s := a.mg.cl.Snapshot(); s.Role != RolePrimary || s.Epoch != 1 {
-		t.Fatalf("a fresh node is a primary at epoch 1: %+v", s)
-	}
-	// seed distinct local settings
-	bc := b.cfg()
-	bc.Groups[0].Priority = 50
-	bc.Groups[0].Interface = "lo"
-	bc.save(b.conf)
-	b.mg.reloadFn()
-
-	a.join2(t, b)
-	if s := b.mg.cl.Snapshot(); s.Role != RoleReplica || s.PrimaryAddr != a.addr {
-		t.Fatalf("B must be a replica of A: %+v", s)
-	}
-	if !hasPeer(a, b.addr) {
-		t.Fatal("A must know B after the join")
-	}
-	// a node that already belongs to a cluster can't join another
-	code, _, _ := a.mg.cl.MintJoinCode("t")
-	if err := b.mg.cl.Join(context.Background(), code, "t"); err != ErrNotJoinable {
-		t.Fatalf("second join: %v", err)
-	}
-
-	// shared settings flow from the primary; local ones stay
-	ac := a.cfg()
-	ac.Settings.MetricsACL = []string{"10.1.1.1", "10.1.1.2"}
-	ac.Groups[0].Key = "cluster-key"
-	ac.Groups[0].Priority = 200 // local to A
-	if err := a.mg.PutConfig(ac, "alice", "set the metrics access list"); err != nil {
-		t.Fatal(err)
-	}
-	b.sync()
-	got := b.cfg()
-	if got.Groups[0].Key != "cluster-key" || len(got.Settings.MetricsACL) != 2 {
-		t.Fatalf("shared settings not replicated: %+v", got.Groups[0])
-	}
-	if got.Groups[0].Priority != 50 {
-		t.Fatalf("local priority must not be overwritten: %d", got.Groups[0].Priority)
-	}
-	vl := b.mg.VersionsList()
-	if len(vl) == 0 || vl[0].Actor != "cluster sync" {
-		t.Fatalf("the synced change must be recorded in B's history: %+v", vl)
-	}
-
-	// a replica's edit of shared settings goes through the primary
-	bc = b.cfg()
-	bc.Groups[0].HelloMS = 400
-	bc.Groups[0].Priority = 60
-	if err := b.mg.PutConfig(bc, "bob", ""); err != nil {
-		t.Fatal(err)
-	}
-	if a.cfg().Groups[0].HelloMS != 400 {
-		t.Fatal("the primary must have accepted the forwarded shared change")
-	}
-	if a.cfg().Groups[0].Priority != 200 {
-		t.Fatal("a replica's local field must not leak to the primary")
-	}
-	// a replica whose copy is behind the primary's (an import made on the primary, not yet synced) must not overwrite it: the primary
-	// checks the page's base too
-	stale := configBase(b.cfg())
-	pc := a.cfg()
-	pc.Groups[0].HelloMS = 450
-	if err := a.mg.PutConfig(pc, "carol", "import"); err != nil {
-		t.Fatal(err)
-	}
-	bc = b.cfg()
-	bc.Groups[0].HelloMS = 500
-	if err := b.mg.PutConfigBase(bc, "bob", "", stale); !errors.Is(err, ErrConfigChanged) {
-		t.Fatalf("a replica's save over a newer primary: %v", err)
-	}
-	if a.cfg().Groups[0].HelloMS != 450 {
-		t.Fatal("the stale replica save changed the primary")
-	}
-	b.sync()
-	// devices imported (added to the inventory, on no gateway) and then one assigned to a gateway, from the replica: all stay
-	{
-		bc = b.cfg()
-		for _, n := range []string{"imp1", "imp2", "imp3"} {
-			bc.Settings.Devices = append(bc.Settings.Devices, device.Device{Name: n, Platform: "tools", Address: "localhost", Disabled: true})
-			attachDevices(bc)
-		}
-		if err := b.mg.PutConfigBase(bc, "bob", "import", configBase(b.cfg())); err != nil {
-			t.Fatal(err)
-		}
-		a.sync()
-		b.sync()
-		bc = b.cfg()
-		bc.Groups[0].Devices = []string{"imp1"}
-		if err := b.mg.PutConfigBase(bc, "bob", "Topology", configBase(b.cfg())); err != nil {
-			t.Fatal(err)
-		}
-		a.sync()
-		b.sync()
-		for _, n := range []*tnode{a, b} {
-			if got := len(n.cfg().Settings.Devices); got != 3 {
-				t.Errorf("%s has %d devices after assigning one, want 3", n.name, got)
-			}
-		}
-	}
-	// an invalid shared change is refused by the primary and leaves B untouched
-	bc = b.cfg()
-	bc.Groups[0].HelloMS = 400
-	bc.Settings.MetricsACL = []string{"not an ip!"}
-	before := b.cfg().Settings.MetricsACL
-	if err := b.mg.PutConfig(bc, "bob", ""); err == nil {
-		t.Fatal("an invalid access list must be refused")
-	}
-	if strings.Join(b.cfg().Settings.MetricsACL, ",") != strings.Join(before, ",") {
-		t.Fatal("a refused change must not be saved locally")
-	}
-
-	// third node joins through the replica B
-	c := newTNode(t, "C")
-	c.join(b)
-	c.sync()
-	if c.cfg().Groups[0].Key != "cluster-key" {
-		t.Fatal("C must pull the shared settings from the primary")
-	}
-	a.sync()
-	b.sync()
-	for _, pair := range [][2]*tnode{{a, c}, {b, c}, {c, a}, {c, b}, {a, b}, {b, a}} {
-		if !hasPeer(pair[0], pair[1].addr) {
-			t.Errorf("%s should know %s after gossip", pair[0].name, pair[1].name)
-		}
-	}
-
-	// promote B: epoch bump, everyone follows
-	if _, err := b.mg.cl.Promote("admin"); err != nil {
-		t.Fatal(err)
-	}
-	a.sync()
-	c.sync()
-	for _, n := range []*tnode{a, b, c} {
-		s := n.mg.cl.Snapshot()
-		if s.Epoch != 2 || s.PrimaryAddr != b.addr {
-			t.Errorf("%s: want epoch 2 / primary B, got %+v", n.name, s)
-		}
-	}
-	if a.mg.cl.Snapshot().Role != RoleReplica || b.mg.cl.Snapshot().Role != RolePrimary {
-		t.Error("roles after promotion")
-	}
-	// stale announce is rejected
-	if err := a.mg.cl.node.CheckEpoch(1); err != ErrStaleEpoch {
-		t.Errorf("stale epoch: %v", err)
-	}
-
-	// removing a member: it resets itself on its next sync
-	if err := b.mg.cl.RemovePeer(c.addr, "admin"); err != nil {
-		t.Fatal(err)
-	}
-	if hasPeer(b, c.addr) {
-		t.Fatal("removed peer still listed")
-	}
-	c.mg.cl.SyncOnce(context.Background())
-	if s := c.mg.cl.Snapshot(); s.Role != RolePrimary || len(s.Peers) != 0 || s.Epoch != 1 {
-		t.Fatalf("removed node must reset to a single-node cluster: %+v", s)
-	}
-	b.sync()
-	if hasPeer(b, c.addr) {
-		t.Fatal("a removed peer must not be re-added by gossip")
 	}
 }
 

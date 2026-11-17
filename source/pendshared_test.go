@@ -14,16 +14,16 @@ func TestReplicaIgnoresOlderSharedStateAfterItsOwnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh := sharedOf(cur)
-	sh.Settings.LLDP = true // what the primary will have after the change
+	sh.NTP.LeapSmear = true // what the primary will have after the change
 	old := sharedOf(cur)
 
 	e.mg.pendShared.rev, e.mg.pendShared.until = 7, time.Now().Add(time.Minute)
 	e.mg.applyClusterShared(old, nil, 6, "primary") // still the old state, one revision behind
-	if got, _, _ := e.mg.LiveConfig(); got.Settings.LLDP || e.mg.pendShared.rev != 7 {
+	if got, _, _ := e.mg.LiveConfig(); got.NTP.LeapSmear || e.mg.pendShared.rev != 7 {
 		t.Fatal("an older state was applied, or the wait ended early")
 	}
 	e.mg.applyClusterShared(sh, nil, 7, "primary") // the state with the change
-	if got, _, _ := e.mg.LiveConfig(); !got.Settings.LLDP {
+	if got, _, _ := e.mg.LiveConfig(); !got.NTP.LeapSmear {
 		t.Fatal("the new state was not applied")
 	}
 	if e.mg.pendShared.rev != 0 {
@@ -32,7 +32,7 @@ func TestReplicaIgnoresOlderSharedStateAfterItsOwnChange(t *testing.T) {
 	// the wait does not last for ever
 	e.mg.pendShared.rev, e.mg.pendShared.until = 9, time.Now().Add(-time.Second)
 	e.mg.applyClusterShared(old, nil, 8, "primary")
-	if got, _, _ := e.mg.LiveConfig(); got.Settings.LLDP {
+	if got, _, _ := e.mg.LiveConfig(); got.NTP.LeapSmear {
 		t.Fatal("after the wait an older state must apply again")
 	}
 }

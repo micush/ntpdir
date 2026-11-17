@@ -15,13 +15,14 @@ import (
 // A gateway may carry extra addresses of any subnet (GroupConfig.ExtraVIPs).
 // Unlike the shared address they take no part in the election and are not
 // checked against the interface: every node that runs the gateway holds them on
-// the loopback interface and answers on them (the MCP endpoint and the GUI), so a
-// routing daemon (FRR, BIRD) can announce them from every node.
+// the loopback interface and answers NTP on them, so a routing daemon (FRR,
+// BIRD) can announce them from every node.
 //
 // An address is held only while this node can really answer on it: the gateway
-// is running and its web listener is serving (health.go).  Otherwise it is removed from lo and the routing daemon withdraws
-// the route.  The address is added with a short lifetime that netdir keeps
-// renewing, so if netdir crashes or hangs the kernel removes it by itself within
+// is running, its NTP listener is up and its pool has at least one healthy
+// upstream.  Otherwise it is removed from lo and the routing daemon withdraws
+// the route.  The address is added with a short lifetime that ntpdir keeps
+// renewing, so if ntpdir crashes or hangs the kernel removes it by itself within
 // anycastLife seconds and the route is withdrawn rather than black-holing
 // queries.
 
@@ -61,8 +62,8 @@ var anycastDelFn = func(addr string) {
 type AnycastState struct {
 	Addr string `json:"addr"`
 	Up   bool   `json:"up"` // currently on lo (announced by the routing daemon)
-	// External marks a dnsdir address (GroupConfig.DNSDirVIPs): dnsdir holds and announces it, netdir only answers on it.
-	// Up then means netdir is listening and dnsdir has it on lo now.
+	// External marks a dnsdir address (GroupConfig.DNSDirVIPs): dnsdir holds and announces it, ntpdir only answers on it.
+	// Up then means ntpdir is listening and dnsdir has it on lo now.
 	External bool    `json:"external,omitempty"`
 	Reason   string  `json:"reason,omitempty"` // why it is not, when it is not
 	Paused   string  `json:"paused,omitempty"` // "node" (paused on this node) or "all" (paused on every node), when it is
@@ -76,14 +77,15 @@ type AnycastState struct {
 	Carried []int `json:"carried,omitempty"`
 }
 
-// anycastClaim is one gateway's say about an anycast address: whether it can answer on it now.
+// anycastClaim is one gateway's say about an anycast address: its pool, and whether it can answer on it now.
 type anycastClaim struct {
+	pool func() *Pool
 	want bool
 }
 
 // The same anycast address may be carried by several gateways (every site of an anycast service announces the same
 // address).  They share one listener and one lo entry per address: the address is on lo while ANY gateway carrying it can
-// answer.
+// answer, and the listener answers from the pool of the first (lowest group number) gateway that can.
 var anycastReg = struct {
 	sync.Mutex
 	claims map[string]map[int]*anycastClaim
@@ -95,6 +97,32 @@ func resetAnycast() {
 	anycastReg.Lock()
 	defer anycastReg.Unlock()
 	anycastReg.claims, anycastReg.onLo = map[string]map[int]*anycastClaim{}, map[string]bool{}
+}
+
+// anycastPool is the pool that answers on addr: the first gateway that can answer, else the first one carrying it.
+func anycastPool(addr string) *Pool {
+	anycastReg.Lock()
+	cl := anycastReg.claims[addr]
+	ids := make([]int, 0, len(cl))
+	for id := range cl {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	var pick func() *Pool
+	for _, id := range ids {
+		if pick == nil {
+			pick = cl[id].pool
+		}
+		if cl[id].want {
+			pick = cl[id].pool
+			break
+		}
+	}
+	anycastReg.Unlock()
+	if pick == nil {
+		return nil
+	}
+	return pick()
 }
 
 // carriers lists the other gateways that can answer on addr (registry locked).
@@ -121,6 +149,7 @@ func anyWantLocked(addr string) bool {
 type anycastSet struct {
 	gid   int
 	addrs []string
+	pool  func() *Pool
 	// paused says per address where its announcing is paused ("node" or "all"); nil means none
 	paused func() map[string]string
 	// bgp returns the node's BGP settings; ok false (or a nil hook) turns the gate off.  An address is only held while
@@ -129,7 +158,7 @@ type anycastSet struct {
 	// ospf returns the node's OSPF settings; nil (or a nil hook) means OSPF carries nothing.  OSPF is the other way an
 	// address is carried: it is held while BGP or OSPF can carry it.
 	ospf func() *OSPFConfig
-	// ext are the addresses that belong to dnsdir: netdir listens on them while dnsdir is installed and announces
+	// ext are the addresses that belong to dnsdir: ntpdir listens on them while dnsdir is installed and announces
 	// them, and never touches lo for them (see stepExternal)
 	ext map[string]bool
 	// extOK: dnsdir is installed and announces this dnsdir address (set by stepExternal)
@@ -143,8 +172,8 @@ type anycastSet struct {
 	done   chan struct{}
 }
 
-func newAnycastSet(gid int, addrs []string) *anycastSet {
-	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), reason: map[string]string{}, ext: map[string]bool{}, extOK: map[string]bool{}, extShared: map[string]bool{}}
+func newAnycastSet(gid int, addrs []string, pool func() *Pool) *anycastSet {
+	return &anycastSet{gid: gid, addrs: append([]string(nil), addrs...), pool: pool, reason: map[string]string{}, ext: map[string]bool{}, extOK: map[string]bool{}, extShared: map[string]bool{}}
 }
 
 // addExternal adds dnsdir's addresses to the set.
@@ -205,7 +234,8 @@ func (a *anycastSet) stepExternal(addr string, healthy bool, offered, shared map
 	if cl[a.gid] == nil {
 		cl[a.gid] = &anycastClaim{}
 	}
-	cl[a.gid].want = false // never makes netdir put it on lo
+	cl[a.gid].pool = a.pool
+	cl[a.gid].want = false // never makes ntpdir put it on lo
 	a.extOK[addr] = why == ""
 	a.extShared[addr] = shared[addr]
 	switch {
@@ -265,10 +295,13 @@ func (a *anycastSet) stop() {
 	}
 }
 
-// healthy reports whether this node can answer on the gateway's addresses right now (health.go).
-func (a *anycastSet) healthy() bool { return serviceUpFn() }
+// healthy reports whether the group's pool can answer a client right now.
+func (a *anycastSet) healthy() bool {
+	p := a.pool()
+	return p != nil && len(p.Ranked()) > 0 && chronyServingFn()
+}
 
-// step brings every address in line with what the gateways carrying it can answer: the listener serving.  It
+// step brings every address in line with what the gateways carrying it can answer: listener up, a pool healthy.  It
 // renews the lifetime of the addresses that stay.
 func (a *anycastSet) step() {
 	a.mu.Lock()
@@ -317,8 +350,9 @@ func (a *anycastSet) step() {
 		}
 		cl := anycastReg.claims[addr]
 		if cl[a.gid] == nil {
-			cl[a.gid] = &anycastClaim{}
+			cl[a.gid] = &anycastClaim{pool: a.pool}
 		}
+		cl[a.gid].pool = a.pool
 		a.reason[addr] = why
 		cl[a.gid].want = why == ""
 		switch {
@@ -369,9 +403,12 @@ func (a *anycastSet) state() []AnycastState {
 	return out
 }
 
-// unhealthyWhy says why the gateway cannot answer.
+// unhealthyWhy says why the gateway cannot answer: no upstream server tests good, or chrony is not running or keeping time.
 func (a *anycastSet) unhealthyWhy() string {
-	return "the MCP and web listener is not serving on this node"
+	if p := a.pool(); p != nil && len(p.Ranked()) > 0 {
+		return "chrony is not running or not synchronised"
+	}
+	return "no NTP server is answering"
 }
 
 // anycastBGPGate says why an anycast address must not be held on lo: nothing would announce it, or no neighbor that

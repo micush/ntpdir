@@ -20,7 +20,7 @@ import (
 // relays the request over the existing pinned-TLS, HMAC-signed cluster channel
 // (POST /cluster/proxy), and the target node runs it through its own web
 // handlers as though the user had made it there, attributed "user via node".
-// The user is authenticated and authorised (PAM, group netdir) on the node they
+// The user is authenticated and authorised (PAM, group ntpdir) on the node they
 // logged in to only; peers trust each other with the cluster secret already.
 // Everything but login, logout and the session can be relayed — the Cluster and
 // Upgrade pages included, so "Leave cluster", "Promote" or "Update now" act on
@@ -32,8 +32,8 @@ type proxyCtxKey struct{}
 // them except login, logout and the session, which belong to the node the
 // operator logged in to.
 var proxyPrefixes = []string{
-	"/api/gateways", "/api/neighbors", "/api/devices", "/api/canvas", "/api/assert-agc",
-	"/api/config", "/api/versions", "/api/tls", "/api/cluster", "/api/update", "/api/power", "/api/users", "/api/nodepause", "/api/noderename", "/api/bgp", "/api/ospf", "/api/snmp", "/api/lldp", "/api/log", "/api/mcpusage", "/api/scan", "/api/nettool", "/api/whois", "/api/dig", "/api/curl", "/api/portcheck", "/api/tlscheck", "/api/arp", "/api/wake", "/api/host", "/api/hostlookup", "/api/dnslookup", "/api/schedule", "/api/alerts", "/api/backup", "/api/capture", "/api/vmactest", "/api/tshoot/node",
+	"/api/gateways", "/api/neighbors", "/api/ntp", "/api/canvas", "/api/assert-agc",
+	"/api/config", "/api/versions", "/api/tls", "/api/cluster", "/api/update", "/api/power", "/api/users", "/api/nodepause", "/api/noderename", "/api/bgp", "/api/ospf", "/api/snmp", "/api/lldp", "/api/log", "/api/qstats", "/api/scan", "/api/nettool", "/api/whois", "/api/host", "/api/serverstats", "/api/hostlookup", "/api/dnslookup", "/api/schedule", "/api/alerts", "/api/backup", "/api/time", "/api/capture", "/api/vmactest", "/api/tshoot/node",
 }
 
 // proxyAllowed reports why method+rawPath may not be relayed, or nil.
@@ -73,9 +73,7 @@ type proxyReq struct {
 	Path   string `json:"path"` // /api/...?query
 	CT     string `json:"ct,omitempty"`
 	Body   []byte `json:"body,omitempty"`
-	RO     bool   `json:"ro,omitempty"`  // the user is on a read-only account: the other node holds the line too
-	MCP    bool   `json:"mcp,omitempty"` // an MCP caller: never handed a device's secrets (devices.go sends a device request to the node that checks it)
-	Raw    bool   `json:"raw,omitempty"` // an MCP caller whose privacy level is none
+	RO     bool   `json:"ro,omitempty"` // the user is on a read-only account: the other node holds the line too
 }
 
 type proxyResp struct {
@@ -105,7 +103,7 @@ func (c *Cluster) handleProxy(rw http.ResponseWriter, r *http.Request, caller Cl
 	if len(user) > maxUsernameLen || user == "" || strings.ContainsAny(user, " \r\n\t") {
 		user = "unknown"
 	}
-	s := &session{user: user + " via " + caller.Addr, readOnly: req.RO, mcp: req.MCP, raw: req.Raw, hop: true}
+	s := &session{user: user + " via " + caller.Addr, readOnly: req.RO}
 	ctx := context.WithValue(r.Context(), proxyCtxKey{}, s)
 	in, err := http.NewRequestWithContext(ctx, req.Method, req.Path, bytes.NewReader(req.Body))
 	if err != nil {

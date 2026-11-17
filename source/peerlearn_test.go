@@ -3,12 +3,12 @@ package main
 import "testing"
 
 func TestLearnPeerAddrs(t *testing.T) {
-	p := ClusterPeer{Addr: "ns2:22162", Fp: "f", NodeID: "n", Alts: []string{"10.0.0.9:22162", "ns2.lan:22162"}}
+	p := ClusterPeer{Addr: "ns2:12381", Fp: "f", NodeID: "n", Alts: []string{"10.0.0.9:12381", "ns2.lan:12381"}}
 	np, ok := learnPeerAddrs(p, []string{"192.168.5.55", "fdf5:168:5::55"})
 	if !ok {
 		t.Fatal("new addresses must be learned")
 	}
-	want := []string{"192.168.5.55:22162", "[fdf5:168:5::55]:22162", "ns2.lan:22162"}
+	want := []string{"192.168.5.55:12381", "[fdf5:168:5::55]:12381", "ns2.lan:12381"}
 	if len(np.Alts) != len(want) {
 		t.Fatalf("got %v", np.Alts)
 	}

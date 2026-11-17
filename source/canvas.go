@@ -5,29 +5,34 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
-
-	"netdir/device"
 )
 
-// The canvas is a picture of the configuration: one circle per gateway group (its shared address) with the cluster's
-// nodes beside it.  Both the web GUI and the CLI (--canvas) show the same view built here, with the same colours:
+// The canvas is a picture of the configuration: one circle per gateway group
+// (its shared address) and a square under it per NTP server.  Both the web GUI and the
+// CLI (--canvas) show the same view built here, with the same colours:
 //
 //	ok    green   working
 //	warn  yellow  degraded (works, but something underneath it does not)
 //	bad   red     down
-//	idle  grey    not known yet (not applied, or not running here)
-//
-// CanvasDevice is one managed device of a gateway, as a square under its circle.
-type CanvasDevice struct {
-	Name     string        `json:"name"`
-	Platform string        `json:"platform"`
-	Address  string        `json:"address"`
-	Tags     []string      `json:"tags,omitempty"`
-	Status   string        `json:"status"`
-	Detail   string        `json:"detail"`
-	Health   device.Health `json:"health"`
+//	idle  grey    not known yet (not applied, or not probed yet)
+type CanvasServer struct {
+	Addr   string  `json:"addr"`
+	Name   string  `json:"name,omitempty"` // optional label shown instead of the address
+	Status string  `json:"status"`
+	Detail string  `json:"detail"`
+	MS     float64 `json:"ms"`
+	Rank   int     `json:"rank"`
+	// Time is what the server's last answer said about its clock; absent until it has answered once.
+	Time        *TimeStat `json:"time,omitempty"`
+	Falseticker bool      `json:"falseticker,omitempty"`
+	Uptime      *UpInfo   `json:"uptime,omitempty"`
+	Paused      string    `json:"paused,omitempty"` // "node" or "all" when the server is paused
+	// Chrony is chrony's mark for the server when it is one of this node's sources: * selected, + combined (those two are the ones the
+	// time comes from), - not combined, ? unreachable, x falseticker, ~ too variable.
+	Chrony string `json:"chrony,omitempty"`
 }
 
 // CanvasFamily is the state of one address family of a gateway (a gateway with
@@ -40,25 +45,35 @@ type CanvasFamily struct {
 }
 
 type CanvasGateway struct {
-	Name      string         `json:"name"`
-	GroupID   int            `json:"group_id"`
-	Interface string         `json:"interface"`
-	WeakKey   bool           `json:"weak_key,omitempty"` // the gateway's HMAC key is well known or short (gkey.go)
-	VIP4      string         `json:"vip4"`
-	VIP6      string         `json:"vip6"`
-	Anycast   []AnycastState `json:"anycast,omitempty"`
-	// MCPClients is how many different callers used the MCP endpoint on this gateway's addresses in the last 5 minutes (all serving nodes, see addPeerClients).
-	MCPClients int            `json:"mcp_clients"`
-	MCPCallers []string       `json:"mcp_callers,omitempty"` // the callers behind MCPClients, as hashes, so the nodes can be added up without counting one twice
-	Status     string         `json:"status"`
-	Detail     string         `json:"detail"`
-	Families   []CanvasFamily `json:"families"`
+	Name      string `json:"name"`
+	GroupID   int    `json:"group_id"`
+	Interface string `json:"interface"`
+	WeakKey   bool   `json:"weak_key,omitempty"` // the gateway's HMAC key is well known or short (gkey.go)
+	// Piggyback marks the gateway that answers on dnsdir's addresses (piggyback.go); it has no address or interface of its own.
+	Piggyback bool `json:"piggyback,omitempty"`
+	// PiggybackVIP4 and PiggybackVIP6 are the shared addresses of the dnsdir gateway this one mirrors: what the circle shows.
+	PiggybackVIP4   string         `json:"piggyback_vip4,omitempty"`
+	PiggybackVIP6   string         `json:"piggyback_vip6,omitempty"`
+	PiggybackShared []string       `json:"piggyback_shared,omitempty"`
+	VIP4            string         `json:"vip4"`
+	VIP6            string         `json:"vip6"`
+	Anycast         []AnycastState `json:"anycast,omitempty"`
+	Status          string         `json:"status"`
+	Detail          string         `json:"detail"`
+	Families        []CanvasFamily `json:"families"`
 	// Vmac is the last virtual-MAC test on this node (see vmactest.go); absent until one has run.
-	Vmac    *VmacResult    `json:"vmac,omitempty"`
-	Members []CanvasMember `json:"members"`
-	// Devices are the gateway's managed devices (GroupConfig.Devices) with their health as this node sees it.
-	Devices []CanvasDevice `json:"devices"`
-	Paused  bool           `json:"paused"`
+	Vmac *VmacResult `json:"vmac,omitempty"`
+	// LB is the load-balancing settings this gateway runs with; LBOwn says they are its own rather than Settings'.
+	LB      LBConfig       `json:"lb"`
+	LBOwn   bool           `json:"lb_own"`
+	Servers []CanvasServer `json:"servers"`
+	// Fallback are the servers used only while every one of Servers is down; UsingFallback says they are in use now.
+	Fallback      []string `json:"fallback"`
+	UsingFallback bool     `json:"using_fallback,omitempty"`
+	// FallbackDown are the fallback servers that did not answer their last probe (they still count as up).
+	FallbackDown []string       `json:"fallback_down,omitempty"`
+	Members      []CanvasMember `json:"members"`
+	Paused       bool           `json:"paused"`
 	// NodePaused says the pause comes from the whole node being paused, not from this gateway.
 	NodePaused bool `json:"node_paused,omitempty"`
 	// PausedScope says where this gateway is paused by its own setting: "all" (every node) or "node" (this one).
@@ -179,17 +194,99 @@ func mergeFamilyMembers(gs []CanvasGateway, names map[string]string) {
 	}
 }
 
-// buildCanvas combines the running configuration with what the engines currently report.
-func buildCanvas(dc *DaemonConfig, rows []SnapshotRow) []CanvasGateway {
-	health := deviceHealth(true)
+// buildCanvas combines the running configuration with what the engines and
+// the probe pools currently report.
+func buildCanvas(dc *DaemonConfig, rows []SnapshotRow, pools []poolInfo) []CanvasGateway {
 	out := make([]CanvasGateway, 0, len(dc.Groups))
+	chronyNow := chrony.State()
 	for i := range dc.Groups {
 		g := &dc.Groups[i]
-		callers := mcpSeen.callers(append(append([]string{g.VIP4, g.VIP6}, g.MoreVIP4...), g.MoreVIP6...)...)
-		cg := CanvasGateway{Name: g.Name, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
-			Families: []CanvasFamily{}, Devices: canvasDevices(dc, g, health), Members: membersOf(rows, g.GroupID), MCPCallers: callers, MCPClients: len(callers), Paused: g.Paused, NodePaused: dc.NodePaused, ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
+		cg := CanvasGateway{Name: g.Name, Piggyback: g.Piggyback, GroupID: g.GroupID, Interface: g.Interface, VIP4: g.VIP4, VIP6: g.VIP6,
+			Servers: []CanvasServer{}, Fallback: []string{}, Families: []CanvasFamily{}, Members: membersOf(rows, g.GroupID), Paused: g.Paused, NodePaused: dc.nodePausedNow(), ExcludedNodes: append([]string(nil), g.ExcludedNodes...), WeakKey: isWeakKey(g.Key)}
+
+		if g.Piggyback {
+			cg.PiggybackShared = append([]string(nil), g.DNSDirShared...)
+			for _, a := range g.DNSDirShared {
+				if ip, err := netip.ParseAddr(a); err == nil && ip.Is4() && cg.PiggybackVIP4 == "" {
+					cg.PiggybackVIP4 = a
+				} else if err == nil && !ip.Is4() && cg.PiggybackVIP6 == "" {
+					cg.PiggybackVIP6 = a
+				}
+			}
+		}
+
+		stats := map[string]ServerStat{}
+		var cfg NTPConfig
+		{
+			var key int
+			key, cfg = dc.poolFor(g)
+			for _, p := range pools {
+				if p.Key == key {
+					for _, s := range p.Pool.Snapshot() {
+						stats[s.Addr] = s
+					}
+				}
+			}
+			for _, addr := range cfg.Servers {
+				cs := CanvasServer{Addr: addr, Name: cfg.ServerNames[addr]}
+				st, probed := stats[addr]
+				switch {
+				case cfg.isPaused(addr):
+					cs.Paused = cfg.serverPausedScope(addr)
+					cs.Status, cs.Detail = "paused", "paused on "+pausedWhere(cs.Paused)+" — not probed or used until resumed"
+				case !probed || st.Successes+st.Failures == 0:
+					cs.Status, cs.Detail = "idle", "waiting for the first probe"
+					if g.Paused {
+						cs.Detail = "gateway paused on this node — not probed"
+					}
+				case !st.Healthy:
+					cs.Status, cs.Detail = "bad", orDefault(st.LastError, "not answering")
+					cs.Time, cs.Falseticker = st.Time, st.Falseticker
+				default:
+					cs.MS, cs.Rank, cs.Time = st.EWMAMS, st.Rank, st.Time
+					cs.Status, cs.Detail = "ok", fmt.Sprintf("healthy, %.2f ms", st.EWMAMS)
+					if t := st.Time; t != nil {
+						cs.Detail = fmt.Sprintf("stratum %d, offset %+.2f ms, round trip %.2f ms", t.Stratum, t.OffsetMS, st.EWMAMS)
+					}
+				}
+				if !cfg.isPaused(addr) {
+					cs.Chrony = chronyNow.stateOf(addr)
+					if cs.Status == "ok" && (cs.Chrony == "*" || cs.Chrony == "+") {
+						cs.Detail += " — chrony takes the time from it"
+						if cs.Chrony == "*" {
+							cs.Detail += " (the selected source)"
+						}
+					}
+				}
+				cg.Servers = append(cg.Servers, cs)
+			}
+		}
+
+		cg.Fallback = append(cg.Fallback, cfg.FallbackServers...)
+		fbUp := false
+		for _, addr := range cfg.FallbackServers {
+			if st, ok := stats[addr]; ok && st.Healthy {
+				fbUp = true
+			}
+			if st, ok := stats[addr]; ok && st.Answering != nil && !*st.Answering {
+				cg.FallbackDown = append(cg.FallbackDown, addr)
+			}
+		}
 		// the gateway itself, one state per address family
-		for _, f := range []struct{ af, vip string }{{"v4", g.VIP4}, {"v6", g.VIP6}} {
+		anyHealthy, anyDown, nPaused, nUsable := false, false, 0, 0
+		for _, s := range cg.Servers {
+			if s.Status == "paused" {
+				nPaused++
+			}
+			if s.Status == "ok" || s.Status == "warn" {
+				anyHealthy = true
+				nUsable++
+			}
+			if s.Status == "bad" {
+				anyDown = true
+			}
+		}
+		for _, f := range []struct{ af, vip, name string }{{"v4", g.VIP4, "IPv4"}, {"v6", g.VIP6, "IPv6"}} {
 			if f.vip == "" {
 				continue
 			}
@@ -207,7 +304,7 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow) []CanvasGateway {
 				if r.State == "active" || r.State == "forward" {
 					active = true
 				}
-				if r.ServiceUp {
+				if r.NTPUp {
 					answering = true
 				}
 			}
@@ -215,10 +312,26 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow) []CanvasGateway {
 			switch {
 			case !running:
 				cf.Status, cf.Detail = "idle", "not running"
+			case fbUp && !anyHealthy && (anyDown || nPaused > 0 || len(cg.Servers) == 0):
+				cg.UsingFallback = true
+				cf.Status, cf.Detail = "warn", "every NTP server is down or paused — answering from the fallback servers"
+			case len(cg.Servers) > 0 && !anyHealthy && anyDown:
+				cf.Status, cf.Detail = "bad", "no NTP server is healthy, so clients cannot be answered"
+			case len(cg.Servers) > 0 && nPaused == len(cg.Servers):
+				cf.Status, cf.Detail = "bad", "every NTP server is paused, so clients cannot be answered"
 			case !active:
 				cf.Status, cf.Detail = "warn", "this node is not serving the gateway yet (state: "+state+")"
 			case !answering:
-				cf.Status, cf.Detail = "bad", "the gateway is up but this node's MCP and web listener is not serving"
+				cf.Status, cf.Detail = "warn", "the gateway is up but NTP is not answering yet"
+				if chronyNow.Running && chronyNow.Synced && chrony.tooFar(chronyNow) {
+					cf.Detail = fmt.Sprintf("this node's clock is %+.1f ms off, more than serve_offset_ms: not serving until it is back within the limit", chronyNow.OffsetMS)
+				}
+			case len(cg.Servers) == 0:
+				cf.Status, cf.Detail = "warn", "running, but no NTP server is configured yet, so clients cannot be answered"
+			case anyDown:
+				cf.Status, cf.Detail = "warn", "running, but some NTP servers are down"
+			case nPaused > 0 && nUsable == 1 && len(cg.Servers) >= 3:
+				cf.Status, cf.Detail = "warn", "running, but only one of the "+strconv.Itoa(len(cg.Servers))+" NTP servers is left (the rest are paused)"
 			default:
 				cf.Status, cf.Detail = "ok", "running and answering"
 			}
@@ -227,13 +340,13 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow) []CanvasGateway {
 		cg.Status, cg.Detail = combineFamilies(cg.Families)
 		if g.Paused {
 			cg.Status, cg.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
-			if dc.NodePaused {
+			if dc.nodePausedNow() {
 				cg.Detail = "This node is paused — it is not serving; the other nodes carry on"
 			}
 			if g.PausedAll {
 				cg.PausedScope = "all"
 				cg.Detail = "Paused on all nodes — none of them serves it until it is resumed"
-			} else if !dc.NodePaused {
+			} else if !dc.nodePausedNow() {
 				cg.PausedScope = "node"
 			}
 			for i := range cg.Families {
@@ -247,33 +360,13 @@ func buildCanvas(dc *DaemonConfig, rows []SnapshotRow) []CanvasGateway {
 				}
 			}
 		}
+		cg.LB = cfg.lbValues()
+		if g.NTP != nil {
+			_, cg.LBOwn = g.NTP.ownLB()
+		}
 		out = append(out, cg)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GroupID < out[j].GroupID })
-	return out
-}
-
-// canvasDevices lists a gateway's devices, in its order, with the health devHealth has for each.
-func canvasDevices(dc *DaemonConfig, g *GroupConfig, health map[string]device.Health) []CanvasDevice {
-	byName := map[string]device.Device{}
-	for _, d := range dc.Settings.Devices {
-		byName[d.Name] = d
-	}
-	out := []CanvasDevice{}
-	for _, n := range g.Devices {
-		d, ok := byName[n]
-		if !ok {
-			continue
-		}
-		h, ok := health[n]
-		if !ok {
-			h = device.Health{Status: "idle", Detail: "not checked yet"}
-		}
-		if d.Disabled {
-			h.Status, h.Detail = "paused", "disabled: never contacted"
-		}
-		out = append(out, CanvasDevice{Name: d.Name, Platform: d.Platform, Address: d.Address, Tags: d.Tags, Status: h.Status, Detail: h.Detail, Health: h})
-	}
 	return out
 }
 
@@ -324,9 +417,11 @@ func (s *Supervisor) config() *DaemonConfig {
 
 // canvasGroups is the picture as the GUI and CLI show it, with the uptimes noted.
 func (s *StatusServer) canvasGroups() []CanvasGateway {
-	groups := buildCanvas(s.sup.config(), s.snapshot())
+	groups := buildCanvas(s.sup.config(), s.snapshot(), s.sup.poolList())
 	mergeFamilyMembers(groups, s.ipNames())
+	markWarming(groups, s.sup.warmingGroups())
 	markOffnet(groups, s.sup.offnetGroups())
+	markInactive(groups, s.sup.inactiveGroups())
 	cfg := s.sup.config()
 	real := map[int]bool{}
 	for _, g := range cfg.Groups {
@@ -334,6 +429,7 @@ func (s *StatusServer) canvasGroups() []CanvasGateway {
 	}
 	markVmac(groups, real)
 	s.markAnycast(groups)
+	markPiggyback(groups)
 	s.markNodes(groups)
 	s.up.annotate(groups, time.Now())
 	storeAnycastLocal(groups)
@@ -366,6 +462,9 @@ func (s *StatusServer) markAnycast(groups []CanvasGateway) {
 				paused := g.pausedAnycast()
 				for _, a := range g.ExtraVIPs {
 					st = append(st, AnycastState{Addr: a, Reason: why, Paused: paused[a]})
+				}
+				for _, a := range g.DNSDirVIPs {
+					st = append(st, AnycastState{Addr: a, Reason: why, External: true})
 				}
 			}
 		}
@@ -401,6 +500,93 @@ func (s *StatusServer) markAnycast(groups []CanvasGateway) {
 	}
 }
 
+// markWarming shows the gateways this node is holding back until their NTP
+// servers answer, instead of an alarming "not running".
+func markWarming(groups []CanvasGateway, warming map[int]bool) {
+	const why = "starting — waiting for the NTP servers to answer before this node serves; the other nodes carry on"
+	for i := range groups {
+		if !warming[groups[i].GroupID] {
+			continue
+		}
+		groups[i].Status, groups[i].Detail = "warn", why
+		for j := range groups[i].Families {
+			groups[i].Families[j].Status, groups[i].Families[j].Detail = "warn", why
+		}
+	}
+}
+
+// markInactive shows the gateways that do not run on this host because of dnsdir (or, for the piggyback gateway, because dnsdir
+// is not installed): grey, with the reason.
+func markInactive(groups []CanvasGateway, off map[int]string) {
+	for i := range groups {
+		why, ok := off[groups[i].GroupID]
+		if !ok {
+			continue
+		}
+		groups[i].Status, groups[i].Detail = "idle", "not running here — "+why
+		for j := range groups[i].Families {
+			groups[i].Families[j].Status, groups[i].Families[j].Detail = "idle", "not running here — "+why
+		}
+	}
+}
+
+// markPiggyback works out the state of the gateway that answers on dnsdir's addresses from its NTP servers and from which of
+// dnsdir's addresses this node holds: it has no election of its own.  Run after the anycast pills are filled in.
+func markPiggyback(groups []CanvasGateway) {
+	for i := range groups {
+		g := &groups[i]
+		if !g.Piggyback || g.Status == "idle" && strings.HasPrefix(g.Detail, "not running here") {
+			continue
+		}
+		// An address of the gateway itself is held on one node of dnsdir's gateway at a time, so a node that does not hold it
+		// is not short of anything; an anycast address is held on every node that serves.
+		shared := map[string]bool{}
+		for _, a := range g.PiggybackShared {
+			shared[a] = true
+		}
+		held, total := 0, 0
+		for _, a := range g.Anycast {
+			if a.Up {
+				held++
+				total++
+			} else if !shared[a.Addr] {
+				total++
+			}
+		}
+		healthy, down, paused := 0, 0, 0
+		for _, s := range g.Servers {
+			switch s.Status {
+			case "ok", "warn":
+				healthy++
+			case "bad":
+				down++
+			case "paused":
+				paused++
+			}
+		}
+		switch {
+		case len(g.Anycast) == 0:
+			g.Status, g.Detail = "idle", "AnyName has no addresses yet"
+		case g.Paused:
+			g.Status, g.Detail = "paused", "Paused on this node — it is not serving; the other nodes carry on"
+		case held == 0:
+			g.Status, g.Detail = "idle", "this node holds none of this AnyName gateway's addresses right now; the nodes that do answer"
+		case len(g.Servers) == 0:
+			g.Status, g.Detail = "warn", "answering on AnyName's addresses, but no NTP server is configured yet, so clients cannot be answered"
+		case healthy == 0 && !g.UsingFallback:
+			g.Status, g.Detail = "bad", "no NTP server is healthy, so clients cannot be answered"
+		case g.UsingFallback:
+			g.Status, g.Detail = "warn", "every NTP server is down or paused — answering from the fallback servers"
+		case down > 0:
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of AnyName's "+strconv.Itoa(total)+" addresses, but some NTP servers are down"
+		case held < total:
+			g.Status, g.Detail = "warn", "answering on "+strconv.Itoa(held)+" of AnyName's "+strconv.Itoa(total)+" addresses here"
+		default:
+			g.Status, g.Detail = "ok", "answering on "+strconv.Itoa(held)+" of this AnyName gateway's addresses"
+		}
+	}
+}
+
 // markOffnet shows the gateways this node does not run because it has no address
 // in their subnet: grey, with the reason.  The other members are unaffected.
 func markOffnet(groups []CanvasGateway, off map[int]string) {
@@ -420,25 +606,42 @@ func markOffnet(groups []CanvasGateway, off map[int]string) {
 // ── editing (CLI: --canvas-add / --canvas-del) ───────────────────────────────
 
 type canvasEdit struct {
-	Action string `json:"action"` // add | del | set | pause | resume | move | prune
-	Kind   string `json:"kind"`   // gateway | node | anycast | device
+	Action string `json:"action"` // add | del | set | pause | resume | move
+	Kind   string `json:"kind"`   // gateway | server | domain
 	Group  int    `json:"group"`
 	VIP    string `json:"vip"`  // IPv4 (or IPv6) address/prefix
 	VIP6   string `json:"vip6"` // IPv6 address/prefix
 	// RealMACs on | off | "" (unchanged): the gateway runs without virtual MACs on every node (a shared setting)
-	RealMACs  string `json:"real_macs"`
-	Interface string `json:"interface"`
-	Label     string `json:"label"`   // gateway name; "-" clears it
-	Anycast   string `json:"anycast"` // anycast addresses, comma separated; "-" clears them
-	Address   string `json:"address"` // one anycast address (--canvas-add|del|pause|resume anycast)
-	Scope     string `json:"scope"`   // pausing an anycast address: node (this one) or all (every node)
-	Pos       int    `json:"pos"`     // --canvas-move: the new place in the list, 1 = first
-	Device    string `json:"device"`  // a device's name (--canvas-add|del|move device)
+	RealMACs string `json:"real_macs"`
+	// load balancing of the gateway's own pool: any of these makes the gateway use its own values (starting from what
+	// it uses now); LB "settings" goes back to following Settings
+	LB            string `json:"lb"`
+	MaxStratum    int    `json:"max_stratum"`
+	MaxRootDist   int    `json:"max_root_distance_ms"`
+	MaxOffset     *int   `json:"max_offset_ms"` // nil = unchanged, 0 = falseticker check off
+	FailThreshold int    `json:"fail_threshold"`
+	Interface     string `json:"interface"`
+	Label         string `json:"label"`   // gateway or server name; "-" clears it
+	Anycast       string `json:"anycast"` // anycast addresses, comma separated; "-" clears them
+	Address       string `json:"address"` // one anycast address (--canvas-add|del|pause|resume anycast)
+	Scope         string `json:"scope"`   // pausing an anycast address: node (this one) or all (every node)
+	Server        string `json:"server"`
+	Pos           int    `json:"pos"` // --canvas-move: the new place in the list, 1 = first
 	// Node names a cluster node for --canvas-add|del node: its address, host name or node ID.  CanvasEdit turns it into
 	// nodeID and lists the cluster's node IDs in members, so the last member cannot be removed.
 	Node    string `json:"node"`
 	nodeID  string
 	members string // the cluster's node IDs, comma separated (a slice would make canvasEdit incomparable)
+}
+
+// lastServerInService reports whether addr is the only server of d that is not paused (on every node or on this one).
+func lastServerInService(d *NTPConfig, pausedHere []string, addr string) bool {
+	for _, sv := range d.Servers {
+		if sv != addr && !containsStr(d.PausedServers, sv) && !containsStr(pausedHere, sv) {
+			return false
+		}
+	}
+	return true
 }
 
 // moveTo returns list with the item at index from moved to index to (both 0-based, to clamped).
@@ -488,6 +691,96 @@ func parseAnycastList(v string) ([]string, error) {
 	return out, nil
 }
 
+// setLB applies --max-stratum, --max-root-distance, --max-offset, --fail-threshold (the gateway
+// then uses its own values, starting from the ones it uses now) or --lb settings (back to following Settings).
+func setLB(dc *DaemonConfig, g *GroupConfig, e canvasEdit) (string, error) {
+	have := e.MaxStratum != 0 || e.MaxRootDist != 0 || e.MaxOffset != nil || e.FailThreshold != 0
+	if e.LB != "" && e.LB != "settings" {
+		return "", errors.New("--lb must be settings (to follow Settings again); giving any health value makes the gateway use its own")
+	}
+	if e.LB == "" && !have {
+		return "", nil
+	}
+	if e.LB == "settings" {
+		if have {
+			return "", errors.New("--lb settings cannot be combined with health values")
+		}
+		if g.NTP != nil {
+			g.NTP.LB = nil
+			def := defaultNTP()
+			g.NTP.setLBValues(def.lbValues()) // so an old pool at other values does not count as its own
+		}
+		return "health checks follow Settings", nil
+	}
+	d := ownNTP(dc, g)
+	cur, own := d.ownLB()
+	if !own {
+		cur = dc.NTP.lbValues()
+	}
+	var parts []string
+	if e.MaxStratum != 0 {
+		cur.MaxStratum = e.MaxStratum
+		parts = append(parts, fmt.Sprintf("highest stratum %d", e.MaxStratum))
+	}
+	if e.MaxRootDist != 0 {
+		cur.MaxRootDistanceMS = e.MaxRootDist
+		parts = append(parts, fmt.Sprintf("root distance up to %d ms", e.MaxRootDist))
+	}
+	if e.MaxOffset != nil {
+		cur.MaxOffsetMS = *e.MaxOffset
+		if *e.MaxOffset == 0 {
+			parts = append(parts, "falseticker check off")
+		} else {
+			parts = append(parts, fmt.Sprintf("falseticker beyond %d ms", *e.MaxOffset))
+		}
+	}
+	if e.FailThreshold != 0 {
+		cur.FailThreshold = e.FailThreshold
+		parts = append(parts, fmt.Sprintf("%d failures before down", e.FailThreshold))
+	}
+	if err := cur.validate(); err != nil {
+		return "", err
+	}
+	d.LB = &cur
+	return "this gateway's own health checks: " + strings.Join(parts, ", "), nil
+}
+
+// ownPoolFrom is the start of a gateway's own pool: a copy of the shared one, with the load-balancing values back at
+// their defaults, so the gateway keeps following Settings for them until it is given its own.
+func ownPoolFrom(shared NTPConfig) NTPConfig {
+	c := cloneNTP(shared)
+	c.clearNodeWide()
+	c.LB = nil
+	c.setLBValues(defaultNTP().lbValues())
+	return c
+}
+
+// ownNTP makes sure the group has its own NTP pool, copying the shared one the
+// first time.
+func ownNTP(dc *DaemonConfig, g *GroupConfig) *NTPConfig {
+	if g.NTP == nil {
+		c := ownPoolFrom(dc.NTP)
+		g.NTP = &c
+	}
+	return g.NTP
+}
+
+// setServerName gives a server a name, or clears it with "".
+func setServerName(d *NTPConfig, addr, name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		delete(d.ServerNames, addr)
+		if len(d.ServerNames) == 0 {
+			d.ServerNames = nil
+		}
+		return
+	}
+	if d.ServerNames == nil {
+		d.ServerNames = map[string]string{}
+	}
+	d.ServerNames[addr] = name
+}
+
 func findGroup(dc *DaemonConfig, id int) (*GroupConfig, error) {
 	for i := range dc.Groups {
 		if dc.Groups[i].GroupID == id {
@@ -499,6 +792,9 @@ func findGroup(dc *DaemonConfig, id int) (*GroupConfig, error) {
 
 // applyCanvasEdit changes dc as asked.  The caller validates and saves.
 func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
+	if err := piggybackRefusal(dc, e); err != nil {
+		return "", err
+	}
 	switch e.Kind {
 	case "gateway":
 		switch e.Action {
@@ -540,8 +836,13 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 			default:
 				return "", errors.New("--real-macs must be on or off")
 			}
+			if msg, err := setLB(dc, g, e); err != nil {
+				return "", err
+			} else if msg != "" {
+				did = append(did, msg)
+			}
 			if len(did) == 0 {
-				return "", errors.New("nothing to change: give --vip, --vip6, --interface, --label, --anycast or --real-macs")
+				return "", errors.New("nothing to change: give --vip, --vip6, --interface, --label, --anycast, --real-macs or a load-balancing setting")
 			}
 			return fmt.Sprintf("gateway %d: changed %s", e.Group, strings.Join(did, ", ")), nil
 		case "add":
@@ -581,8 +882,22 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 			} else if len(dc.Groups) > 0 {
 				g.Interface = dc.Groups[0].Interface
 			}
+			d := defaultNTP()
+			d.Servers = newGatewayServers()
+			g.NTP = &d
 			dc.Groups = append(dc.Groups, g)
-			return fmt.Sprintf("added gateway %d (%s)", id, orDefault(e.VIP, e.VIP6)), nil
+			msg := fmt.Sprintf("added gateway %d (%s) with the NTP servers %s (remove one with --canvas-del server --group %d --server ADDR)",
+				id, orDefault(e.VIP, e.VIP6), strings.Join(defaultGatewayServers, ", "), id)
+			if e.Server != "" { // one more server in the same step (not again if it is one of the starting ones)
+				if n, err := normalizeServer(e.Server); err == nil && containsStr(d.Servers, n) {
+					return msg, nil
+				}
+				if _, err := applyCanvasEdit(dc, canvasEdit{Action: "add", Kind: "server", Group: id, Server: e.Server}); err != nil {
+					return "", err
+				}
+				return msg + " and " + e.Server, nil
+			}
+			return msg, nil
 		case "pause", "resume":
 			g, err := findGroup(dc, e.Group)
 			if err != nil {
@@ -617,7 +932,7 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 				}
 			}
 			dc.Groups = kept
-			return fmt.Sprintf("deleted gateway %d", e.Group), nil
+			return fmt.Sprintf("deleted gateway %d with all its NTP servers", e.Group), nil
 		}
 	case "node":
 		if e.Action == "prune" { // the entries of nodes that have left the cluster, from one gateway (group) or all (0)
@@ -689,99 +1004,173 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 				}
 			}
 			g.ExcludedNodes = kept
-			return fmt.Sprintf("node %s added back to gateway %d — it serves it again", who, e.Group), nil
+			return fmt.Sprintf("node %s added back to gateway %d — it serves it again once its NTP servers answer", who, e.Group), nil
 		}
 		return "", fmt.Errorf("a node can be added to or removed from a gateway: --canvas-add|--canvas-del node --group N --node NODE")
-	case "device":
-		if e.Action == "pause" || e.Action == "resume" { // all nodes: the inventory's switch (a disabled device is never contacted); node: only this node
-			scope := orDefault(e.Scope, "all")
-			if scope != "node" && scope != "all" {
-				return "", errors.New("--scope must be node (this node) or all (every node)")
-			}
-			if e.Device == "" {
-				return "", errors.New("--device is required: a device's name (settings.devices)")
-			}
-			for i := range dc.Settings.Devices {
-				d := &dc.Settings.Devices[i]
-				if d.Name != e.Device {
-					continue
-				}
-				pause := e.Action == "pause"
-				if scope == "node" {
-					if containsStr(dc.PausedDevicesHere, d.Name) == pause {
-						return "", errNoChange
-					}
-					if pause {
-						dc.PausedDevicesHere = append(dc.PausedDevicesHere, d.Name)
-						return fmt.Sprintf("device %s paused on this node: this node does not contact it", e.Device), nil
-					}
-					var keep []string
-					for _, n := range dc.PausedDevicesHere {
-						if n != d.Name {
-							keep = append(keep, n)
-						}
-					}
-					dc.PausedDevicesHere = keep
-					return fmt.Sprintf("device %s resumed on this node", e.Device), nil
-				}
-				if d.Disabled == pause {
-					return fmt.Sprintf("device %s is already %s", e.Device, map[bool]string{true: "disabled", false: "enabled"}[d.Disabled]), nil
-				}
-				d.Disabled = pause
-				if d.Disabled {
-					return fmt.Sprintf("device %s disabled: no node contacts it until it is enabled again", e.Device), nil
-				}
-				return fmt.Sprintf("device %s enabled", e.Device), nil
-			}
-			return "", fmt.Errorf("there is no device %q", e.Device)
-		}
+	case "server":
 		g, err := findGroup(dc, e.Group)
 		if err != nil {
 			return "", err
 		}
-		if e.Device == "" {
-			return "", errors.New("--device is required: a device's name (settings.devices)")
+		if e.Server == "" {
+			return "", errors.New("--server is required")
 		}
-		known := false
-		for _, d := range dc.Settings.Devices {
-			if d.Name == e.Device {
-				known = true
-			}
+		addr, err := normalizeServer(e.Server)
+		if err != nil {
+			return "", err
 		}
+		d := ownNTP(dc, g)
 		idx := -1
-		for i, n := range g.Devices {
-			if n == e.Device {
+		for i, s := range d.Servers {
+			if n, _ := normalizeServer(s); n == addr {
 				idx = i
 			}
 		}
 		switch e.Action {
 		case "add":
-			if !known {
-				return "", fmt.Errorf("there is no device %q (add it to settings.devices first)", e.Device)
-			}
 			if idx >= 0 {
-				return "", fmt.Errorf("device %s is already on gateway %d", e.Device, e.Group)
+				return "", fmt.Errorf("server %s is already on gateway %d", addr, e.Group)
 			}
-			g.Devices = append(g.Devices, e.Device)
-			return fmt.Sprintf("added device %s to gateway %d", e.Device, e.Group), nil
+			d.Servers = append(d.Servers, addr)
+			if e.Label != "" && e.Label != "-" {
+				setServerName(d, addr, e.Label)
+			}
+			return fmt.Sprintf("added server %s to gateway %d", addr, e.Group), nil
 		case "move":
 			if idx < 0 {
-				return "", fmt.Errorf("device %s is not on gateway %d", e.Device, e.Group)
+				return "", fmt.Errorf("server %s is not on gateway %d", addr, e.Group)
 			}
 			if e.Pos < 1 {
 				return "", errors.New("--to is required: the new place in the row, 1 = leftmost")
 			}
-			g.Devices = moveTo(g.Devices, idx, e.Pos-1)
-			return fmt.Sprintf("moved device %s to place %d of %d", e.Device, min(e.Pos, len(g.Devices)), len(g.Devices)), nil
+			d.Servers = moveTo(d.Servers, idx, e.Pos-1)
+			return fmt.Sprintf("moved server %s to place %d of %d", addr, min(e.Pos, len(d.Servers)), len(d.Servers)), nil
+		case "set":
+			if idx < 0 {
+				return "", fmt.Errorf("server %s is not on gateway %d", addr, e.Group)
+			}
+			if e.Label == "" {
+				return "", errors.New("nothing to change: give --label (a name, or - to clear it)")
+			}
+			if e.Label == "-" {
+				setServerName(d, addr, "")
+				return fmt.Sprintf("server %s: name cleared", addr), nil
+			}
+			setServerName(d, addr, e.Label)
+			return fmt.Sprintf("server %s: now named %q", addr, strings.TrimSpace(e.Label)), nil
+		case "pause", "resume":
+			if idx < 0 {
+				return "", fmt.Errorf("server %s is not on gateway %d", addr, e.Group)
+			}
+			scope := orDefault(e.Scope, "all") // every node unless said otherwise (what pausing a server always did)
+			if scope != "node" && scope != "all" {
+				return "", errors.New("--scope must be node (this node only) or all (every node)")
+			}
+			list, where := &dc.PausedServersHere, "this node"
+			if scope == "all" {
+				list, where = &d.PausedServers, "all nodes"
+			}
+			have := containsStr(*list, addr)
+			if e.Action == "pause" {
+				if !have && lastServerInService(d, dc.PausedServersHere, addr) && len(d.FallbackServers) == 0 {
+					return "", fmt.Errorf("server %s is the last one in service on gateway %d and the gateway has no fallback servers, so pausing it would leave clients unanswered — add a fallback server first", addr, e.Group)
+				}
+				if !have {
+					*list = append(*list, addr)
+				}
+				return fmt.Sprintf("server %s paused on %s — no requests or probes there until you resume it", addr, where), nil
+			}
+			kept := []string{}
+			for _, p := range *list {
+				if p != addr {
+					kept = append(kept, p)
+				}
+			}
+			if len(kept) == 0 {
+				kept = nil
+			}
+			*list = kept
+			return fmt.Sprintf("server %s resumed on %s", addr, where), nil
 		case "del":
 			if idx < 0 {
-				return "", fmt.Errorf("device %s is not on gateway %d", e.Device, e.Group)
+				return "", fmt.Errorf("server %s is not on gateway %d", addr, e.Group)
 			}
-			g.Devices = append(g.Devices[:idx], g.Devices[idx+1:]...)
-			if len(g.Devices) == 0 {
-				g.Devices = nil
+			d.Servers = append(d.Servers[:idx], d.Servers[idx+1:]...)
+			setServerName(d, addr, "")
+			return fmt.Sprintf("deleted server %s", addr), nil
+		}
+	case "fallback":
+		g, err := findGroup(dc, e.Group)
+		if err != nil {
+			return "", err
+		}
+		if e.Server == "" {
+			return "", errors.New("--server is required")
+		}
+		addr, err := normalizeServer(e.Server)
+		if err != nil {
+			return "", err
+		}
+		d := ownNTP(dc, g)
+		idx := -1
+		for i, s := range d.FallbackServers {
+			if n, _ := normalizeServer(s); n == addr {
+				idx = i
 			}
-			return fmt.Sprintf("removed device %s from gateway %d (it stays in the inventory)", e.Device, e.Group), nil
+		}
+		switch e.Action {
+		case "add":
+			if idx >= 0 {
+				return "", fmt.Errorf("%s is already a fallback server of gateway %d", addr, e.Group)
+			}
+			for _, s := range d.Servers {
+				if n, _ := normalizeServer(s); n == addr {
+					return "", fmt.Errorf("%s is already a normal server of gateway %d", addr, e.Group)
+				}
+			}
+			d.FallbackServers = append(d.FallbackServers, addr)
+			return fmt.Sprintf("added fallback server %s to gateway %d (used only while every other server is down)", addr, e.Group), nil
+		case "del":
+			if idx < 0 {
+				return "", fmt.Errorf("%s is not a fallback server of gateway %d", addr, e.Group)
+			}
+			d.FallbackServers = append(d.FallbackServers[:idx], d.FallbackServers[idx+1:]...)
+			if len(d.FallbackServers) == 0 {
+				d.FallbackServers = nil
+			}
+			return fmt.Sprintf("removed fallback server %s", addr), nil
+		}
+	case "dnsdirvip":
+		g, err := findGroup(dc, e.Group)
+		if err != nil {
+			return "", err
+		}
+		if e.Address == "" {
+			return "", errors.New("--address is required")
+		}
+		addr, err := normalizeAnycast(e.Address)
+		if err != nil {
+			return "", err
+		}
+		idx := -1
+		for i, a := range g.DNSDirVIPs {
+			if a == addr {
+				idx = i
+			}
+		}
+		switch e.Action {
+		case "add":
+			if idx >= 0 {
+				return "", fmt.Errorf("gateway %d already answers on the AnyName address %s", e.Group, addr)
+			}
+			g.DNSDirVIPs = append(g.DNSDirVIPs, addr)
+			return fmt.Sprintf("gateway %d now answers NTP on the AnyName address %s", e.Group, addr), nil
+		case "del":
+			if idx < 0 {
+				return "", fmt.Errorf("gateway %d does not answer on the AnyName address %s", e.Group, addr)
+			}
+			g.DNSDirVIPs = append(g.DNSDirVIPs[:idx], g.DNSDirVIPs[idx+1:]...)
+			return fmt.Sprintf("gateway %d no longer answers on the AnyName address %s", e.Group, addr), nil
 		}
 	case "anycast":
 		g, err := findGroup(dc, e.Group)
@@ -858,7 +1247,7 @@ func applyCanvasEdit(dc *DaemonConfig, e canvasEdit) (string, error) {
 			return fmt.Sprintf("removed anycast address %s from gateway %d", addr, e.Group), nil
 		}
 	}
-	return "", fmt.Errorf("unknown canvas edit %q %q (use add, del, set, pause, resume or move with gateway, node, anycast or device)", e.Action, e.Kind)
+	return "", fmt.Errorf("unknown canvas edit %q %q (use add, del or move with gateway, server, fallback, node, anycast or dnsdirvip)", e.Action, e.Kind)
 }
 
 // CanvasEdit applies one edit to the saved configuration.
@@ -891,6 +1280,7 @@ func (m *Mgmt) CanvasEdit(e canvasEdit, actor string) (string, error) {
 		return "", err
 	}
 	m.holdBackFromNewGateways(dc, known)
+	syncPiggybackNTP(dc, e.Group) // the gateways that mirror dnsdir's share one list of servers
 	if err := m.PutConfig(dc, actor, "canvas: "+e.Action+" "+e.Kind); err != nil {
 		return "", err
 	}

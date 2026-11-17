@@ -8,13 +8,13 @@ package main
 #include <stdlib.h>
 #include <string.h>
 
-struct netdir_cred { const char *pass; };
+struct ntpdir_cred { const char *pass; };
 
 // Answers every password/echo prompt with the supplied password; text and
 // error messages are ignored.  No callbacks into Go.
-static int netdir_conv(int n, const struct pam_message **msg,
+static int ntpdir_conv(int n, const struct pam_message **msg,
                      struct pam_response **resp, void *data) {
-	struct netdir_cred *c = (struct netdir_cred *)data;
+	struct ntpdir_cred *c = (struct ntpdir_cred *)data;
 	struct pam_response *r = calloc((size_t)n, sizeof(*r));
 	if (!r) return PAM_BUF_ERR;
 	for (int i = 0; i < n; i++) {
@@ -46,9 +46,9 @@ fail:
 
 // Returns a PAM status code; PAM_SUCCESS only if the user authenticated and
 // the account is valid (not expired/locked).
-static int netdir_pam_auth(const char *service, const char *user, const char *pass, int *stage) {
-	struct netdir_cred c = { pass };
-	struct pam_conv conv = { netdir_conv, &c };
+static int ntpdir_pam_auth(const char *service, const char *user, const char *pass, int *stage) {
+	struct ntpdir_cred c = { pass };
+	struct pam_conv conv = { ntpdir_conv, &c };
 	pam_handle_t *h = NULL;
 	int rc = pam_start(service, user, &conv, &h);
 	if (rc != PAM_SUCCESS) return rc;
@@ -89,7 +89,7 @@ func pamAuthenticate(service, user, password string) error {
 		C.free(unsafe.Pointer(cp))
 	}()
 	var stage C.int
-	if rc := C.netdir_pam_auth(cs, cu, cp, &stage); rc != C.PAM_SUCCESS {
+	if rc := C.ntpdir_pam_auth(cs, cu, cp, &stage); rc != C.PAM_SUCCESS {
 		if stage == 1 { // the password was accepted: the account is what was refused
 			return errors.New("pam account check (password accepted): " + C.GoString(C.pam_strerror(nil, rc)))
 		}

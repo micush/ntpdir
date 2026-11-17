@@ -34,7 +34,7 @@ var webFS embed.FS
 var failDelay = 400 * time.Millisecond
 
 const (
-	sessionCookie  = "__Host-netdir_session" // the prefix makes a browser take it only if Secure, Path=/ and without Domain
+	sessionCookie  = "__Host-ntpdir_session" // the prefix makes a browser take it only if Secure, Path=/ and without Domain
 	sessionMaxAge  = 12 * time.Hour
 	groupRecheck   = time.Minute
 	failWindow     = 10 * time.Minute // join-token failures (cluster)
@@ -112,10 +112,6 @@ type session struct {
 	readOnly bool      // signed in through the read-only group: may look, not change (see readonly.go)
 	ldap     bool      // signed in with an LDAP directory account (ldap.go): rechecked against the directory, not PAM
 	ssoProv  string    // which provider it signed in with (google or entra)
-	mcp      bool      // an MCP caller (mcp.go): never handed a device's secrets
-	raw      bool      // an MCP caller whose privacy level is none: configurations come as the device gives them
-	devs     *devScope // the devices an MCP caller may use (devscope.go); nil: all
-	hop      bool      // handed over by another node (proxy.go): it does not hand a device request on again
 	sso      bool      // signed in with Google or Entra ID (sso.go): user is an e-mail address, checked against the list of users
 }
 
@@ -147,8 +143,6 @@ type WebServer struct {
 
 	sso     *ssoState
 	applyMu sync.Mutex
-	mcp     *mcpListeners // /mcp on the gateways' addresses (mcplisten.go)
-	usage   *mcpUsage     // what the MCP endpoint is used for (mcpusage.go)
 	running *WebConfig
 	srv     *http.Server
 	cancel  context.CancelFunc
@@ -162,9 +156,7 @@ func NewWebServer(mg *Mgmt, status *StatusServer, auth Authenticator) *WebServer
 	}
 	d := defaultWeb()
 	w.policy.Store(&d)
-	w.mcp = newMCPListeners(w)
 	w.stateDir = mg.stateDir
-	w.usage = newMCPUsage(mg.stateDir)
 	w.loadSessions()
 	fn := w.endSessionsFor
 	mg.endSessions.Store(&fn)
@@ -237,11 +229,8 @@ func (w *WebServer) Apply(cfg WebConfig) {
 	w.srv, w.cancel = srv, cancel
 	cc := cfg
 	w.running = &cc
-	webServing.Store(true)
-	ln = noGatewayListener{Listener: ln, blocked: w.isGatewayAddr} // the GUI is not served on a gateway address: /mcp has its own listener there
 	go func() {
 		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			webServing.Store(false) // a stop on purpose clears it in stopLocked, before any new listener starts
 			errorf("web: server stopped: %v", err)
 		}
 	}()
@@ -276,7 +265,6 @@ func (w *WebServer) sanityWarnings(cfg WebConfig) {
 }
 
 func (w *WebServer) stopLocked() {
-	webServing.Store(false)
 	if w.srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		w.srv.Shutdown(ctx)
@@ -297,7 +285,6 @@ func (w *WebServer) Stop() {
 	defer w.applyMu.Unlock()
 	w.noSave.Store(true) // the daemon is stopping, not signing anyone out: the file keeps the sessions
 	w.stopLocked()
-	w.usage.Flush()
 }
 
 func (w *WebServer) janitor(ctx context.Context) {
@@ -338,9 +325,9 @@ func (w *WebServer) Handler() http.Handler {
 	mux.HandleFunc("GET /app.js", serveAppJS)
 	mux.Handle("GET /help.js", static)
 	mux.HandleFunc("GET /metrics", w.handleMetrics)
-	mux.HandleFunc("/mcp", w.handleMCP) // the address decides (settings.mcp_acl); on a gateway address the MCP listener serves it (mcplisten.go), here only on the node's own
-	mux.HandleFunc("GET /api/metrics/dashboard.json", w.authed(w.handleMetricsFile("grafana-dashboard.json", "application/json", "netdir-grafana-dashboard.json")))
-	mux.HandleFunc("GET /api/metrics/alerts.yml", w.authed(w.handleMetricsFile("prometheus-alerts.yml", "application/yaml", "netdir-prometheus-alerts.yml")))
+	mux.HandleFunc("/mcp", w.handleMCP) // the address decides (ntp.mcp_acl), like /metrics; see mcp.go
+	mux.HandleFunc("GET /api/metrics/dashboard.json", w.authed(w.handleMetricsFile("grafana-dashboard.json", "application/json", "ntpdir-grafana-dashboard.json")))
+	mux.HandleFunc("GET /api/metrics/alerts.yml", w.authed(w.handleMetricsFile("prometheus-alerts.yml", "application/yaml", "ntpdir-prometheus-alerts.yml")))
 	mux.Handle("GET /style.css", static)
 
 	mux.HandleFunc("POST /api/login", w.handleLogin)
@@ -352,33 +339,11 @@ func (w *WebServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/session", w.authed(w.handleSession))
 	mux.HandleFunc("GET /api/gateways", w.authed(w.handleGateways))
 	mux.HandleFunc("GET /api/neighbors", w.authed(w.handleNeighbors))
-	mux.HandleFunc("GET /api/devices", w.authed(w.handleDevices))
-	mux.HandleFunc("GET /api/devices/query", w.authed(w.handleDeviceQuery))
+	mux.HandleFunc("GET /api/ntp", w.authed(w.handleNTP))
 	mux.HandleFunc("GET /api/canvas", w.authed(func(rw http.ResponseWriter, r *http.Request, s *session) {
-		t0 := time.Now()
 		groups := w.status.canvasGroups()
-		tLocal := time.Since(t0)
-		var tVia, tPeers time.Duration
 		if r.URL.Query().Get("own") == "" { // ?own=1: this node's own view, as asked by another node or by the sidebar
-			t1 := time.Now()
 			w.status.viaServing(r.Context(), groups)
-			tVia = time.Since(t1)
-			t2 := time.Now()
-			w.status.addPeerClients(r.Context(), groups)
-			tPeers = time.Since(t2)
-		}
-		if total := time.Since(t0); total > 2*time.Second { // the page is blank (no nodes, devices gray) until this answers: say which part took the time
-			warnf("web: /api/canvas took %s for %q (this node %s, the nodes that serve its gateways %s, their callers %s)", total.Round(100*time.Millisecond), s.user,
-				tLocal.Round(100*time.Millisecond), tVia.Round(100*time.Millisecond), tPeers.Round(100*time.Millisecond))
-		}
-		if sc := scopeOf(s); sc.limited() {
-			keep := groups[:0]
-			for _, g := range groups {
-				if sc.allowsGateway(g.GroupID) {
-					keep = append(keep, g)
-				}
-			}
-			groups = keep
 		}
 		writeJSON(rw, http.StatusOK, map[string]any{"ok": true, "data": groups, "dnsdir": dnsdirInfo()})
 	}))
@@ -439,7 +404,7 @@ func (w *WebServer) authedCT(h func(http.ResponseWriter, *http.Request, *session
 		// signed cluster channel and the user was authenticated where they logged
 		// in.  The context value can only be set in-process.
 		if ps, ok := r.Context().Value(proxyCtxKey{}).(*session); ok {
-			if w.ro(ps) && readOnlyDenied(r) && !readOnlyJob(r) {
+			if w.ro(ps) && readOnlyDenied(r) {
 				jsonError(rw, http.StatusForbidden, readOnlyMsg)
 				return
 			}
@@ -877,21 +842,12 @@ func (w *WebServer) handleSession(rw http.ResponseWriter, r *http.Request, s *se
 	writeJSON(rw, http.StatusOK, w.sessionInfo(s))
 }
 
-// ── read-only views (CLI: --show-gateways / --show-neighbors) ──
+// ── read-only views (CLI: --show-gateways / --show-neighbors / --show-ntp) ──
 
 func (w *WebServer) handleGateways(rw http.ResponseWriter, r *http.Request, s *session) {
 	gs := buildGateways(w.status.snapshot())
 	nameMembers(gs, w.status.ipNames())
 	nameGateways(gs, w.status.sup.config())
-	if sc := scopeOf(s); sc.limited() { // a key or address limited to some devices sees the gateways it was given (devscope.go)
-		keep := gs[:0]
-		for _, g := range gs {
-			if sc.allowsGateway(g.GroupID) {
-				keep = append(keep, g)
-			}
-		}
-		gs = keep
-	}
 	if r.URL.Query().Get("own") == "" { // ?own=1: only what this node runs, as asked by another node
 		gs = w.status.gatewaysVia(r.Context(), gs)
 	}
@@ -906,6 +862,14 @@ func (w *WebServer) handleNeighbors(rw http.ResponseWriter, r *http.Request, s *
 		return
 	}
 	writeJSON(rw, http.StatusOK, map[string]any{"ok": true, "data": peersOnly(rows)})
+}
+
+func (w *WebServer) handleNTP(rw http.ResponseWriter, r *http.Request, s *session) {
+	resp := w.status.ntpStatus()
+	if r.URL.Query().Get("own") == "" { // ?own=1: only what this node runs, as asked by another node
+		resp = w.status.ntpVia(r.Context(), resp)
+	}
+	writeJSON(rw, http.StatusOK, resp)
 }
 
 // ── actions (CLI: --assert-agc) ──────────────────────────────────────────────
@@ -929,7 +893,7 @@ func (w *WebServer) handleGetConfig(rw http.ResponseWriter, r *http.Request, s *
 		out = redactSecrets(dc) // a read-only account sees the settings, not the keys and passwords in them
 	}
 	writeJSON(rw, http.StatusOK, map[string]any{
-		"ok": true, "path": w.confPath, "exists": statErr == nil, "config": out, "base": configBase(dc),
+		"ok": true, "path": w.confPath, "exists": statErr == nil, "config": out,
 	})
 }
 
@@ -937,7 +901,6 @@ func (w *WebServer) handlePutConfig(rw http.ResponseWriter, r *http.Request, s *
 	var req struct {
 		Config json.RawMessage `json:"config"`
 		Note   string          `json:"note"`
-		Base   string          `json:"base"` // what the page read the configuration as (GET /api/config): refused when the shared settings have changed since
 	}
 	if !readJSON(rw, r, maxBody, &req) {
 		return
@@ -960,38 +923,16 @@ func (w *WebServer) handlePutConfig(rw http.ResponseWriter, r *http.Request, s *
 		return
 	}
 
-	// Every save says what it read (base).  One that does not comes from a page run by an older version (a Configure tab left open
-	// across an update keeps its old code: it saved its old copy of the devices over an import) or from a script that never read it:
-	// refused, so that nothing is overwritten without the writer knowing what it replaces.  A script that means to replace the
-	// configuration says so with base "force".
-	base := req.Base
-	switch base {
-	case "":
-		warnf("web: %q save refused: it carries no base (a page from an older version, or a script) (from %s)", s.user, clientIP(r))
-		jsonError(rw, http.StatusConflict, "this page is older than the daemon (it does not say which configuration it read): reload it (Ctrl+F5) and make the change again. Nothing was saved. A script that means to replace the configuration sends \"base\": \"force\".")
-		return
-	case "force":
-		base = ""
-	}
 	infof("web: %q saving %s (from %s)", s.user, w.confPath, clientIP(r))
 	w.mg.keepNodePaused(dc) // the page's copy may be older than the last pause or resume of this node
 	if cur, _, err := w.mg.LiveConfig(); err == nil {
 		w.mg.holdBackFromNewGateways(dc, groupIDSet(cur)) // a gateway made on this page runs on this node only
 	}
-	if err := w.mg.PutConfigBase(dc, s.user, req.Note, base); err != nil {
-		if errors.Is(err, ErrConfigChanged) {
-			warnf("web: %q save refused: the configuration changed since their page read it (from %s)", s.user, clientIP(r))
-			jsonError(rw, http.StatusConflict, err.Error())
-			return
-		}
+	if err := w.mg.PutConfig(dc, s.user, req.Note); err != nil {
 		jsonError(rw, http.StatusInternalServerError, err.Error())
 		return
 	}
-	newBase := configBase(dc)
-	if saved, _, err := w.mg.LiveConfig(); err == nil {
-		newBase = configBase(saved)
-	}
-	writeJSON(rw, http.StatusOK, map[string]any{"ok": true, "config": dc, "base": newBase})
+	writeJSON(rw, http.StatusOK, map[string]any{"ok": true, "config": dc})
 }
 
 // logLockedOut records a login attempt that was refused because the address or the name is locked out: once a

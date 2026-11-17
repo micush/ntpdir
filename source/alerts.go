@@ -24,7 +24,7 @@ import (
 // a number of minutes, M of the last N checks, or a value over a threshold for some minutes), and ends it after the condition
 // has been good for the "clear after" time.  An alert is open, acknowledged (someone is on it), silenced (nobody wants to
 // hear about it for a while) or closed.  Opening and closing go to the log (so to syslog) and to a webhook.  The settings are
-// shared by the cluster (Settings.Alerts); the alerts, acknowledgements and silences are each node's own, kept in
+// shared by the cluster (NTPConfig.Alerts); the alerts, acknowledgements and silences are each node's own, kept in
 // alerts.json in the state directory.
 
 const (
@@ -35,7 +35,7 @@ const (
 	alertHistLen    = 100
 )
 
-// AlertsConfig is the "alerts" block of the shared settings.
+// AlertsConfig is the "alerts" block of the NTP settings.
 type AlertsConfig struct {
 	Webhook     string               `json:"webhook,omitempty"`      // URL that gets a JSON POST for every opened and resolved alert
 	RepeatHours int                  `json:"repeat_hours,omitempty"` // tell again this often while an alert stays open and unacknowledged; 0 = never
@@ -815,6 +815,6 @@ func newJSONPost(u string, body []byte) (*http.Request, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "netdir")
+	req.Header.Set("User-Agent", "ntpdir")
 	return req, nil
 }

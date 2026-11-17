@@ -17,18 +17,18 @@ import (
 	"time"
 )
 
-// BGP: netdir drives FRR on this node so the anycast addresses (anycast.go) can be
+// BGP: ntpdir drives FRR on this node so the anycast addresses (anycast.go) can be
 // announced without hand-written routing config.
 //
 // The BGP settings are per node (a node usually peers with its own upstream
 // router) and are never replicated; only the anycast addresses themselves are
-// shared.  netdir owns /etc/frr/frr.conf on a node where BGP is enabled: it renders
+// shared.  ntpdir owns /etc/frr/frr.conf on a node where BGP is enabled: it renders
 // the whole file (BGP only), enables bgpd in /etc/frr/daemons and reloads FRR.
 //
 // The posture is deliberately narrow: this node announces its anycast addresses
 // and nothing else, and accepts nothing from its peers (an inbound route-map
 // denies every route), so a peer cannot change this host's routing table.
-// An announced prefix exists in FRR's table only while netdir holds the address on
+// An announced prefix exists in FRR's table only while ntpdir holds the address on
 // lo, so withdrawal follows anycast.go.
 
 // BGPNeighbor is one BGP peer.
@@ -94,11 +94,11 @@ func (b *BGPConfig) Configured() bool { return b != nil && b.ASN != 0 }
 func (b *BGPConfig) Active() bool { return b.Configured() && !b.Disabled && bgpBlocked() == "" }
 
 // The Anyname DNS Director (dnsdir) manages /etc/frr/frr.conf in the same way, so the two cannot both do BGP on one
-// host: each would rewrite the other's file.  When dnsdir is installed here, netdir leaves FRR alone entirely: BGP
+// host: each would rewrite the other's file.  When dnsdir is installed here, ntpdir leaves FRR alone entirely: BGP
 // is off, it cannot be set up or enabled, and settings already in the config are kept but have no effect.  The
 // anycast addresses themselves still work (they are only addresses on lo without BGP).  The check is made each time,
 // so removing dnsdir lifts the block without a restart.
-const bgpBlockedMsg = "the AnyName DNS Director is installed on this host and manages FRR; BGP is not available in netdir"
+const bgpBlockedMsg = "the AnyName DNS Director is installed on this host and manages FRR; BGP is not available in ntpdir"
 
 // bgpBlocked returns why BGP is unavailable on this host, or "" when it is not.
 func bgpBlocked() string {
@@ -223,7 +223,7 @@ func renderFRR(b *BGPConfig, v4, v6 []string, hostname string) string {
 // only the header, which is what a node that turned routing off is left with.
 func renderFRRAll(b *BGPConfig, osp *OSPFConfig, v4, v6 []string, hostname string) string {
 	var o strings.Builder
-	o.WriteString("! Written by netdir. Changes made here are overwritten; use netdir --bgp or the BGP page.\n")
+	o.WriteString("! Written by ntpdir. Changes made here are overwritten; use ntpdir --bgp or the BGP page.\n")
 	o.WriteString("frr defaults traditional\n")
 	if h := safeHostname(hostname); h != "" {
 		o.WriteString("hostname " + h + "\n")
@@ -233,13 +233,13 @@ func renderFRRAll(b *BGPConfig, osp *OSPFConfig, v4, v6 []string, hostname strin
 		return o.String()
 	}
 	// what this node may announce: its anycast addresses, nothing else
-	o.WriteString("ip prefix-list NETDIR-ANYCAST-V4 seq 1000 deny any\n")
+	o.WriteString("ip prefix-list NTPDIR-ANYCAST-V4 seq 1000 deny any\n")
 	for i, a := range v4 {
-		o.WriteString(fmt.Sprintf("ip prefix-list NETDIR-ANYCAST-V4 seq %d permit %s/32\n", 10+i, a))
+		o.WriteString(fmt.Sprintf("ip prefix-list NTPDIR-ANYCAST-V4 seq %d permit %s/32\n", 10+i, a))
 	}
-	o.WriteString("ipv6 prefix-list NETDIR-ANYCAST-V6 seq 1000 deny any\n")
+	o.WriteString("ipv6 prefix-list NTPDIR-ANYCAST-V6 seq 1000 deny any\n")
 	for i, a := range v6 {
-		o.WriteString(fmt.Sprintf("ipv6 prefix-list NETDIR-ANYCAST-V6 seq %d permit %s/128\n", 10+i, a))
+		o.WriteString(fmt.Sprintf("ipv6 prefix-list NTPDIR-ANYCAST-V6 seq %d permit %s/128\n", 10+i, a))
 	}
 	if osp.Active() {
 		o.WriteString("!\n" + renderOSPFRouteMaps())
@@ -253,9 +253,9 @@ func renderFRRAll(b *BGPConfig, osp *OSPFConfig, v4, v6 []string, hostname strin
 	if b.ASPrepend {
 		prepend = fmt.Sprintf(" set as-path prepend %d %d %d\n", b.ASN, b.ASN, b.ASN)
 	}
-	o.WriteString("!\nroute-map NETDIR-OUT-V4 permit 10\n match ip address prefix-list NETDIR-ANYCAST-V4\n" + prepend)
-	o.WriteString("route-map NETDIR-OUT-V6 permit 10\n match ipv6 address prefix-list NETDIR-ANYCAST-V6\n" + prepend)
-	o.WriteString("route-map NETDIR-IN deny 10\n!\n")
+	o.WriteString("!\nroute-map NTPDIR-OUT-V4 permit 10\n match ip address prefix-list NTPDIR-ANYCAST-V4\n" + prepend)
+	o.WriteString("route-map NTPDIR-OUT-V6 permit 10\n match ipv6 address prefix-list NTPDIR-ANYCAST-V6\n" + prepend)
+	o.WriteString("route-map NTPDIR-IN deny 10\n!\n")
 	o.WriteString(fmt.Sprintf("router bgp %d\n no bgp default ipv4-unicast\n", b.ASN))
 	if b.RouterID != "" {
 		o.WriteString(" bgp router-id " + b.RouterID + "\n")
@@ -290,14 +290,14 @@ func renderFRRAll(b *BGPConfig, osp *OSPFConfig, v4, v6 []string, hostname strin
 		o.WriteString("  network " + a + "/32\n")
 	}
 	for _, n := range n4 {
-		o.WriteString(fmt.Sprintf("  neighbor %s activate\n  neighbor %s route-map NETDIR-IN in\n  neighbor %s route-map NETDIR-OUT-V4 out\n", n.Peer, n.Peer, n.Peer))
+		o.WriteString(fmt.Sprintf("  neighbor %s activate\n  neighbor %s route-map NTPDIR-IN in\n  neighbor %s route-map NTPDIR-OUT-V4 out\n", n.Peer, n.Peer, n.Peer))
 	}
 	o.WriteString(" exit-address-family\n address-family ipv6 unicast\n")
 	for _, a := range v6 {
 		o.WriteString("  network " + a + "/128\n")
 	}
 	for _, n := range n6 {
-		o.WriteString(fmt.Sprintf("  neighbor %s activate\n  neighbor %s route-map NETDIR-IN in\n  neighbor %s route-map NETDIR-OUT-V6 out\n", n.Peer, n.Peer, n.Peer))
+		o.WriteString(fmt.Sprintf("  neighbor %s activate\n  neighbor %s route-map NTPDIR-IN in\n  neighbor %s route-map NTPDIR-OUT-V6 out\n", n.Peer, n.Peer, n.Peer))
 	}
 	o.WriteString(" exit-address-family\n!\n")
 	if osp.Active() {
@@ -566,13 +566,13 @@ func frrJournalTail() string {
 	return " [journal: " + strings.Join(keep, " | ") + "]"
 }
 
-// backupForeignFRRConf keeps a copy of an frr.conf that netdir did not write, the
-// first time netdir takes the file over, so a host's earlier FRR setup is not lost.
+// backupForeignFRRConf keeps a copy of an frr.conf that ntpdir did not write, the
+// first time ntpdir takes the file over, so a host's earlier FRR setup is not lost.
 func backupForeignFRRConf(old []byte) {
-	if len(old) == 0 || strings.HasPrefix(string(old), "! Written by netdir") {
+	if len(old) == 0 || strings.HasPrefix(string(old), "! Written by ntpdir") {
 		return
 	}
-	p := frrConfPath() + ".pre-netdir"
+	p := frrConfPath() + ".pre-ntpdir"
 	if _, err := os.Stat(p); err == nil {
 		return
 	}
@@ -585,7 +585,7 @@ func backupForeignFRRConf(old []byte) {
 
 // writeFRRFile replaces a file atomically, readable by FRR's group.
 func writeFRRFile(path string, data []byte) error {
-	tmp := path + ".netdir.tmp"
+	tmp := path + ".ntpdir.tmp"
 	if err := os.WriteFile(tmp, data, 0o640); err != nil {
 		return err
 	}

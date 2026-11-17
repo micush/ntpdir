@@ -196,11 +196,11 @@ func (n *ClusterNode) loadIdentity() error {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "netdir-node-" + n.st.NodeID},
+		Subject:      pkix.Name{CommonName: "ntpdir-node-" + n.st.NodeID},
 		NotBefore:    time.Now().Add(-time.Hour), NotAfter: time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"netdir-node"},
+		DNSNames:    []string{"ntpdir-node"},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
 	if err != nil {
@@ -586,7 +586,7 @@ func (n *ClusterNode) BumpShared(hash string) bool {
 // ── join tokens ──────────────────────────────────────────────────────────────
 
 func hashToken(tok string) string {
-	h := sha256.Sum256([]byte("netdir-join-v1\x00" + tok))
+	h := sha256.Sum256([]byte("ntpdir-join-v1\x00" + tok))
 	return hex.EncodeToString(h[:])
 }
 
@@ -603,7 +603,7 @@ func (n *ClusterNode) MintToken(by string) (string, time.Time, error) {
 	}
 	n.st.Tokens = live
 	if len(n.st.Tokens) >= maxPendingToks {
-		return "", time.Time{}, fmt.Errorf("%d unused join codes: clear them (Operate ▸ Cluster ▸ Clear join codes, or netdir --cluster-token-clear) or wait for them to expire", maxPendingToks)
+		return "", time.Time{}, errors.New("too many unused join tokens; wait for them to expire")
 	}
 	b := make([]byte, 24)
 	rand.Read(b)
@@ -611,36 +611,6 @@ func (n *ClusterNode) MintToken(by string) (string, time.Time, error) {
 	exp := now.Add(joinTokenTTL)
 	n.st.Tokens = append(n.st.Tokens, tokenRec{Hash: hashToken(tok), Expires: exp, By: by})
 	return tok, exp, n.saveLocked()
-}
-
-// ClearTokens drops every join token that has not been used (expired ones too) and reports how many were still valid:
-// a code handed out before no longer works.
-func (n *ClusterNode) ClearTokens() (int, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	live := n.pendingTokensLocked()
-	if len(n.st.Tokens) == 0 {
-		return 0, nil
-	}
-	n.st.Tokens = nil
-	return live, n.saveLocked()
-}
-
-// PendingTokens is how many join tokens are unused and not yet expired.
-func (n *ClusterNode) PendingTokens() int {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.pendingTokensLocked()
-}
-
-func (n *ClusterNode) pendingTokensLocked() int {
-	now, live := time.Now(), 0
-	for _, t := range n.st.Tokens {
-		if now.Before(t.Expires) {
-			live++
-		}
-	}
-	return live
 }
 
 // RedeemToken consumes a token; it reports whether it was valid.

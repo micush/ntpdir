@@ -95,14 +95,47 @@ func TestExcludedNodesAreSharedAndTidy(t *testing.T) {
 	}
 }
 
+func TestCanvasEditAddsAndRemovesNodes(t *testing.T) {
+	dc := pauseTestConfig()
+	if _, err := nodeEdit(dc, "del", "aa", "aa", "bb"); err != nil || len(dc.Groups[0].ExcludedNodes) != 1 {
+		t.Fatalf("remove: %v %v", err, dc.Groups[0].ExcludedNodes)
+	}
+	if msg, _ := nodeEdit(dc, "del", "aa", "aa", "bb"); !strings.Contains(msg, "already removed") || len(dc.Groups[0].ExcludedNodes) != 1 {
+		t.Fatalf("removing twice: %q", msg)
+	}
+	if _, err := nodeEdit(dc, "del", "bb", "aa", "bb"); err == nil || !strings.Contains(err.Error(), "no node serving") {
+		t.Fatalf("the last serving node was removed: %v", err)
+	}
+	if _, err := nodeEdit(dc, "add", "aa", "aa", "bb"); err != nil || len(dc.Groups[0].ExcludedNodes) != 0 {
+		t.Fatalf("add back: %v %v", err, dc.Groups[0].ExcludedNodes)
+	}
+	if msg, _ := nodeEdit(dc, "add", "aa", "aa", "bb"); !strings.Contains(msg, "already serving") {
+		t.Fatalf("adding twice: %q", msg)
+	}
+	// a node that already left the cluster does not count as one that could serve
+	dc.Groups[0].ExcludedNodes = []string{"dead"}
+	if _, err := nodeEdit(dc, "del", "aa", "aa", "dead"); err == nil {
+		t.Fatal("removed the only node left in the cluster")
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "del", Kind: "node", Group: 9, nodeID: "aa"}); err == nil {
+		t.Fatal("a gateway that does not exist")
+	}
+	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "del", Kind: "node", Group: 1}); err == nil {
+		t.Fatal("no node named")
+	}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPickNodeByAddressHostOrID(t *testing.T) {
 	peers := []PeerView{
-		{Addr: "10.0.0.1:22162", NodeID: "aa", Hostname: "lsitedns01.example.net"},
-		{Addr: "10.0.0.2:22162", NodeID: "bb", Hostname: "lsitedns02"},
-		{Addr: "10.0.1.2:22162", NodeID: "cc", Hostname: "lsitedns02.other.net"},
-		{Addr: "10.0.2.1:22162", NodeID: ""},
+		{Addr: "10.0.0.1:12381", NodeID: "aa", Hostname: "lsitedns01.example.net"},
+		{Addr: "10.0.0.2:12381", NodeID: "bb", Hostname: "lsitedns02"},
+		{Addr: "10.0.1.2:12381", NodeID: "cc", Hostname: "lsitedns02.other.net"},
+		{Addr: "10.0.2.1:12381", NodeID: ""},
 	}
-	for name, want := range map[string]string{"10.0.0.1:22162": "aa", "10.0.0.1": "aa", "lsitedns01": "aa", "LSITEDNS01.example.net": "aa", "bb": "bb", "10.0.1.2": "cc"} {
+	for name, want := range map[string]string{"10.0.0.1:12381": "aa", "10.0.0.1": "aa", "lsitedns01": "aa", "LSITEDNS01.example.net": "aa", "bb": "bb", "10.0.1.2": "cc"} {
 		if id, err := pickNode(peers, nil, name); err != nil || id != want {
 			t.Errorf("%q: %q %v, want %q", name, id, err, want)
 		}
@@ -183,45 +216,12 @@ func TestRemoveNodeThroughTheClusterReachesTheNode(t *testing.T) {
 	}
 }
 
-func TestCanvasEditAddsAndRemovesNodes(t *testing.T) {
-	dc := pauseTestConfig()
-	if _, err := nodeEdit(dc, "del", "aa", "aa", "bb"); err != nil || len(dc.Groups[0].ExcludedNodes) != 1 {
-		t.Fatalf("remove: %v %v", err, dc.Groups[0].ExcludedNodes)
-	}
-	if msg, _ := nodeEdit(dc, "del", "aa", "aa", "bb"); !strings.Contains(msg, "already removed") || len(dc.Groups[0].ExcludedNodes) != 1 {
-		t.Fatalf("removing twice: %q", msg)
-	}
-	if _, err := nodeEdit(dc, "del", "bb", "aa", "bb"); err == nil || !strings.Contains(err.Error(), "no node serving") {
-		t.Fatalf("the last serving node was removed: %v", err)
-	}
-	if _, err := nodeEdit(dc, "add", "aa", "aa", "bb"); err != nil || len(dc.Groups[0].ExcludedNodes) != 0 {
-		t.Fatalf("add back: %v %v", err, dc.Groups[0].ExcludedNodes)
-	}
-	if msg, _ := nodeEdit(dc, "add", "aa", "aa", "bb"); !strings.Contains(msg, "already serving") {
-		t.Fatalf("adding twice: %q", msg)
-	}
-	// a node that already left the cluster does not count as one that could serve
-	dc.Groups[0].ExcludedNodes = []string{"dead"}
-	if _, err := nodeEdit(dc, "del", "aa", "aa", "dead"); err == nil {
-		t.Fatal("removed the only node left in the cluster")
-	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "del", Kind: "node", Group: 9, nodeID: "aa"}); err == nil {
-		t.Fatal("a gateway that does not exist")
-	}
-	if _, err := applyCanvasEdit(dc, canvasEdit{Action: "del", Kind: "node", Group: 1}); err == nil {
-		t.Fatal("no node named")
-	}
-	if err := dc.Validate(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // The gateway's own circle on the removed node says it was removed, not paused.
 func TestCanvasSaysThisNodeWasRemoved(t *testing.T) {
 	dc := pauseTestConfig()
 	dc.Groups[0].ExcludedNodes = []string{"aaaa1111"}
 	withLocalNode(t, "aaaa1111")
-	cv := buildCanvas(dc.effective(), nil)
+	cv := buildCanvas(dc.effective(), nil, nil)
 	if len(cv) != 1 || !cv[0].Excluded || cv[0].Status != "paused" || !strings.Contains(cv[0].Detail, "removed from the gateway") || cv[0].PausedScope != "" {
 		t.Fatalf("%+v", cv[0])
 	}

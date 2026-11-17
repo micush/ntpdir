@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,7 +19,7 @@ func (s *Supervisor) metricsAllowed(from netip.Addr) bool {
 	s.mu.Lock()
 	var acl []string
 	if s.dc != nil {
-		acl = s.dc.Settings.MetricsACL
+		acl = s.dc.NTP.MetricsACL
 	}
 	s.mu.Unlock()
 	return inNets(s.metricsNets(acl), from.Unmap())
@@ -92,39 +93,79 @@ func b2f(b bool) float64 {
 	return 0
 }
 
-// metricsText is the page: the gateways, the managed devices and the host, per node.
+// metricsText is the page: the clock (chrony), the upstream servers, the gateways and the host, per node.
 func (s *StatusServer) metricsText() string {
 	m := &metricsOut{seen: map[string]bool{}}
-	m.add("netdir_info", "gauge", "The version this node runs.", promLabel("version", version()), 1)
-	devs, _ := s.sup.deviceInventory()
-	m.add("netdir_devices", "gauge", "Managed devices in the inventory.", "", float64(len(devs)))
+	m.add("ntpdir_info", "gauge", "The version this node runs.", promLabel("version", version()), 1)
+	cs := chrony.State()
+	m.add("ntpdir_chrony_running", "gauge", "1 when chrony is running.", "", b2f(cs.Running))
+	if cs.Running {
+		m.add("ntpdir_chrony_synchronised", "gauge", "1 when the clock is synchronised.", "", b2f(cs.Synced))
+		m.add("ntpdir_chrony_stratum", "gauge", "Stratum of this node's clock.", "", float64(cs.Stratum))
+		m.add("ntpdir_chrony_offset_ms", "gauge", "Offset of the system clock from the time chrony believes.", "", cs.OffsetMS)
+		m.add("ntpdir_chrony_root_delay_ms", "gauge", "Root delay.", "", cs.RootDelay)
+		m.add("ntpdir_chrony_root_dispersion_ms", "gauge", "Root dispersion.", "", cs.RootDisp)
+		for _, c := range cs.Sources {
+			l := promLabel("source", c.Name)
+			m.add("ntpdir_chrony_source_reach", "gauge", "Of the last 8 polls, how many were answered (0-8).", l, float64(c.Reach))
+			m.add("ntpdir_chrony_source_selected", "gauge", "1 for the source chrony has selected.", l, b2f(c.State == "*"))
+		}
+		if st := readServerStats(); st.Err == "" {
+			m.add("ntpdir_ntp_requests_total", "counter", "NTP requests received since chrony started.", "", float64(st.Received))
+			m.add("ntpdir_ntp_requests_dropped_total", "counter", "NTP requests dropped since chrony started.", "", float64(st.Dropped))
+		}
+	}
+	pools := s.sup.poolList()
+	sort.Slice(pools, func(i, j int) bool { return pools[i].Key < pools[j].Key })
+	for _, pi := range pools {
+		name := "shared"
+		if pi.Key != 0 {
+			name = s.sup.groupName(pi.Key)
+			if name == "" {
+				name = "group " + itoa(pi.Key)
+			}
+		}
+		pl := promLabel("pool", name)
+		m.add("ntpdir_pool_using_fallback", "gauge", "1 while only fallback servers are in use.", pl, b2f(pi.Pool.UsingFallback()))
+		for _, sv := range s.namedServers(pi) {
+			l := pl + "," + promLabel("server", sv.Addr)
+			m.add("ntpdir_upstream_healthy", "gauge", "1 when the upstream server passes its tests.", l, b2f(sv.Healthy))
+			m.add("ntpdir_upstream_falseticker", "gauge", "1 when its time differs from the other servers by more than the allowed offset.", l, b2f(sv.Falseticker))
+			m.add("ntpdir_upstream_latency_ms", "gauge", "Smoothed answer time of the upstream server.", l, sv.EWMAMS)
+			m.add("ntpdir_upstream_failures_total", "counter", "Failed probes of the upstream server.", l, float64(sv.Failures))
+			if sv.Time != nil {
+				m.add("ntpdir_upstream_stratum", "gauge", "Stratum the upstream server reported.", l, float64(sv.Time.Stratum))
+				m.add("ntpdir_upstream_offset_ms", "gauge", "Offset of the upstream server's clock from this node's, at the last probe.", l, sv.Time.OffsetMS)
+			}
+		}
+	}
 	if s.mg != nil {
-		m.cert("netdir_certificate_not_after_timestamp_seconds", "netdir_certificate_expires_in_seconds", "web", s.mg.certs)
+		m.cert("ntpdir_certificate_not_after_timestamp_seconds", "ntpdir_certificate_expires_in_seconds", "web", s.mg.certs)
 	}
 	if h := hoststats.lastNow(); h.At != 0 {
-		m.add("netdir_host_cpu_percent", "gauge", "CPU in use, all cores.", "", h.CPU)
-		m.add("netdir_host_cpu_cores", "gauge", "CPU cores.", "", float64(h.Cores))
+		m.add("ntpdir_host_cpu_percent", "gauge", "CPU in use, all cores.", "", h.CPU)
+		m.add("ntpdir_host_cpu_cores", "gauge", "CPU cores.", "", float64(h.Cores))
 		for i, n := range []string{"1", "5", "15"} {
-			m.add("netdir_host_load", "gauge", "Load average.", promLabel("minutes", n), h.Load[i])
+			m.add("ntpdir_host_load", "gauge", "Load average.", promLabel("minutes", n), h.Load[i])
 		}
-		m.add("netdir_host_memory_total_bytes", "gauge", "Memory installed.", "", float64(h.MemTotal))
-		m.add("netdir_host_memory_used_bytes", "gauge", "Memory in use.", "", float64(h.MemUsed))
-		m.add("netdir_host_swap_total_bytes", "gauge", "Swap space.", "", float64(h.SwapTotal))
-		m.add("netdir_host_swap_used_bytes", "gauge", "Swap space in use.", "", float64(h.SwapUsed))
-		m.add("netdir_host_disk_io_percent", "gauge", "Time the busiest disk spent on I/O.", "", h.IO)
+		m.add("ntpdir_host_memory_total_bytes", "gauge", "Memory installed.", "", float64(h.MemTotal))
+		m.add("ntpdir_host_memory_used_bytes", "gauge", "Memory in use.", "", float64(h.MemUsed))
+		m.add("ntpdir_host_swap_total_bytes", "gauge", "Swap space.", "", float64(h.SwapTotal))
+		m.add("ntpdir_host_swap_used_bytes", "gauge", "Swap space in use.", "", float64(h.SwapUsed))
+		m.add("ntpdir_host_disk_io_percent", "gauge", "Time the busiest disk spent on I/O.", "", h.IO)
 		for _, f := range h.FS {
 			l := promLabel("mount", f.Mount)
-			m.add("netdir_host_filesystem_total_bytes", "gauge", "Size of the filesystem.", l, float64(f.Total))
-			m.add("netdir_host_filesystem_used_bytes", "gauge", "Space used on the filesystem.", l, float64(f.Used))
-			m.add("netdir_host_filesystem_used_percent", "gauge", "Percent of the filesystem in use.", l, f.Pct)
+			m.add("ntpdir_host_filesystem_total_bytes", "gauge", "Size of the filesystem.", l, float64(f.Total))
+			m.add("ntpdir_host_filesystem_used_bytes", "gauge", "Space used on the filesystem.", l, float64(f.Used))
+			m.add("ntpdir_host_filesystem_used_percent", "gauge", "Percent of the filesystem in use.", l, f.Pct)
 		}
 		for _, i := range h.Ifaces {
 			l := promLabel("interface", i.Name)
-			m.add("netdir_host_interface_up", "gauge", "1 when the interface is up.", l, b2f(i.Up))
-			m.add("netdir_host_interface_receive_bits_per_second", "gauge", "Receive rate over the last sample.", l, i.Rx)
-			m.add("netdir_host_interface_transmit_bits_per_second", "gauge", "Transmit rate over the last sample.", l, i.Tx)
+			m.add("ntpdir_host_interface_up", "gauge", "1 when the interface is up.", l, b2f(i.Up))
+			m.add("ntpdir_host_interface_receive_bits_per_second", "gauge", "Receive rate over the last sample.", l, i.Rx)
+			m.add("ntpdir_host_interface_transmit_bits_per_second", "gauge", "Transmit rate over the last sample.", l, i.Tx)
 			if i.UtilPct >= 0 {
-				m.add("netdir_host_interface_utilization_percent", "gauge", "The busier direction as a percent of the link speed.", l, i.UtilPct)
+				m.add("ntpdir_host_interface_utilization_percent", "gauge", "The busier direction as a percent of the link speed.", l, i.UtilPct)
 			}
 		}
 	}
@@ -132,18 +173,18 @@ func (s *StatusServer) metricsText() string {
 		active, acked, opened := s.alerts.counts()
 		for _, sev := range alertSeverities {
 			l := promLabel("severity", sev)
-			m.add("netdir_alerts_active", "gauge", "Open alerts that nobody has acknowledged or silenced.", l, float64(active[sev]))
-			m.add("netdir_alerts_acknowledged", "gauge", "Open alerts that someone has acknowledged (not silenced).", l, float64(acked[sev]))
+			m.add("ntpdir_alerts_active", "gauge", "Open alerts that nobody has acknowledged or silenced.", l, float64(active[sev]))
+			m.add("ntpdir_alerts_acknowledged", "gauge", "Open alerts that someone has acknowledged (not silenced).", l, float64(acked[sev]))
 		}
-		m.add("netdir_alerts_opened_total", "counter", "Alerts opened since the history began (an alert that comes back is counted again).", "", float64(opened))
+		m.add("ntpdir_alerts_opened_total", "counter", "Alerts opened since the history began (an alert that comes back is counted again).", "", float64(opened))
 	}
 	for _, r := range s.snapshot() {
 		if !r.Local {
 			continue
 		}
 		l := promLabel("group", itoa(r.GroupID)) + "," + promLabel("af", r.AF)
-		m.add("netdir_gateway_active", "gauge", "1 when this node is the active gateway of the group.", l, b2f(r.State == "active"))
-		m.add("netdir_gateway_service_up", "gauge", "1 when this node's MCP and web listener is serving the gateway.", l, b2f(r.ServiceUp))
+		m.add("ntpdir_gateway_active", "gauge", "1 when this node is the active gateway of the group.", l, b2f(r.State == "active"))
+		m.add("ntpdir_gateway_ntp_listening", "gauge", "1 when the NTP listener of the gateway is up.", l, b2f(r.NTPUp))
 	}
 	return m.b.String()
 }

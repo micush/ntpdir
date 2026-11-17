@@ -10,14 +10,14 @@ import (
 )
 
 const (
-	tKey1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa netdir-backup@n1"
-	tKey2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb netdir-backup@n2"
+	tKey1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ntpdir-backup@n1"
+	tKey2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ntpdir-backup@n2"
 )
 
 // provisionRig fakes the account database: no account until useradd has run, then one with its home in a temp dir.
 func provisionRig(t *testing.T, uid string) (home string, cmds *[]string) {
 	t.Helper()
-	home = filepath.Join(t.TempDir(), "netdirbackup")
+	home = filepath.Join(t.TempDir(), "ntpdirbackup")
 	exists := false
 	var ran []string
 	oldL, oldR, oldC := backupLookupUser, usersRun, backupChown

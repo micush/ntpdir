@@ -14,7 +14,7 @@ func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
 func newTestEngine() *Engine {
 	cfg := defaultGroup()
 	cfg.Interface = "dgwtest0" // does not exist: ip(8) calls fail quietly
-	e := NewEngine(cfg, afIPv4)
+	e := NewEngine(cfg, afIPv4, func() NTPConfig { return defaultNTP() }, func() *Pool { return nil })
 	e.running = true
 	e.myIP = "10.0.0.5"
 	return e
@@ -188,6 +188,30 @@ func TestNAChecksumAgainstKnownVector(t *testing.T) {
 	body := f[14+40:]
 	if icmp6Checksum(vip, dst, body) != 0 {
 		t.Fatal("NA checksum does not verify")
+	}
+}
+
+func TestConfigRoundTripAndValidation(t *testing.T) {
+	dc := newDaemonConfig()
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	dc.NTP.Servers = []string{"127.0.0.1"}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	var back DaemonConfig
+	b, _ := jsonMarshal(dc)
+	if err := back.UnmarshalJSON(b); err != nil {
+		t.Fatal(err)
+	}
+	if back.Groups[0].LBMethod != lbRoundRobin || back.NTP.Servers[0] != "127.0.0.1:123" {
+		t.Fatalf("round trip lost data: %+v", back)
+	}
+	old := []byte(`{"groups":[{"vip":"10.9.9.1/24"}]}`)
+	var oldDC DaemonConfig
+	if err := oldDC.UnmarshalJSON(old); err != nil || oldDC.Groups[0].VIP4 != "10.9.9.1/24" {
+		t.Fatalf("legacy vip key: %v %+v", err, oldDC.Groups)
 	}
 }
 
@@ -475,29 +499,5 @@ func TestSnapshotPeerStatesFromHellos(t *testing.T) {
 	}
 	if got["10.0.0.9"] != "active" || got["10.0.0.7"] != "forward" {
 		t.Fatalf("states from hellos: %v", got)
-	}
-}
-
-func TestConfigRoundTripAndValidation(t *testing.T) {
-	dc := newDaemonConfig()
-	if err := dc.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	dc.Settings.MetricsACL = []string{"127.0.0.1"}
-	if err := dc.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	var back DaemonConfig
-	b, _ := jsonMarshal(dc)
-	if err := back.UnmarshalJSON(b); err != nil {
-		t.Fatal(err)
-	}
-	if back.Groups[0].LBMethod != lbRoundRobin || back.Settings.MetricsACL[0] != "127.0.0.1" {
-		t.Fatalf("round trip lost data: %+v", back)
-	}
-	old := []byte(`{"groups":[{"vip":"10.9.9.1/24"}]}`)
-	var oldDC DaemonConfig
-	if err := oldDC.UnmarshalJSON(old); err != nil || oldDC.Groups[0].VIP4 != "10.9.9.1/24" {
-		t.Fatalf("legacy vip key: %v %+v", err, oldDC.Groups)
 	}
 }

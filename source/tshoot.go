@@ -26,7 +26,7 @@ import (
 // something does not work, in one .tgz that can be attached to a ticket.  Read-only; secrets are removed before anything
 // is put in it, and the bundle lists what it holds and what could not be collected.
 //
-//	netdir-tshoot-<time>.tgz
+//	ntpdir-tshoot-<time>.tgz
 //	  README.txt           what is in it, which nodes answered, what was removed
 //	  <node>/…             one folder per node (see tshootNode)
 
@@ -43,8 +43,10 @@ const (
 // A key whose value is a secret: passwords, the gateway key, tokens, join codes, private keys.
 var tshootSecretKey = regexp.MustCompile(`(?i)(^|_)(pass|passwd|password|secret|token|key|psk|private|cookie|csrf|code|auth|community|communities|keys)($|_)`)
 
-// A secret written in free text (an FRR configuration, a command's output).
-var tshootSecretText = regexp.MustCompile(`(?i)\b(password|passwd|secret|md5|community|key|auth-key)([ =:]+)(?:[0-9] )?(\S+)`)
+// A secret written in free text (an FRR configuration, a command's output).  After the word may come a key id and "md5"
+// (ip ospf message-digest-key 1 md5 SECRET) and an encryption type (password 7 HASH): they are skipped, the secret is
+// what follows.
+var tshootSecretText = regexp.MustCompile(`(?i)\b(password|passwd|secret|md5|community|key|auth-key)([ =:]+)(?:[0-9]{1,3} )?(?:md5 )?(?:[0-9] )?(\S+)`)
 
 // redactJSON returns v with the value of every secret key replaced, however deep.
 func redactJSON(v any) (any, int) {
@@ -218,69 +220,82 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 	do(func() {
 		dc, _, err := m.LiveConfig()
 		if err != nil {
-			b.fail("netdir/config.json", err)
+			b.fail("ntpdir/config.json", err)
 			return
 		}
-		b.putJSON("netdir/config.json", dc)
+		b.putJSON("ntpdir/config.json", dc)
 	})
-	do(func() { b.putJSON("netdir/config-versions.json", m.VersionsList()) })
+	do(func() { b.putJSON("ntpdir/config-versions.json", m.VersionsList()) })
+	do(func() {
+		b.putJSON("ntpdir/chrony.json", map[string]any{"state": chrony.readState(), "server_stats": readServerStats()})
+		if out, err := chronyc("sources", "-n", "-a"); err == nil {
+			b.put("ntpdir/chrony-sources.txt", out)
+		}
+		if out, err := chronyc("-n", "sourcestats", "-a"); err == nil {
+			b.put("ntpdir/chrony-sourcestats.txt", out)
+		}
+	})
+	do(func() { // who asked for what in the last ten minutes (top clients and domains, types, transports)
+		now := time.Now()
+		b.putJSON("ntpdir/ntp-queries-last-10-min.json", qstats.Query(now.Add(-10*time.Minute), now, QFilter{}))
+	})
 	do(func() {
 		if m.cl != nil && m.cl.Enabled() {
-			b.putJSON("netdir/cluster.json", m.cl.View())
+			b.putJSON("ntpdir/cluster.json", m.cl.View())
 		} else {
-			b.put("netdir/cluster.json", []byte("{\"clustered\": false}\n"))
+			b.put("ntpdir/cluster.json", []byte("{\"clustered\": false}\n"))
 		}
 	})
 	do(func() {
 		st, err := m.BGPStatus()
 		if err != nil {
-			b.fail("netdir/bgp.json", err)
+			b.fail("ntpdir/bgp.json", err)
 			return
 		}
-		b.putJSON("netdir/bgp.json", st)
+		b.putJSON("ntpdir/bgp.json", st)
 	})
 	do(func() {
 		st, err := m.OSPFStatus()
 		if err != nil {
-			b.fail("netdir/ospf.json", err)
+			b.fail("ntpdir/ospf.json", err)
 			return
 		}
-		b.putJSON("netdir/ospf.json", st)
+		b.putJSON("ntpdir/ospf.json", st)
 	})
 	do(func() {
 		if st, err := m.SyslogStatus(); err != nil {
-			b.fail("netdir/syslog.json", err)
+			b.fail("ntpdir/syslog.json", err)
 		} else {
-			b.putJSON("netdir/syslog.json", st)
+			b.putJSON("ntpdir/syslog.json", st)
 		}
 	})
 	do(func() {
 		if m.anycastFn != nil {
-			b.putJSON("netdir/anycast.json", m.anycastFn())
+			b.putJSON("ntpdir/anycast.json", m.anycastFn())
 		}
 	})
 	do(func() {
 		if m.gwFn != nil {
-			b.putJSON("netdir/gateways-reported-to-the-cluster.json", m.localGateways())
+			b.putJSON("ntpdir/gateways-reported-to-the-cluster.json", m.localGateways())
 		}
 	})
-	do(func() { b.putJSON("netdir/update.json", m.UpdateStatus()) })
-	do(func() { b.putJSON("netdir/update-history.json", m.upd.History(30)) })
-	do(func() { b.putJSON("netdir/virtual-mac-tests.json", vmacAll()) })
+	do(func() { b.putJSON("ntpdir/update.json", m.UpdateStatus()) })
+	do(func() { b.putJSON("ntpdir/update-history.json", m.upd.History(30)) })
+	do(func() { b.putJSON("ntpdir/virtual-mac-tests.json", vmacAll()) })
 	do(func() {
-		b.putJSON("netdir/host-last-hour.json", hoststats.Query(time.Now().Add(-time.Hour), time.Now()))
+		b.putJSON("ntpdir/host-last-hour.json", hoststats.Query(time.Now().Add(-time.Hour), time.Now()))
 	})
 	do(func() {
 		if m.tshootFn != nil {
 			for name, v := range m.tshootFn() {
-				b.putJSON("netdir/"+name+".json", v)
+				b.putJSON("ntpdir/"+name+".json", v)
 			}
 		}
 	})
 	do(func() {
 		res, err := ReadLog(LogQuery{Limit: tshootLogLines})
 		if err != nil {
-			b.fail("netdir/log.txt", err)
+			b.fail("ntpdir/log.txt", err)
 			return
 		}
 		var sb strings.Builder
@@ -288,26 +303,14 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 			sb.WriteString(l.Raw)
 			sb.WriteByte('\n')
 		}
-		b.putText("netdir/log.txt", sb.String())
-	})
-
-	do(func() { // what callers asked the MCP endpoint and were told (contentlog.go): the newest entries, cleaned
-		on := false
-		if dc, _, err := m.LiveConfig(); err == nil {
-			on = dc.Settings.MCPLog
-		}
-		data, n := tshootContentLog(m.stateDir, on)
-		b.mu.Lock()
-		b.removed += n
-		b.mu.Unlock()
-		b.put("netdir/mcp-content.log", data)
+		b.putText("ntpdir/log.txt", sb.String())
 	})
 
 	// the machine
 	do(func() {
 		var sb strings.Builder
 		host, _ := os.Hostname()
-		fmt.Fprintf(&sb, "collected %s\nhost %s\nnetdir v%s\ngo %s %s/%s\nstate dir %s\nconfig %s\n\n", time.Now().Format(time.RFC3339), host, version(), runtime.Version(), runtime.GOOS, runtime.GOARCH, m.stateDir, m.confPath)
+		fmt.Fprintf(&sb, "collected %s\nhost %s\nntpdir v%s\ngo %s %s/%s\nstate dir %s\nconfig %s\n\n", time.Now().Format(time.RFC3339), host, version(), runtime.Version(), runtime.GOOS, runtime.GOARCH, m.stateDir, m.confPath)
 		sb.WriteString("# uname -a\n" + tshootRun("uname", "-a"))
 		sb.WriteString("\n# /etc/os-release\n" + tshootFile("/etc/os-release"))
 		sb.WriteString("\n# virtualization\n" + tshootRun("systemd-detect-virt"))
@@ -318,11 +321,26 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 		b.putText("system/system.txt", sb.String())
 	})
 	do(func() {
-		b.putText("system/services.txt", "# systemctl status netdir frr\n"+tshootRun("systemctl", "status", "netdir", "frr", "--no-pager", "-l"))
+		b.putText("system/services.txt", "# systemctl status ntpdir frr\n"+tshootRun("systemctl", "status", "ntpdir", "frr", "--no-pager", "-l"))
 	})
-	do(func() { b.putText("netdir/goroutines.txt", goroutineDump()) })
 	do(func() {
-		b.putText("system/journal-netdir.txt", tshootRun("journalctl", "-u", "netdir", "-n", "1500", "--no-pager"))
+		u := "chrony"
+		if _, err := os.Stat("/usr/lib/systemd/system/chronyd.service"); err == nil {
+			u = "chronyd"
+		} else if _, err := os.Stat("/lib/systemd/system/chronyd.service"); err == nil {
+			u = "chronyd"
+		}
+		var sb strings.Builder
+		sb.WriteString("# systemctl status " + u + "\n" + tshootRun("systemctl", "status", u, "--no-pager", "-l"))
+		sb.WriteString("\n# systemctl cat " + u + " (the unit and its drop-ins)\n" + tshootRun("systemctl", "cat", u, "--no-pager"))
+		sb.WriteString("\n# journalctl -u " + u + " -n 100\n" + tshootRun("journalctl", "-u", u, "-n", "100", "--no-pager"))
+		sb.WriteString("\n# who holds udp/123\n" + tshootRun("ss", "-ulnp", "sport", "=", ":123"))
+		sb.WriteString("\n# chronyc tracking\n" + tshootRun("chronyc", "tracking"))
+		b.putText("system/chrony-service.txt", sb.String())
+	})
+	do(func() { b.putText("ntpdir/goroutines.txt", goroutineDump()) })
+	do(func() {
+		b.putText("system/journal-ntpdir.txt", tshootRun("journalctl", "-u", "ntpdir", "-n", "1500", "--no-pager"))
 	})
 	do(func() {
 		s := tshootRun("dmesg")
@@ -417,7 +435,7 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 	sort.Strings(names)
 	host, _ := os.Hostname()
 	var rd strings.Builder
-	fmt.Fprintf(&rd, "Troubleshooting bundle of %s, netdir v%s, collected %s.\n", host, version(), time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&rd, "Troubleshooting bundle of %s, ntpdir v%s, collected %s.\n", host, version(), time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&rd, "%d secrets were removed (passwords, the gateway key, tokens, join codes, private keys).\n\nFiles:\n", b.removed)
 	for _, n := range names {
 		fmt.Fprintf(&rd, "  %-45s %d bytes\n", n, len(b.files[n]))
@@ -433,7 +451,7 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 	files := b.files
 	b.mu.Unlock()
 
-	// the peer channel carries only so much: the larger of the log and the content log loses its oldest half until it fits
+	// the peer channel carries only so much: a log that is too long loses its oldest lines
 	for {
 		tgz, err := tarFiles(files, "")
 		if err != nil {
@@ -442,19 +460,11 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 		if len(tgz) <= tshootNodeMax {
 			return tgz, nil
 		}
-		name := "netdir/log.txt"
-		if len(files["netdir/mcp-content.log"]) > len(files[name]) {
-			name = "netdir/mcp-content.log"
-		}
-		cur := files[name]
-		if len(cur) < 64<<10 {
+		lg := files["ntpdir/log.txt"]
+		if len(lg) < 64<<10 {
 			return nil, fmt.Errorf("the bundle is %d bytes, more than the %d the cluster channel carries", len(tgz), tshootNodeMax)
 		}
-		if name == "netdir/log.txt" {
-			files[name] = append([]byte("(older lines cut to fit)\n"), cur[len(cur)/2:]...)
-		} else {
-			files[name] = tshootHalve(cur)
-		}
+		files["ntpdir/log.txt"] = append([]byte("(older lines cut to fit)\n"), lg[len(lg)/2:]...)
 	}
 }
 
@@ -638,7 +648,7 @@ func (w *WebServer) handleTshootDownload(rw http.ResponseWriter, r *http.Request
 	}
 	host, _ := hostnameShort()
 	rw.Header().Set("Content-Type", "application/gzip")
-	rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "netdir-tshoot-"+host+"-"+time.Now().Format("20060102-150405")+".tgz"))
+	rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "ntpdir-tshoot-"+host+"-"+time.Now().Format("20060102-150405")+".tgz"))
 	rw.Write(b)
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSchedulerUpdateOnlineWhenAlreadyNewest(t *testing.T) {
@@ -51,6 +52,43 @@ func TestSchedulerRebootsTheHost(t *testing.T) {
 	if len(calls) == 0 || !strings.Contains(strings.Join(calls, " "), "reboot") {
 		t.Fatalf("calls %v", calls)
 	}
+}
+
+func TestSchedulerRunOnAllNodesQueuesAndStaggers(t *testing.T) {
+	h := newHarness(t, mustTask(t, SchedTask{ID: "a1", Name: "a", Action: "stats_clear", Freq: "daily", At: "12:00"}),
+		mustTask(t, SchedTask{ID: "a2", Name: "b", Action: "node_pause", Freq: "daily", At: "12:00"}))
+	h.s.Tick("n1")
+	// a delayed manual run is not started before its time
+	if err := h.s.RunQueued("a1", "me", 60*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if h.count() != 0 {
+		t.Fatal("started before its delay")
+	}
+	if err := h.s.RunQueued("a1", "me", 0); err == nil {
+		t.Fatal("a task already waiting must not be queued twice")
+	}
+	if !h.s.Status().Tasks[0].Queued {
+		t.Fatal("not shown as waiting")
+	}
+	h.at(h.now.Add(61 * time.Second))
+	h.s.Tick("n1")
+	waitFor(t, func() bool { return h.count() == 1 })
+	// an immediate one runs at once when idle
+	waitFor(t, func() bool { return !h.s.Status().Tasks[0].Running })
+	if err := h.s.RunQueued("a2", "me", 0); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return h.count() == 2 })
+	waitFor(t, func() bool {
+		for _, r := range h.s.Status().History {
+			if r.Status == "running" {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 func TestSchedRunAllOnAMemberlessNode(t *testing.T) {

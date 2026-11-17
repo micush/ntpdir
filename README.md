@@ -1,696 +1,1072 @@
-# MCP Network Director
+# AnyTime NTP Director
 
-MCP Network Director (`netdir`) is a highly available [MCP](https://modelcontextprotocol.io) gateway to a network's switches and firewalls. An assistant such as Claude connects to one address and can ask any device, or all of them at once, for its facts, interfaces, neighbors and configuration.
+AnyTime gives a group of machines one shared NTP address. Clients point at that address, called a **gateway**, and every node answers it. The nodes agree among themselves, over a small multicast or unicast protocol, who owns which share of the traffic, so a node can fail or restart without clients noticing.
 
 What you get:
 
-- **One address that survives a node failure.** Several nodes share a virtual IP (the gateway's **VIP**). The nodes elect a controller among themselves and spread clients across every node. A node can fail or restart without the assistant losing the gateway.
-- **Anycast over BGP or OSPF.** A gateway can also announce extra addresses to your routers through FRR, so every site reaches its nearest gateway. A node withdraws them when it cannot answer.
-- **One inventory for every vendor.** Devices and their logins live in the cluster's shared settings, so any node can answer for any device. Each platform is a small driver that speaks the device's own API.
-- **Read-only first, with guard rails.** Access is by address list or bearer key, and read-only is the default. Device logins and netdir's own keys are never shown to an MCP caller; a device's own secrets (in its configuration) are hidden unless the caller's privacy level is `none`. A device's running configuration is offered (`device_config`) with its secrets hidden by one list of secret words, and `show` takes nothing that writes. Every call is logged.
-- **A cluster you manage from any node.** Shared settings, config history, certificates and software updates stay in step across the nodes, through a web GUI or the command line.
+- **One shared address, answered by every node.** Clients are spread across the nodes, and the address survives the loss of any of them.
+- **chrony answers the clients on each node, from the servers you define.** AnyTime tests your upstream servers with real NTP requests and gives chrony only the ones that pass; a server that fails, is a falseticker, is too far out of sync or is too slow is taken out of chrony's sources on every node within seconds, and put back when it recovers.
+- **chrony is also the node's own clock.** The installer sets chrony 4.0 or newer up as a prerequisite and switches off the servers it came with, so the servers you define are its only sources.
+- **A node with the wrong time does not serve.** A node whose clock is more than `serve_offset_ms` (default 50 ms) off what chrony measures against the servers answers nobody and leaves the gateway and its anycast addresses until it is back in step; a gateway with no server in service is muted the same way.
+- **Client access and rate limiting** (chrony's `allow` and `ratelimit`), set from one page.
+- **Anycast addresses over BGP or OSPF.** Gateways can announce extra addresses to your routers through FRR, and withdraw them when no upstream server is healthy.
+- **A web GUI and a command line** that manage the whole cluster. Draw gateways and NTP servers on a topology page, watch live statistics, and keep shared settings, config versions, certificates and software updates in step across all your nodes.
 
-## Screenshots
-
-The web GUI, taken in a lab: two Juniper routers and a Centreon server behind one gateway (the devices are test stubs, not real gear).
-
-**Topology**: the gateway, the node serving it, and the devices it answers for.
-
-![Topology: one gateway with its node and three devices](snaps/topology.png)
-
-**Configure ▸ Devices**: the inventory and the logins the devices use (passwords and tokens are masked, and never shown to an MCP caller).
-
-![Configure, Devices: the device inventory and the logins](snaps/configure-devices.png)
-
-**Configure ▸ MCP**: who may use the endpoint, by address or by key, read-only or read-write.
-
-![Configure, MCP: allowed sources and keys](snaps/configure-mcp.png)
-
-**Monitor ▸ Devices**: the devices at a glance, counted by state, with each one's state, platform, address and tags. Ask a device its facts, interfaces or a show command from an assistant over MCP.
+![The Topology page: a gateway, its nodes, an anycast address and its upstream NTP servers](snaps/topology.png)
 
 ## Contents
 
-- [Screenshots](#screenshots)
-- [Status](#status)
 - [How it works](#how-it-works)
 - [Install, upgrade, uninstall](#install-upgrade-uninstall)
-- [Managed devices](#managed-devices)
-- [Connecting an assistant](#connecting-an-assistant)
-- [MCP tools](#mcp-tools)
-- [Security](#security)
-- [MCP usage](#mcp-usage)
-- [Privacy levels](#privacy-levels)
-- [Trying a device first: devprobe](#trying-a-device-first-devprobe)
+- [How NTP is served](#how-ntp-is-served)
+- [Topology](#topology)
+- [Anycast addresses and BGP](#anycast-addresses-and-bgp)
+- [Gateway roles, virtual MACs and real-MAC mode](#gateway-roles-virtual-macs-and-real-mac-mode)
+- [The web GUI](#the-web-gui)
+- [Users](#users)
+- [Config history](#config-history)
+- [The GUI certificate](#the-gui-certificate)
 - [Clustering](#clustering)
-- [Anycast addresses, BGP and OSPF](#anycast-addresses-bgp-and-ospf)
-- [Neighbor discovery (LLDP)](#neighbor-discovery-lldp)
-- [Configuration file](#configuration-file)
+- [Monitoring: statistics, host, capture and log](#monitoring)
+- [Operating a node](#operating-a-node)
+- [Upgrading a running cluster](#upgrading-a-running-cluster)
 - [Build from source](#build-from-source)
 - [License](#license)
 
-## Status
-
-| Area | State |
-|---|---|
-| VIP election, anycast, BGP, OSPF, LLDP, cluster, users, backups, scheduler, updates | built in |
-| Device inventory, credentials, MCP device tools | built in |
-| Drivers | `linux` (a Linux host over SSH), `ios` (classic Cisco IOS over SNMP, read only), `sdwan` (Cisco Catalyst SD-WAN Manager), `nsxt` (VMware NSX-T), `aci` (Cisco ACI APIC), `unimus` (Unimus config backup), `ad` (Microsoft Active Directory over LDAPS, read only), `iosxe` (Cisco Catalyst over RESTCONF), `nxos` (Cisco Nexus over NX-API), `eos` (Arista over eAPI), `junos` (Juniper Junos over its REST API), `aoscx` (Aruba CX over REST), `fortios` (FortiGate over REST), `panos` and `panorama` (Palo Alto firewalls and Panorama over the XML API), `nios` (Infoblox over WAPI), `technitium` (Technitium DNS Server over its HTTP API), `bigip` (F5 BIG-IP over iControl REST), `meraki` (Cisco Meraki over the Dashboard API), `entra` (Microsoft Entra ID over Microsoft Graph, read only: the devices of a user; browser sign-in or an application), `afc` (Aruba Fabric Composer over its REST API), `proxmox` (Proxmox VE over its REST API), `pbs` (Proxmox Backup Server) and `pdm` (Proxmox Datacenter Manager) over their REST APIs, `observium` and `centreon` (monitoring systems over their REST APIs), `vcenter` (VMware vCenter over its REST API), `nsone` (NS1 hosted DNS over its REST API), `rcode0` (RcodeZero anycast DNS over its REST API), `ipfabric` (IP Fabric over its REST API), `device42` (Device42 inventory over its REST API), `smax` (Micro Focus SMAX service desk over its REST API), `aviatrix` (Aviatrix Controller), `dnsdir` (the DNS Director product, over its MCP endpoint), `netdir` (another MCP Network Director; see *Federation*), `mediaencoder` (a multi-media[encoder] NVENC HEVC encoder, over its MCP endpoint) |
-| Writes to devices | typed port changes (description, shut, no shut, clear counters; `save` for the configuration) from plain English on Catalyst IOS-XE, Nexus NX-OS, Arista EOS, Aruba CX, Meraki switches, Junos, FortiOS and BIG-IP (`device_change`; PAN-OS: clearing interface counters only), and any configuration change on every platform (`device_change_raw`: REST request, PAN-OS action, or CLI lines); an `rw` key, ACL entry or GUI account may, `ro` may not; not yet run on real gear |
-| `show` commands, text running-configs | NX-OS, EOS and PAN-OS answer them over their APIs; IOS-XE, ArubaOS-CX and FortiOS need an SSH transport, not built yet; Infoblox and Technitium have none |
-| NX-OS, EOS, ArubaOS-CX, PAN-OS, Infoblox and Technitium drivers | built against vendor documentation and a test stub, not yet run on real gear (see the changelog) |
-| Web GUI | Configure ▸ Devices edits the inventory and logins, Monitor ▸ Devices lists the devices with their state (right-click a row for the network tools). |
-
 ## How it works
 
-A **gateway** is one shared address, its VIP (IPv4, IPv6 or both), served by several nodes. The nodes of a gateway find each other over multicast, or over a unicast list where multicast is blocked, and elect one **controller (AGC)**. The others are **forwarders (AFN)**. The controller answers ARP and IPv6 neighbor solicitations for the VIP with the MAC address of a node chosen by the gateway's load-balancing method, so clients are spread over all the nodes. The MAC is either a virtual one per node, which another node takes over when that node fails, or, in real-MAC mode (the default for a new gateway), the node's own.
+A **gateway** is one shared address, its **VIP** (IPv4, IPv6 or both), served by several nodes.
 
-Every node that is active or forwarding answers on the VIP (and the other gateway addresses) with a listener of its own that serves only the MCP endpoint, `/mcp`, on port 443 by default (`settings.mcp_port`). The GUI does not answer on those addresses: it listens on port 22161 of the node's own addresses. A node whose MCP listener is not serving withdraws its anycast addresses, so traffic goes to a node that can answer.
+The nodes of a gateway find each other over multicast, or over a unicast list of every node's address where multicast is blocked, and elect one **controller (AGC)**. The others are **forwarders (AFN)**. The controller answers ARP (IPv4) and neighbour solicitations (IPv6) for the VIP with the MAC address of a node picked by the gateway's load-balancing method, so clients are spread over all the nodes.
 
-One answer to an assistant is at most 1 MB by default and is cut, with a note, beyond that; `settings.mcp_max_result_mb` (Configure ▸ MCP ▸ Largest answer) raises it to at most 8. An assistant reads the answer into its context, and 1 MB of text is roughly 250,000 tokens, so ask for less before raising it.
+That MAC is normally a virtual one per node, which another node takes over when the node stops or fails. With **real MAC addresses** switched on (the default for a gateway you create, see [Real-MAC mode](#real-mac-mode-no-virtual-macs)), it is the node's own MAC. Virtual MACs need Linux, macvlan support and root.
 
-An MCP request for devices is answered by the node that receives it. That node opens the driver for each device the target picks, asks up to 16 devices at a time with a time limit per device, and returns one result per device.
+Every node answers NTP on the VIP through chrony. AnyTime probes the upstream servers you give it with real NTP requests and writes the healthy ones into chrony's sources. Extra **anycast** addresses on a gateway can be announced to your routers over BGP.
+
+Several nodes can be managed as one **cluster**. Shared settings, config history, certificates and software updates are kept in step from any node. The cluster is for management only and is independent of the gateway election.
 
 ## Install, upgrade, uninstall
 
-Supported systems are Ubuntu, Debian, Fedora, RHEL, Rocky, Alma, Arch and Manjaro, and their derivatives. netdir is Linux-only (macvlan, AF_PACKET, inotify).
+New here? `QUICKSTART.md` at the top of the tarball walks through the install, the first gateway and the web GUI.
+
+### From GitHub
+
+To install the latest tagged release straight from GitHub (this also upgrades an existing install):
 
 ```
-tar xzf netdir_v3.tgz && cd netdir
-sudo ./install.sh [--add-user NAME] [--no-start] [-y] [--dry-run]
-sudo netdir-uninstall [--purge]
+curl -fsSL https://raw.githubusercontent.com/micush/ntpdir/HEAD/get.sh | sudo bash
 ```
 
-The installer builds netdir from the source tree with Go 1.24 or newer (it fetches a toolchain when the distribution's is too old). It installs only the missing prerequisites: gcc and the PAM headers, iproute2, FRR, nmap, ping and mtr, snmpd and lldpd. Then it sets up the `netdir` group, the PAM service, the systemd unit and `/var/lib/netdir`. Running it again on a newer tree upgrades. A start that fails rolls back to the previous binary.
+`get.sh` finds the newest GitHub release (or, if there is none, the highest `v<number>` tag), downloads that tag's source archive and runs its `install.sh`. Everything after `--` goes to `install.sh`, except `--version TAG`, which installs that tag instead. It needs `curl` or `wget`, and `tar`. To publish a version, push a tag named `v<VERSION>` (for example `v223`).
 
-`QUICKSTART.md` walks through a first gateway and connecting an assistant.
+### From a tarball
 
-## Managed devices
-
-Devices and their logins go in the shared `settings` block:
-
-```json
-"settings": {
-  "devices": [
-    {"name": "cat9300", "platform": "iosxe", "address": "10.0.0.2", "credential": "cat",
-     "insecure": true, "tags": ["site=home", "role=access"]},
-    {"name": "fg100e", "platform": "fortios", "address": "10.0.0.1", "credential": "fgt",
-     "insecure": true, "tags": ["site=home", "role=firewall"], "options": {"vdom": "root"}},
-    {"name": "n9k", "platform": "nxos", "address": "10.0.0.3", "credential": "cat", "insecure": true},
-    {"name": "leaf1", "platform": "eos", "address": "10.0.0.10", "credential": "cat", "insecure": true},
-    {"name": "dns1", "platform": "technitium", "address": "10.0.0.11", "credential": "pan", "insecure": true},
-    {"name": "cx6300", "platform": "aoscx", "address": "10.0.0.6", "credential": "cat", "insecure": true,
-     "options": {"api_version": "v10.09"}},
-    {"name": "ddi", "platform": "nios", "address": "10.0.0.7", "credential": "cat", "insecure": true},
-    {"name": "pa440", "platform": "panos", "address": "10.0.0.4", "credential": "pan", "insecure": true,
-     "options": {"vsys": "vsys1"}},
-    {"name": "pano", "platform": "panorama", "address": "10.0.0.5", "credential": "pan", "insecure": true,
-     "options": {"device_group": "branches"}}
-  ],
-  "device_credentials": [
-    {"name": "cat", "username": "netdir", "password": "…"},
-    {"name": "fgt", "token": "…"},
-    {"name": "pan", "token": "…"}
-  ]
-}
+```
+tar xzf ntpdir_vN.tgz && cd ntpdir
+sudo ./install.sh [--add-user NAME] [--no-start] [--no-keep-go] [--force] [-y] [--dry-run]
+sudo ntpdir-uninstall [--purge] [--remove-group] [-y]
 ```
 
-| Field | Meaning |
+Supported systems are Ubuntu, Debian, Fedora, RHEL, Rocky, Alma, Arch and Manjaro, and derivatives that list one of them in `ID_LIKE`.
+
+### What the installer does
+
+The installer builds AnyTime from the source tree, installing only the prerequisites that are missing:
+
+- **chrony** (enabled and started; see below), **gcc and the PAM headers**, **iproute2**, **FRR** (for the Anycast pages) **nmap**, **ping** and **mtr** (for Scan, Ping and Traceroute on the Statistics page), **snmpd** (`snmpd` on Debian and Ubuntu, `net-snmp` elsewhere; for Configure ▸ SNMP, switched off by the installer until a community string is set), **lldpd** (for Configure ▸ Settings ▸ General ▸ Neighbor discovery; optional, and on the RHEL family it is in EPEL, which the installer does not switch on, so there it is only installed when EPEL is already enabled; an lldpd the installer adds is left stopped until LLDP is switched on, and one that was already there is left as it was).
+- **A Go toolchain, version 1.24 or newer.** It is taken from the distribution's own package (`golang-1.2x-go`, `golang-go`, `golang` or `go`) when that is recent enough. Otherwise it is downloaded from go.dev with a checksum check. A downloaded toolchain is kept in `/usr/local/share/ntpdir/go`, because the daemon rebuilds itself with it when you apply an update; `--no-keep-go` removes it.
+- FRR comes from the distribution's `frr` package (EPEL on the RHEL family). Its reload script, `frr-reload.py`, is in the separate `frr-pythontools` package on Debian and Ubuntu (the installer adds it) and part of `frr` on the RPM distributions; it is looked for in `/usr/lib/frr` and `/usr/libexec/frr`, and without it every BGP change restarts FRR and drops the sessions briefly. If installing FRR fails the installer only warns, and AnyTime leaves FRR untouched until a local AS is set on the Anycast page. A failed nmap, ping or mtr install is a warning too; only Scan, Ping and Traceroute need them.
+
+**chrony.** chrony 4.0 or newer (it needs `sourcedir`) answers NTP clients and keeps the node's clock. The installer adds a marked block to its configuration (`/etc/chrony/chrony.conf` on Debian and Ubuntu, `/etc/chrony.conf` elsewhere) with `sourcedir /etc/chrony/ntpdir.sources.d` and `confdir /etc/chrony/ntpdir.conf.d`, creates both directories, and switches off the servers chrony came with: its `pool`, `server` and `peer` lines are commented out with a `#ntpdir-off#` marker and the distribution's `sources.d/*.sources` files are renamed to `*.ntpdir-off`. Until you define NTP servers in AnyTime, the node therefore has no time source, and the installer says so. chrony is enabled and restarted when the block changes. The uninstaller removes the block and puts the servers back (it leaves chrony installed; `--purge` also removes the two directories).
+
+**In a container.** An LXC container (Proxmox, for example) cannot set the clock, and Ubuntu's chrony unit then refuses to start ("start condition unmet"). When the installer finds it cannot set the clock, it adds a systemd drop-in (`ntpdir.conf` in the chrony unit's `.d` directory) that starts chrony as `chronyd -x` and clears those start conditions. chrony then answers the clients with the clock of the container's host, and still measures how far that clock is from your servers, so [Serve only within](#serving-only-with-the-right-time) shows when the host is wrong. It does not take its time from the servers you define. Use a virtual machine, or a physical host, when the node must set its own clock. The uninstaller removes the drop-in.
+
+It then installs `/usr/local/sbin/ntpdir`, the state directory `/var/lib/ntpdir` (mode 0700), the `ntpdir` group, `/etc/pam.d/ntpdir`, a NetworkManager drop-in that leaves the `ntpdir*` macvlan interfaces alone, and the `ntpdir` systemd unit.
+
+### Upgrading and uninstalling
+
+If AnyTime is already installed, the script upgrades it. The config, certificate, group members and an existing PAM file are kept, and the old binary is saved as `/usr/local/share/ntpdir/ntpdir.prev`. If the new version does not start, the old one is restored. Installing the same version is a no-op, `--force` reinstalls, and a downgrade needs `--force`.
+
+The user who ran the installer (the one behind `sudo`) is added to the `ntpdir` group so they can log in to the GUI; `--add-user NAME` adds others. Uninstalling keeps `/var/lib/ntpdir` (the config, the certificate, config history and the cluster identity) unless you give `--purge`.
+
+### Where things live
+
+Everything AnyTime keeps is in `/var/lib/ntpdir` (mode 0700): `ntpdir.conf`, the GUI certificate, `versions/`, the cluster identity and the update data. The control socket is `/run/ntpdir/ntpdir.sock`.
+
+### Fresh start or cloned VM
+
+If `ntpdir.conf` does not exist, the daemon creates it with the defaults and **no gateways**, then starts. You draw the gateways on the Topology page.
+
+To reset a node, stop the service, run `rm -rf /var/lib/ntpdir/*` and start it again. The web certificate and the cluster identity are regenerated too, so give a cloned machine its own address first.
+
+## How NTP is served
+
+Every node runs chrony, and chrony answers the clients on every address of the node, including the gateway's shared address (there is no switch for it). AnyTime does not touch client packets. It does three things:
+
+- It **tests** the upstream servers you define (Topology page, or Configure ▸ NTP ▸ Servers) with real NTP requests.
+- It writes the servers that pass into `<sourcedir>/ntpdir.sources` and tells chrony (`chronyc reload sources`). Servers that stop passing are removed the same way. This is done every 2 seconds on every node, so the nodes agree because they test the same servers.
+- It writes the client settings into `<confdir>/ntpdir.conf` (the port, `allow` and `ratelimit`) ; a new allow list is applied to the running chrony (`chronyc allow`/`deny`), and chrony is restarted only when the port or the rate limit changes, because chrony reads those at start and has no command for them: see the rolling restart below.
+
+The NTP page (Monitor ▸ NTP, or `ntpdir --show-ntp`) shows chrony's state (synchronised, stratum, offset, its time source (the server it has selected), the requests it has handled and dropped) and, for every server, its health and whether chrony has it as a source (on its card: selected, combined, not combined, not reachable, falseticker, too variable, or not in chrony).
+
+![Monitor ▸ NTP: chrony's state and each server's health and role in chrony](snaps/ntp.png)
+
+In the GUI, the settings are under Configure ▸ NTP, on three tabs: **Servers**, **Health** and **Clients**. In the file they are the top-level `ntp` block (shared by the cluster) and, per gateway, an optional `ntp` block inside the group.
+
+**Which servers a node uses.** Only the servers of the topology: a gateway's own servers, or the shared list (Configure ▸ NTP ▸ Servers) for a gateway that has none of its own, from every gateway that is not paused. Every node uses the same list. chrony has one set of sources, so with several gateways the node uses the healthy servers of all of them together. A shared list that no gateway uses is not given to chrony.
+
+**When no server passes.** chrony keeps the sources it has, and the fallback servers become sources only while no normal server passes. With no fallback either (every server down or paused) the gateway is red and the node answers no clients: ntpdir tells chrony to allow nobody, live and in its file, and the allowed clients come back as soon as one server passes. If every server is paused, the sources file is emptied.
+
+### Serving only with the right time
+
+A node answers clients only while its own clock agrees with the servers. **`serve_offset_ms`** (Configure ▸ NTP ▸ Health ▸ *Serve only within*, default 50, 0 turns it off) is how far the node's clock may be from what chrony measures against the servers. Beyond it the node behaves like a node whose chrony is down: chrony is told to answer nobody, the node leaves the gateway and its anycast addresses, and the other nodes carry on. It comes back when the offset is within 80% of the limit, so a clock on the edge does not flap. Every node serving a gateway therefore has the same time, within the limit.
+
+A gateway that is red (no server in service, no fallback) is muted the same way. The offset is shown on the topology (the circle's tooltip, and the third line of a server box shows each server's offset). In a container chrony cannot set the clock, so the node serves the host's clock; when the host is off by more than the limit the node leaves the gateway, which is what you want.
+
+### Choosing the upstream servers
+
+- **Probing.** Every `probe_interval_ms` (default 16000) AnyTime sends each server a real NTP client request (timeout `probe_timeout_ms`, default 1000). The offset and delay come from the four timestamps (RFC 5905).
+- **Eligibility.** A server is healthy when it answers, its stratum is at most `max_stratum` (default 15; 16 is an unsynchronised clock), its root distance is at most `max_root_distance_ms` (default 1500; 0 turns the check off), its round trip is at most `max_rtt_ms` (default 500; 0 turns the check off: this is "too slow") and it did not answer with a kiss-o'-death or the unsynchronised leap indicator. It is down after `fail_threshold` (default 2) failures in a row.
+- **Falsetickers.** With three or more servers, one whose offset differs from the median of the servers' by more than `max_offset_ms` (default 128; 0 turns it off) is taken out of service until it agrees again. This is "too far out of sync".
+
+chrony then does its own selection among the servers it is given. The old forwarding relay's ranking, spreading (`spread`, `spread_band`, `max_attempts`, `latency_alpha`, `query_timeout_ms`) and its per-client exemptions and limits (`client_exempt`, `client_limits`) no longer exist; the keys are still accepted in a file but have no effect.
+
+**Where the health settings live.** Highest stratum, largest root distance, falseticker offset, failures before down and the serve-only-within limit are the Settings values, shared by the cluster. A gateway can have its own set (Topology ▸ right-click the gateway ▸ Edit ▸ Health checks ▸ own values; CLI `--canvas-set gateway … --max-stratum …`).
+
+### Fallback servers
+
+`fallback_servers` in the `ntp` block lists upstreams that are used **only while no normal server is in service**: every one down or paused, or none listed. They are **asked every probe round** and reported (the Servers page shows *no answer*, `--show-ntp` shows `silent`, and the alert *Fallback server not answering* opens), but they always count as up: a silent last resort is still the last resort. As soon as a normal server answers again, the fallbacks are dropped. The NTP page marks them and says when they are in use, and the canvas shows amber "answering from the fallback servers".
+
+### Port and clients
+
+chrony answers on `listen_port` (default 123; chrony's `port`). Server addresses are written `10.0.0.123`, `10.0.0.123:1123`, `[2001:db8::123]:123` or a host name. Changing the port or the rate limit restarts chrony on each node, one node at a time and out of service (see below); changing the allowed clients does not restart anything.
+
+**Rolling chrony restart.** chrony reads its port and rate limit only when it starts, and a restart means the node answers nothing until chrony has polled its sources again (a few seconds to tens of seconds). So when either changes, the nodes restart chrony **one at a time, each out of service**: the node is paused (its gateways resign and the other nodes take over), chrony is restarted, AnyTime waits until chrony is synchronised, and the node is resumed. There is no coordinator: each node reads what the others report (`pending`, `restarting`, `failed`) and goes when nobody is restarting or failed, no node with a lower address is waiting, and nobody is installing an update. A change is known for 15 seconds before a node starts, so the others have seen it. The NTP page (the chrony tile) and `--show-ntp` show where a node is: "restart waiting: why", "restarting chrony", or "restart failed: why".
+
+- A node that is **alone**, or the last one serving a gateway, cannot be paused (nobody could take over), so it restarts chrony anyway and has the gap. A node that was already paused stays paused.
+- If chrony is not synchronised within 3 minutes, the node is resumed anyway, shows **failed**, and the other nodes **wait**; it tries again after 10 minutes. Fix the cause (usually no server passes the health checks) and the roll continues by itself.
+- Addresses announced by AnyName cannot be withdrawn by AnyTime, so clients that use one still reach the node while chrony restarts.
+- If the daemon stops while a roll has the node paused, it resumes the node when chrony is synchronised after the daemon starts again (`chrony-roll.json` in the state directory).
+- A paused node keeps its probe pools, so chrony keeps its sources while the node is paused.
+
+**Allowed clients.** `allowed_clients` lists the networks that may use the node (`10.0.0.0/8`, `192.168.1.5`, `2001:db8::/32`; chrony's `allow`); empty means everyone. The node itself (loopback) is always allowed.
+
+**Blocked clients.** `blocked_clients` lists clients and networks that get no answers (chrony's `deny all`, written after the `allow` lines, so a block wins over the allowed list, also for a network inside an allowed one). It is applied to the running chrony without a restart. Loopback cannot be blocked. In the web GUI, Statistics ▸ Top Clients ▸ right-click ▸ **Block** / **Unblock** edits it for one address, and a 🚫 marks blocked clients (dim when a network holds the address). chrony has no per-client rate, so there is no per-client limit.
+
+**Authentication (NTS and keys).** Configure ▸ NTP ▸ Security. `ntp.keys` holds symmetric keys in chrony's key-file form (`7 SHA256 HEX:5e0c…`); chrony answers a client that signs its request with one of them with a signed answer. `ntp.server_auth` lists upstream servers that chrony reaches with **NTS** (`time.cloudflare.com nts`) or a key (`10.0.0.5 key 7`); `ntp.nts_server` makes chrony also serve NTS to clients (NTS-KE on TCP 4460) with the web GUI certificate, which ntpdir copies to `/etc/chrony/ntpdir.auth.d/` (readable by root and chrony's group only) and follows when it is renewed. Everything is shared by the cluster; chrony reads it only at start, so a change rolls a chrony restart through the nodes one at a time. Until chrony has been restarted with a new key or NTS setting, a server that is to be authenticated stays out of its sources rather than being used without authentication. ntpdir's own health probe is a plain NTP request, so an authenticated server must answer plain NTP too. NTS needs a chrony built with it (`chronyd -v` shows `+NTS`); without it the NTS settings are ignored and the Log says so. The keys are left out of support bundles and the history shows only how many there are.
+
+**Leap seconds.** Configure ▸ NTP ▸ Leap seconds: `ntp.leap_tz` (chrony's `leapsectz`, normally `right/UTC`; a node without the table leaves the line out), `ntp.leap_mode` (`leapsecmode`: system, step, slew, ignore) and `ntp.leap_smear` (`smoothtime 400 0.001 leaponly`: clients get time smeared across the leap second). Shared, applied by the same rolling chrony restart.
+
+**SNMP.** Configure ▸ Monitoring ▸ SNMP (`snmp_communities`, `snmp_acl` and `snmp_contact` in the shared `ntp` block, `location` in this node's own `snmp` block) runs net-snmp's `snmpd` for monitoring systems. **With at least one community string snmpd is enabled and running; with none it is disabled.** Any number of community strings can be set (up to 16); each gives read-only access over IPv4 and IPv6 on UDP 161 (open the port in the firewall), and `location` and `contact` become `sysLocation` and `sysContact`. ntpdir writes `/etc/snmp/snmpd.conf` (mode 0600; its first line says it is managed) and starts, restarts or stops the `snmpd` service when the settings change and when ntpdir starts. A `snmpd.conf` that was there before is kept once as `snmpd.conf.ntpdir-orig` and put back when the communities are emptied or ntpdir is uninstalled; an snmpd that ntpdir never took over is left alone. The community strings and the contact are cluster settings (replicated); the location is local to each node. The community strings are left out of support bundles and only their number appears in the history. `snmp_acl` is the list of sources snmpd answers to (an address, a network or a host name each; **empty = nobody**, so a community string answers no one until a source is listed; a name is turned into its addresses when snmpd.conf is written, and again every 5 minutes): every community is written once per source (`rocommunity NAME SOURCE`, `rocommunity6` for IPv6).
+
+**LLDP.** Configure ▸ Settings ▸ General ▸ Neighbor discovery (`lldp` in the shared `ntp` block, off by default; `ntpdir --lldp-enable` / `--lldp-disable`) runs **lldpd** on every node: the switches learn each node's name, port and management address, and each node learns which switch and port each of its interfaces is plugged into, listed on Monitor ▸ Node under **LLDP neighbors** (switch, port, VLAN, management address, when last heard), by `ntpdir --lldp` and by the MCP tool `get_lldp`. It is off by default because LLDP tells everything on the segment the host's name, OS and addresses.
+- **The setting decides, whoever started lldpd**: on, lldpd is enabled and running on every node; off, it is stopped and disabled, also one started by hand or by its package (Debian starts lldpd as soon as it is installed). Each node checks once a minute, so an lldpd installed or started behind ntpdir's back follows the setting again within a minute. To run lldpd on these nodes, switch LLDP on here. While LLDP is on, `/etc/lldpd.d/ntpdir.conf` (comments only; lldpd reads that directory's `*.conf` as lldpcli commands) says so; the uninstaller stops lldpd when that file is there, and never removes the package.
+- **On a host with AnyName (dnsdir) too, AnyName decides**: while it is installed, ntpdir neither starts nor stops lldpd, drops its file, and the box on this page cannot be changed (switch LLDP in AnyName). ntpdir decides again within a minute of AnyName being removed.
+- No neighbors on a virtual switch or in a cloud network is normal: many do not pass LLDP. Some Intel cards (i40e, ice) run their own LLDP agent in firmware and keep the frames from the OS (`ethtool --set-priv-flags IFACE disable-fw-lldp on`). CDP and the other vendor protocols are off in lldpd unless you turn them on with a file of your own in `/etc/lldpd.d/`.
+- The support bundle (tshoot) has `lldp/neighbors.txt` and `lldp/status.txt` (lldpcli's view: neighbors, interfaces and counters).
+
+**Metrics.** Configure ▸ Monitoring ▸ Metrics (`metrics_acl` in the shared `ntp` block) lists who may read `GET /metrics` on the web GUI port, in the Prometheus text format, from every node (each node its own numbers). The page is always there, but the list is empty until you fill it in, and an empty list means nobody: everybody not listed gets 403. There is no login: the address of the connection decides, never a header. An entry is an address (`10.1.1.1`), a network (`10.1.1.0/24`; an address with host bits such as `10.1.1.1/24` is read as its network) or a host name (`prom.example.com`, looked up again every minute). The page has numbers and states only, no client addresses: the clock (`ntpdir_chrony_synchronised`, `_stratum`, `_offset_ms`, `_root_delay_ms`, `_root_dispersion_ms`, `ntpdir_chrony_source_reach` and `_selected` per source, `ntpdir_ntp_requests_total` and `_dropped_total`), `ntpdir_upstream_healthy`, `_falseticker`, `_latency_ms`, `_failures_total`, `_stratum` and `_offset_ms` per upstream server, `ntpdir_gateway_active` and `_ntp_listening` per group, the host (`ntpdir_host_cpu_percent`, `_load`, `_memory_*`, `_swap_*`, `_disk_io_percent`, `_filesystem_*` per mount, `_interface_*` per interface) and `ntpdir_info{version}`. In `prometheus.yml` use `scheme: https` and the web GUI port as the target. The certificates are in it too (`ntpdir_certificate_expires_in_seconds` and `_not_after_timestamp_seconds`, labelled `certificate="web"`). Under the **Allowed sources** list are two links, **Grafana dashboard example** and **Prometheus alert rules example**: downloads (for a signed-in user) of a dashboard to import in Grafana and a rule file for Prometheus, both made for these metrics.
+
+**MCP.** Configure ▸ Monitoring ▸ MCP (`mcp_acl` in the shared `ntp` block) lists who may use the Model Context Protocol at `POST /mcp` on the web GUI port (streamable HTTP, JSON answers; protocol versions 2024-11-05 to 2025-11-25), so an assistant such as Claude can look at the cluster and, from an rw address, change anything the GUI can. Like `/metrics` there is no login: the address of the connection decides, an empty list is nobody, and a browser page of another site is refused (`Origin`). An entry is an address, a network or a host name, read-only, or `ADDRESS rw` for one single address that may also change things (`10.1.0.0/24`, `ops.example.com`, `10.1.1.50 rw`). Any node answers for the whole cluster: tools take a `node` (address or host name).
+
+**MCP keys.** For a caller whose address changes (a laptop on DHCP, Wi-Fi or a VPN), Configure ▸ Monitoring ▸ MCP ▸ **Keys** (`mcp_keys` in the shared `ntp` block) holds up to 32 keys, each with a name and `ro` or `rw`. A request with `Authorization: Bearer KEY` gets the key's access from any address; from a listed address it gets the higher of the two. A key that matches none is refused with 401 whatever the address (logged once a minute per address), and a request with neither a listed address nor a key gets 403. Right-click ▸ **Add key** makes a random 256-bit key in the browser (`ntpdir_…`) and sends it with the save. The key is kept in the configuration beside its `"hash": "sha256:…"` (the hash is what a request is checked against), so it is in the file, its history and on every node, and the **Key** column of the table shows it again: dots like the other secrets, and the eye shows it; right-click ▸ **Copy key** copies it. It is never shown to an MCP caller or a read-only account (both read `(hidden)`). A key made before keys were kept has only its hash and cannot be shown: right-click ▸ **Replace key** makes it a new one. A key can also be given as `{"name": "laptop", "access": "rw", "key": "AT-LEAST-32-CHARACTERS"}` in the file or through `edit_config`; the hash is worked out from it when the configuration is checked. Requests with a key run as `mcp:NAME@ADDRESS`. Claude Code: `claude mcp add --transport http ntpdir https://NODE:PORT/mcp --header "Authorization: Bearer KEY"`; `mcp-remote`: add `"--header", "Authorization: Bearer KEY"` to its `args`.
+- Read tools: `list_nodes`, `get_topology`, `get_ntp`, `get_time`, `get_gateways`, `get_alerts` (`node: "all"` for every node), `get_log`, `get_query_stats` (NTP client requests: a node, `node: "cluster"`, or `gateway: N`), `get_host_stats`, `get_lldp` (the switch port of each interface), `get_server_stats`, `get_schedule`, `get_updates`, `get_node_status`.
+- Write tools (rw only): `set_node_paused`, `set_paused` (gateway, server or anycast address; scope node or all), `alert_action` (ack, unack, silence, resolve, fix: recheck or restart_chrony), `schedule_set`, `schedule_delete`, `schedule_run`, `update_fetch`, `update_apply`, `update_push`, `update_cancel`, `rename_node` (the host name, as Operate ▸ Node), `set_label` (a gateway's or server's name), `set_gateway_node` (remove a node from a gateway or add it back, by node ID for one that left), `clear_left_nodes` (drop the removed-node entries of nodes no longer in the cluster, from one gateway or all).
+- Full access for rw: `edit_config` (`set` merged into the configuration: objects key by key, anything else replaced, `null` removes; checked and saved as Configure does; `dry_run`) and `api_request` (any method and route of the GUI's API with a JSON body; `list_api` lists the routes, generated from the source by `TestAPIRoutesListed` into `apiroutes.go`), so an rw address can do everything the GUI can, shell tasks of the scheduler included. Read-only: `api_get` and `get_config`. Not reachable: login, logout, the session and the SSO sign-in routes, and the configuration versions' contents (`/api/versions/get`, `diff`, `download`), which are whole files with their secrets.
+- **No MCP caller is shown a secret, rw included** (`mcpsecrets.go`): what a tool answers ends up in an assistant's conversation, so keys and passwords (gateway keys, BGP/OSPF, LDAP and backup passwords, chrony keys, SNMP communities, SSO client secrets, private keys, join codes and tokens) read `(hidden)` in every answer, and in the log line of a change. Sent back as `(hidden)` through `edit_config` or `api_request`, a secret keeps its current value, list entries being matched by `group_id`, `peer`, `name` and the like rather than by position; a `(hidden)` that matches nothing is refused, never saved. To set a new secret, send the real value.
+- Each tool is a request to the GUI's own API made in-process as the user `mcp@ADDRESS`, or `mcp:NAME@ADDRESS` with a key (read-only unless the address or the key is rw), so the GUI's rules apply, another node is reached through the cluster relay, and changes are logged and kept in the configuration history under that name. `POST /api/canvas/edit` (the `--canvas-*` edits, plus `prune node`) is new for this.
+- Claude Desktop: a local server in `claude_desktop_config.json`, relayed by `mcp-remote` (Node.js): `"ntpdir": { "command": "npx", "args": ["mcp-remote", "https://NODE:PORT/mcp"], "env": { "NODE_TLS_REJECT_UNAUTHORIZED": "0" } }`; the `env` accepts the self-signed certificate unchecked (or set `NODE_EXTRA_CA_CERTS` to the nodes' `ntpdir-web.crt` files). Claude Code: `claude mcp add --transport http ntpdir https://NODE:PORT/mcp`. Connectors added on claude.ai connect from Anthropic's servers and cannot reach it.
+
+**Client rate limiting** (Configure ▸ NTP ▸ Clients) maps to chrony's `ratelimit` and applies to every gateway.
+
+- **`client_rate`** is the limit per client in requests per second; 0 is no limit. It is rounded to a power of two (chrony's `interval`). **`client_burst`** is how many a client may send at once (0 means twice the rate, at least 10; at most 255).
+- **`client_action`** is what a client over its rate gets: `drop` (nothing is sent: the default and the safest) or `kod` (a kiss-o'-death, which a polite client reads as "slow down"; chrony answers every second excess packet that way).
+
+The NTP page and `--show-ntp` show the limit and the number of requests chrony has dropped.
+
+### Hot reload
+
+The whole `ntp` block hot-reloads when you edit the file or use the GUI; a gateway's pool is only rebuilt when its servers or timing change.
+
+## Topology
+
+The first page of the GUI is a drawing of your configuration. Each **gateway is an item under Topology** in the sidebar (right-click it ▸ **Rename** or **Delete**), with *＋ New gateway* at the end. A gateway you create (the GUI form or `--canvas-add gateway`) starts with four NTP servers, `pool.ntp.org`, `time.nist.gov`, `time.google.com` and `time.cloudflare.com`; they are ordinary servers, so delete the ones you do not want. A gateway already in a config file, and the shared server list, are not changed.
+
+The drawing has two kinds of shape, plus the anycast pills:
+
+- a **circle** for the gateway (its shared address, the VIP),
+- a **square** under it for every NTP server of the gateway.
+
+**The drawing is the gateway, not the selected node.** When the node picked in the Node menu does not serve the gateway (another subnet, removed from it, or paused there), it has no servers probed of its own. The circle, servers and anycast addresses are then those of a node that does serve it, asked over the cluster channel, and the circle's tooltip says which ("As NODE sees it"). The node shapes still say what each node, this one included, is doing. If no node serves the gateway, or the one asked does not answer within a few seconds, you see the selected node's own view. `ntpdir --canvas` is always the node's own view.
+
+![Right-clicking the gateway circle opens its menu](snaps/topology-menu.png)
+
+### What the colours mean
+
+The colours come from the running daemon.
+
+- **Green** is working.
+- **Yellow** is degraded: the gateway runs but a server is down, or the gateway is answering from its fallback servers.
+- **Red** is down: no healthy server.
+- **Grey** is not known yet (not applied, or not probed yet).
+- **Dashed grey** is paused.
+
+A gateway's dot in the sidebar is the state of the gateway for the **cluster as a whole**, built from its nodes and the same whichever node the Node menu has selected. It is green while any node serves it, amber while it is only served degraded, dashed grey when every node has it paused, and red when no node serves it. A node on another subnet that does not run the gateway does not count against it.
+
+The circle shows the **time**, the gateway's name and its address (no prefix length), and sizes itself to fit even a full IPv6 address. A dual-stack gateway shows both addresses, with a small green, yellow or red chip for each family, and the gateway's own colour is the worst of the two (an IPv6 engine that is not serving is yellow even if IPv4 is fine). Hover the circle to see which cluster nodes are serving the gateway right now: which is this node, which is the controller, and each node's slot.
+
+A server named by host name is probed over IPv4 and over IPv6, each family it has an address for; it is up when either passes, and IPv4 is preferred (the numbers shown are IPv4's whenever IPv4 passes). A server given as an address is probed over that family only. A server is probed with real NTP requests (see [How NTP is served](#how-ntp-is-served)); a server that is down, a falseticker, too slow, or above the stratum or root-distance limit is red.
+
+**The time and the time zone.** The time in the circle is the time of the node you are looking at, counted by the second and checked against the node every 15 seconds (hover it for the date, chrony's stratum, reference and the clock's offset). Every node serving the gateway has the same time, so it belongs to the gateway. The **Time zone** picker at the top left, on the line of the node picker, chooses the zone it is shown in: UTC, or any zone your browser knows. Click it for the list or type part of a name (`phoe`, `kolkata`) to narrow it. The choice is kept in a cookie in your browser, so each person sees the zone they last picked.
+
+**What a server box shows.** From the top: the server's **clock offset** in bold (`+2.81 ms`; `down` or `paused` when it is not answering), its name when it has one, and its address. A `*` after the offset marks the source chrony has selected. The line from the gateway to a server is **blue** when chrony takes the time from it: the selected source (`*`) and the sources it combines with it (`+`). Chrony makes that choice itself, from the servers' own measurements, so it follows the offsets and the delays, not just who answered fastest; a server it leaves out, or that is not in service, has a grey line.
+
+Every tooltip ends with the item's **uptime**: how long the gateway, anycast address, server has been online since it last came back, or how long it has been down, and how many failures it has had ("Online for 1m 1s - 0 failures"). Green and yellow count as online; paused and grey items show nothing. A sampler in the daemon notes the changes every 2 seconds (no browser needed), in memory only, so the counting, failures included, restarts with ntpdir. `ntpdir --canvas` prints the same in brackets.
+
+### The cluster nodes
+
+Each node of the cluster (or just this node, when it is alone) is a **parallelogram** to the left of the circle, this node first and marked with a star. It is named by host name (by address when two nodes share a name), with how it stands for this gateway:
+
+- green *serving*,
+- amber *not serving* (up, but not serving the gateway yet),
+- amber *degraded* (serving, but its own view of the gateway is degraded, for example because some of its NTP servers are down),
+- dashed *paused* (the node is paused on the Operate page, or the gateway is paused or absent there), and
+- red dashed *not answering*.
+
+A node whose **CPU, memory or fullest disk is over 85%** is **solid yellow** (degraded), whatever else it is doing, even paused. It names what is over ("CPU 91% · disk 88%"; the tooltip names the mount) until every one is back at 85% or below. The figures are the Monitor ▸ Node numbers: the last 10-second CPU sample, memory in use, and the fullest of the tracked filesystems. The log records it too: a warning when a node goes over (naming CPU, memory and/or disk) and an info line when it is back at or under, for this node and every reachable member, checked each sync interval. A reading that only moves while still over is not logged again.
+
+Hover a node for its address, role, last-seen time, version, whether it has caught up with the primary's settings, and any update under way. Right-click a reachable node for:
+
+- *Pause node* or *Resume node* (another node is paused through the cluster, like the Node page does with the Node menu; its shape reads "pausing…" until it reports back),
+- *Remove from this gateway* (see below),
+- *Host statistics*, and, for another node, *Open this node* (the same as the Node menu, top right).
+
+For an unreachable node the menu offers *Cluster page*. Nodes are read-only here; add or remove them on the Cluster page. `ntpdir --canvas` lists them as `/_/ cluster node` lines.
+
+### Which nodes serve a gateway
+
+A node serves a gateway unless it is removed from it. A node that joins the cluster, and a gateway that is created in a cluster, start that way round: the new node serves no gateway, and the new gateway runs only on the node it was made on. Add them where they should serve: right-click the gateway ▸ *Add* ▸ *Node* ▸ the node; to take one off again, right-click the node ▸ *Remove*. On the command line, use `--canvas-del node --group N --node NODE` and `--canvas-add node --group N --node NODE`, where NODE is the node's address or host name.
+
+The removal is **shared** (`excluded_nodes` in the gateway's block, a list of node IDs, absent while empty so older versions still read the file). Any node can change it, every node follows, and it survives restarts. A removed node behaves as if the gateway were paused on it: it resigns, gives up the address, and stops answering and probing for that gateway only. Its shape is no longer drawn on that gateway on any node (`ntpdir --canvas` still lists it, as *removed*), and the gateway's circle on that node says it was removed. *Add node* on the gateway lists the removed nodes by name.
+
+A node that **joins** the cluster later is left out of every gateway when it joins (the primary adds it to each gateway's `excluded_nodes` before the joiner's first sync), so joining changes nothing about who answers. Put it where it should serve with right-click the gateway ▸ *Add* ▸ *Node*. Gateways created afterwards are served by every node. The last node serving a gateway cannot be removed; pause the gateway on all nodes instead. This is not the same as *Pause ▸ This node*, which is kept on that node alone, for maintenance.
+
+### Layout of the drawing
+
+The anycast addresses (right of the circle) and the cluster nodes (left) stand four to a column, and the fifth starts a new column further out, and so on. When a four-row side would have a line to a server run through a box, both sides use three rows instead. Anycast addresses can be dragged to any slot, in any column. The drawing grows wider as columns are added (pan with the mouse).
+
+**Zoom, pan and arrange.** Dragging the empty background moves around the drawing in any direction. The mouse wheel over the drawing zooms it (20% to 300%, around the pointer); the zoom is kept across refreshes and reset when you pick another gateway, and a double-click on the empty drawing fits it to the window again. **Drag** a server left or right, or an anycast address up or down to put it in another place. A dashed outline shows where it will land, letting go saves the new order, Escape puts it back, and a click without moving still just selects. The order is only how things are drawn and probed (servers are still chosen by speed). CLI: `ntpdir --canvas-move server|anycast … --to N`.
+
+### Editing the drawing
+
+**Right-click** anything. The circle offers *Statistics*, *Edit*, *Add NTP server*, *Paste server*, *Add anycast address*, *Add node*, *Pause* and *Delete*. A square offers *Statistics*, *Capture*, *Logs*, *Edit*, *Copy server*, *Pause* and *Delete*. *Copy server* then *Paste server* (on a gateway: the circle, or the empty drawing; it can be another gateway) adds the same server, with its name, there; if that gateway already has its address, the Add NTP server form opens so the copy can be given its own. A pause is not copied. *Capture* opens Monitor ▸ Capture with the filter `host SERVERIP and port 123` already filled in (the server's own port when it has one, 853 for `tls://`, 443 for `https://`; a server given by host name is looked up first and filtered by its address, IPv4 preferred; only if the name cannot be resolved is it just `port N`), and only Start is left. *Logs* opens Monitor ▸ Log with the server's address already in the search box. The empty drawing offers *New gateway* and *Add NTP server*. Add and Edit open a popup form; deleting something with things under it asks first and says how many. Left-click selects a shape, and the Delete key deletes it. There is no button row; the right-click menu is the one place for these actions.
+
+**Add NTP server** looks things up for you. Fill in the IP address and the **Name** is filled in from its reverse (PTR) record; fill in a host name as the Name and the address is looked up (IPv4 preferred). The lookup is made once by the node being configured, when you leave the field, and only fills a field that is empty or still holds an earlier lookup. A name or address you typed yourself is never overwritten, and you can change a looked-up name to anything (it is saved as typed). CLI: `ntpdir --host-lookup IP|NAME`. A long server address or name is cut with "…" inside its box (hover for the full text).
+
+**Deleting.** Deleting a square removes the server, and deleting a circle removes the gateway and everything under it (you are asked first, with counts). Deleting the last circle leaves a configuration with no gateways: `"groups": []`.
+
+**Every change is saved as soon as you make it**; there is no Apply button, and every change is a config version (see [Config history](#config-history)). To keep every saved state valid, a new gateway starts with no servers (it is idle until it has one), and deleting the last server leaves a bare gateway. If the daemon refuses a change, the drawing goes back to what is saved and the reason is shown.
+
+### Pause and resume
+
+Right-click a gateway, server or anycast address ▸ *Pause ▸ This node* or *All nodes* (and *Resume* the same way). *This node* is kept in this node's own settings and never replicated; *All nodes* is shared. The two scopes are independent, so an item paused on both stays paused until both are resumed. Paused items are grey and dashed, and the tooltip says where.
+
+- A paused **gateway** releases its address and stops answering.
+- A paused **server** gets no requests or probes.
+- A paused **anycast address** is not announced (the gateway keeps serving).
+
+CLI: `--canvas-pause|--canvas-resume gateway|server|anycast --group 1 [--server ADDR] [--address ADDR] --scope node|all`. `--scope` defaults to node for a gateway and all for a server, and is required for an anycast address. To take the **whole node** out at once (every gateway on it, including ones added later), use Operate ▸ Node ▸ *Maintenance* (or `--node-pause`); see [Operating a node](#operating-a-node).
+
+**Resuming** (and starting the daemon, or adding a gateway) does not put the node back in service at once. It first probes its NTP servers and only joins the gateway when they all answer, or, after 10 seconds, when at least one does (after 60 seconds it starts regardless). Meanwhile the other nodes keep serving and the circle shows "starting — waiting for the NTP servers to answer".
+
+### Statistics from the drawing
+
+Right-click a square or the circle ▸ *Statistics* for graphs over the last hour, day or week (per minute for the hour, per 5 minutes for a day, per 30 minutes for a week). CLI: `ntpdir --server-stats ADDR [--stats-range 1h|1d|7d]`, `ntpdir --gateway-stats GROUP`.
+
+![Statistics for a gateway: answer time, errors, availability and requests per second](snaps/gateway-stats.png)
+
+- A **server** (square) shows **round trip** (the average and worst of its probes), **clock offset** and **failed probes** (the share of the server's own probes that failed, which is what decides whether it is up).
+- The **gateway** (circle) shows its **availability** (the share of the 2-second checks, the same ones that drive the circle's uptime, that found the gateway working; paused or not-yet-started time is not counted), and the node's **clock offset** and **root delay** against the servers, which is what decides whether it serves. Answer time and request rates per gateway are not recorded: chrony answers the clients and does not report them per gateway. See Statistics for chrony's totals.
+
+A server's graphs are the picked node's own view. A gateway's graphs add up every reachable node of the cluster, since which node answers a client is up to the clients; the dialog says "All 3 nodes counted together", or how many were counted and how many did not answer (a single node shows just this node). A gap means nothing happened in that time: paused, the node was down, or, for a server, nothing was asked of it. The history is kept per node for 7 days, one slot per minute, and saved with the other statistics (`stats.json.gz`, every 5 minutes and when AnyTime stops), so a restart keeps it; the time AnyTime was down is a gap. A server address listed by two gateways is one series, and a gateway's series covers all its addresses (IPv4, IPv6, anycast) on this node.
+
+### Pools, families and the cluster
+
+- Each gateway has its **own pool**, and two gateways may use different servers. A server can be an IP (`10.0.0.124`, `10.0.0.124:1123`, `[2001:db8::123]`) or a host name (resolved each time it is probed).
+- A gateway may have an IPv4 and an IPv6 address (one engine per family). NTP servers can be IPv4, IPv6 (`2001:db8::123`, `[2001:db8::123]:1123`) or names.
+- A gateway may hold **more than one address per family**, all in the subnet of its VIP: Edit gateway ▸ *More IPv4 addresses* / *More IPv6 addresses* (comma separated, no prefix length; `more_vip4` and `more_vip6` in the file, up to 32 each). They fail over with the VIP, are answered in ARP / neighbor discovery the same way, and answer NTP through the same pool and statistics. The VIP stays the one the nodes find each other by. An address of another subnet is an anycast address instead.
+- In a cluster the whole drawing (address, servers) is shared and edited anywhere. The network interface stays per node.
+- Two gateways cannot use the same shared address. An anycast address may be on several gateways (see [Anycast addresses and BGP](#anycast-addresses-and-bgp)); it is held while any of them can answer.
+
+### The same thing on the command line
+
+`ntpdir --canvas` prints the same tree and the same colours, and the other commands change it:
+
+```
+ntpdir --canvas                                  # tree with status
+ntpdir --canvas-add gateway --vip 10.0.0.123/24 --interface eth0 \
+     --server 10.0.0.124                        # circle + its starting servers (pool.ntp.org, time.nist.gov, time.google.com, time.cloudflare.com) + this one
+ntpdir --canvas-add server --group 100 --server 10.0.0.125
+ntpdir --canvas-del server --group 100 --server 10.0.0.125
+ntpdir --canvas-add fallback --group 100 --server 0.pool.ntp.org   # used only while every server is down
+ntpdir --canvas-set gateway --group 100 --vip6 2001:db8::123/64      # add IPv6
+ntpdir --test-vmac --group 100                                # do virtual MACs reach this node? (changes nothing)
+ntpdir --canvas-set gateway --group 100 --real-macs on        # no virtual MACs, on every node (off undoes it)
+ntpdir --canvas-set gateway --group 100 --label "Office NTP"  # a name instead of the address (--label - clears)
+ntpdir --canvas-set gateway --group 100 --max-stratum 6     # this gateway's own health checks (also --max-root-distance,
+                                                           #   --max-offset, --fail-threshold); --lb settings goes back to following Settings
+ntpdir --canvas-set server --group 100 --server 10.0.0.124 --label ntp-a   # a server's name (also on --canvas-add server; - clears)
+ntpdir --canvas-add anycast --group 100 --address 203.0.113.123   # an anycast address (--canvas-del anycast removes one)
+ntpdir --canvas-add dnsdirvip --group 100 --address 203.0.113.53  # answer NTP on an anycast address AnyName announces (--canvas-del dnsdirvip stops)
+ntpdir --canvas-set gateway --group 100 --anycast A,B           # or replace the whole list (--anycast - clears)
+ntpdir --canvas-del gateway --group 100 --yes
+```
+
+A new gateway gets the group number 100, the next one 101, and so on (`--group N` picks another). Each CLI step is saved at once. In the file it is an `ntp` block inside the group:
+
+```
+"ntp": { "servers": ["10.0.0.124", "10.0.0.125"], "fallback_servers": ["0.pool.ntp.org"] }
+```
+
+Groups without their own `ntp` block use the top-level one.
+
+## Anycast addresses and BGP
+
+### Anycast addresses
+
+A gateway can carry extra addresses of **any subnet** next to its shared address (`extra_vips`). In the GUI, right-click the gateway circle ▸ *Add anycast address*; each address becomes a pill beside the circle with its own menu. On the command line, use `--canvas-add anycast --group 1 --address 203.0.113.123`, `--canvas-del anycast …`, or `--canvas-set gateway --group 1 --anycast A,B` to replace the whole list.
+
+Anycast addresses are not checked against the interface and do not take part in the election. **Every** node running the gateway puts them on `lo` and answers NTP on them, with the same servers and failover as the shared address, on `listen_port`. They are shared across the cluster and need NTP servers on the gateway.
+
+An address is held only while this node can answer on it: the gateway is running and not paused, the listener is up, and at least one NTP server is healthy. It is also held only while **BGP or OSPF can carry it**: BGP is configured and enabled on the node and at least one neighbor of the address's family has an established session, or OSPF is configured and enabled and an interface has a neighbor in state Full. With neither, or every neighbor of that family down, the address is taken off `lo` and does not answer; it returns within seconds of a session coming up. Otherwise it is taken off `lo`, so the route disappears from your routing daemon. It is added with a 10-second lifetime that AnyTime renews every 3 seconds, so if AnyTime crashes or hangs, the kernel removes the address by itself within about 10 seconds instead of leaving a route that nothing answers.
+
+The drawing and `--canvas` show whether each address is announced from the node you are looking at. When the node manages BGP, the pill is **green** when every neighbor of its family has an established session (IPv4 address → IPv4 neighbors, IPv6 → IPv6), **amber** when some do and some do not, and **red** when none does, when it has no neighbor of that family, or when BGP is disabled on the node (Operate ▸ Anycast). A neighbor that is disabled or still connecting counts as not established. With OSPF (below) the same colours count the enabled interfaces that have a neighbor in state Full, and with both protocols the better picture is shown.
+
+### Installed next to AnyName: AnyTime mirrors AnyName's gateways
+
+When the AnyName DNS Director is installed on the same host, ntpdir does not use a gateway VIP or anycast addresses of its own. It **piggybacks on AnyName**: the Topology shows **one gateway for each gateway of AnyName**, with AnyName's name, and ntpdir answers NTP on that gateway's shared addresses and anycast addresses. They are read from `/var/lib/dnsdir/dnsdir.conf` (`name`, `extra_vips`, `vip4`, `vip6`, `more_vip4`, `more_vip6`) every few seconds, so a gateway or address AnyName gains or loses is followed without a restart.
+
+- The gateways are made, renamed and removed by ntpdir itself to match AnyName. All of them use **one list of NTP servers**: add a server to any of them (right-click ▸ *Add NTP server*, or `--canvas-add server --group N`) and the others get it. There is no per-address choice. *New gateway*, *Edit*, *Add anycast address*, *Add AnyName address*, renaming and *Delete* are refused on them (GUI, CLI and API), and no other gateway can be added while AnyName is present. There is no *Pause* either, on a gateway or on a node: AnyName decides where the addresses answer and chrony answers on them either way, so pausing here would stop nothing (the GUI does not offer it; the CLI and API refuse while AnyName is installed, and resuming still works). Drain the node or gateway in AnyName.
+- Gateways ntpdir had of its own stay in the configuration but do not run (no engine, no VIP, no anycast) and show grey with the reason. When AnyName is removed they run again and the mirrored ones stop. Standalone, nothing changes. A gateway made by v167 is adopted for the first AnyName gateway.
+- ntpdir only **listens**. AnyName adds, removes and announces the addresses; ntpdir never adds, removes or announces them and never touches FRR. The circle shows the gateway's shared addresses as AnyName's does, with its anycast addresses as pills. It is green when this node holds the gateway's anycast addresses (or its shared address) and a server answers, amber when only some are held or some servers are down, grey when this node holds none (the nodes that do answer). A node that does not hold the shared address is not short of anything: AnyName holds it on one node of the gateway at a time.
+- The mirrored gateways are shared by the cluster like any other. Run them on every node that runs AnyName.
+
+### NTP on AnyName's anycast addresses
+
+Only when the AnyName DNS Director is installed on the same host. BGP is then AnyName's (see below), so ntpdir cannot announce anything itself, but a gateway can **also answer NTP on anycast addresses that AnyName announces** (`dnsdir_vips`). In the GUI, right-click the gateway circle ▸ *Add AnyName address* lists what AnyName announces (read from `/var/lib/dnsdir/dnsdir.conf`, the `extra_vips` of its gateways); on the command line use `--canvas-add dnsdirvip --group 100 --address 203.0.113.53` and `--canvas-del dnsdirvip ...`. The pill sits under the anycast pills.
+
+ntpdir only **listens** on the address. AnyName holds it on `lo` and announces it; ntpdir never adds it, removes it or withdraws it, and never touches FRR. chrony answers on the address once AnyName has it on `lo`, on the NTP port. The pill is green while AnyName has the address on `lo` and a server answers, amber when AnyName holds it but no NTP server answers (AnyName still announces it, so clients get no answer), and grey while AnyName does not hold it, no longer announces it, or is gone; ntpdir looks again every few seconds, so installing or removing AnyName needs no restart. An address AnyName does not announce is refused (GUI, CLI and API); one already saved stays when AnyName goes away and is answered again when it returns. The list is shared by the cluster. An address is either ntpdir's own anycast address or AnyName's, and only one gateway may answer on a AnyName address.
+
+**Because AnyName decides when the address is announced, it knows nothing about NTP health.** If AnyName's DNS is up and every NTP upstream is down, the route stays and NTP clients get no answer.
+
+### BGP through FRR
+
+**Not with AnyName on the same host.** The AnyName DNS Director manages `/etc/frr/frr.conf` too, and two products rewriting one file would wipe each other's BGP setup. When ntpdir finds AnyName installed (`/usr/local/sbin/dnsdir`, `/usr/local/share/dnsdir` or `/etc/systemd/system/dnsdir.service`) it logs that at start-up, leaves FRR, `frr.conf`, the `daemons` file and its own marker alone, treats BGP as off, and refuses to set up or enable BGP (GUI, CLI and API); clearing the settings and disabling still work. BGP settings already in the config are kept but have no effect, and the Anycast pages say BGP is unavailable. The check is made each time, so removing AnyName lifts the block without a restart. Anycast addresses themselves still work as plain addresses on `lo`.
+
+AnyTime can drive FRR on a node so the anycast addresses are announced without any hand-written routing config. In the GUI that is **Configure ▸ Anycast**; the command line is below. It is **per node**: the AS, router ID and neighbors are never replicated, because a node usually peers with its own upstream router. Only the anycast addresses are shared.
+
+![Configure ▸ Anycast: the local AS, router ID, timers and the neighbor table](snaps/anycast.png)
+
+**Turning BGP on.** BGP runs on a node while a local AS number is set. That makes AnyTime the owner of the node's `/etc/frr/frr.conf`: it renders the whole file, sets `bgpd=yes` and `bfdd=yes` in `/etc/frr/daemons`, and reloads FRR (`systemctl reload frr`; a restart when a daemon is switched on or off). FRR must be installed with its `frr-pythontools` package (the installer adds both). Without it a reload cannot work, so AnyTime restarts FRR for every change and the sessions drop briefly. An `frr.conf` that AnyTime did not write is saved once as `frr.conf.pre-ntpdir` before it is replaced. Do not run this on a host whose FRR is managed by something else; they would overwrite each other.
+
+**Turning it off.** The **Enabled** box on a neighbor's row in **Configure ▸ Anycast** shuts that session down and back up (the same as right-click ▸ Disable in Operate ▸ Anycast). Clearing the AS number removes the BGP section and leaves FRR running (the router ID can only be set while an AS is set, and clearing the AS clears it). **Operate ▸ Anycast** does the same without forgetting any setting (*Disable BGP*), and can shut down a single neighbor (`neighbor … shutdown`; the neighbor stays configured). A node that never set an AS never has its FRR files touched.
+
+**Settings.**
+
+- BFD is on for every neighbor.
+- BGP keepalive and hold time are settings next to the router ID (default 3 s and 9 s; `--keepalive S --hold S`, `-` for the default). The session uses the lower hold time of the two ends.
+- **AS prepend** (Configure ▸ Anycast, a tick box; `--as-prepend on|off`; `as_prepend` in the `bgp` block) adds the local AS three more times to every anycast route the node announces (`set as-path prepend ASN ASN ASN` in the outbound route-maps), so routers prefer the nodes that do not have it. Tick it on the nodes that should be the backup.
+- A neighbor can have a **multihop** limit (2–255, eBGP only) for a peer that is not on a connected subnet. FRR then runs BFD to it in multihop mode, so the peer must be set up the same way.
+
+```
+ntpdir --bgp                                                    # settings, neighbor and BFD state (with the time a dead node is noticed in), announced addresses
+ntpdir --asn 64512 --router-id 192.0.2.10        # --router-id needs an AS, set now or earlier
+ntpdir --keepalive 3 --hold 9
+ntpdir --as-prepend on                  # the local AS three more times on every announcement (off undoes it)
+ntpdir --bgp-neighbor-add 192.0.2.1 --remote-as 64500 --description core
+ntpdir --bgp-neighbor-add 2001:db8::1 --remote-as 64500
+ntpdir --bgp-neighbor-add 10.0.1.5 --remote-as 64512 --multihop 2   # peer not on a connected subnet (e.g. AWS VPC Route Server)
+ntpdir --bgp-neighbor-del 192.0.2.1
+ntpdir --asn off                                 # also clears the router id
+ntpdir --bgp-disable                             # stop BGP on this node, settings kept (--bgp-enable)
+ntpdir --bgp-neighbor-disable 192.0.2.1          # shut one neighbor down, kept (--bgp-neighbor-enable)
+```
+
+**What the node does, and no more.**
+
+- **It announces only its anycast addresses.** Each is a `network` statement, and an outbound route-map permits only those prefixes (`/32` and `/128`).
+- **It accepts nothing.** An inbound route-map denies every route, so a peer cannot change the host's routing table.
+- **An IPv4 address goes to the IPv4 neighbors, and an IPv6 address to the IPv6 ones.** Add a neighbor of each family to announce both.
+- **A prefix is in FRR's table only while AnyTime holds the address on `lo`**, so it is withdrawn when no NTP server answers, the gateway is paused or AnyTime stops, and within about 10 seconds if AnyTime is killed (the address lifetime, above). Lower the router's timers to shorten the time your peers need to notice.
+- **The neighbor password** is an MD5 TCP session password. It is stored in the config file and its history (root-only), and `--password` on the command line is visible to other users of the host, so the Anycast page is the safer place to set it.
+
+**Where to look.** **Monitor ▸ Anycast** shows each neighbor's session and BFD state, read from FRR every few seconds (`vtysh -c "show bgp summary json"`, `show bfd peers json`), and which anycast addresses are announced. Beside a session's BFD state is the time the neighbor takes to drop this node once it goes silent: the detect multiplier times the slower of this node's transmit interval and the neighbor's receive interval, as negotiated (the hover has the numbers). This node sends BFD at FRR's defaults (every 300 ms, 3 missed packets: 900 ms), so a router with slower timers makes the time longer, but a faster one cannot make it shorter. **Configure ▸ Anycast** (tab *BGP*, the first one) has the AS, router ID and the neighbor table (**+** adds a row, **−** removes the highlighted one).
+
+The generated config looks like this:
+
+```
+ip prefix-list NTPDIR-ANYCAST-V4 seq 10 permit 203.0.113.123/32
+route-map NTPDIR-OUT-V4 permit 10
+ match ip address prefix-list NTPDIR-ANYCAST-V4
+route-map NTPDIR-IN deny 10
+router bgp 64512
+ no bgp default ipv4-unicast
+ neighbor 192.0.2.1 remote-as 64500
+ address-family ipv4 unicast
+  network 203.0.113.123/32
+  neighbor 192.0.2.1 activate
+  neighbor 192.0.2.1 route-map NTPDIR-IN in
+  neighbor 192.0.2.1 route-map NTPDIR-OUT-V4 out
+ exit-address-family
+```
+
+### OSPF through FRR
+
+Instead of BGP, or together with it, AnyTime can announce the anycast addresses with **OSPF**: OSPFv2 (`ospfd`) carries the IPv4 addresses and OSPFv3 (`ospf6d`) the IPv6 ones. In the GUI it is the **OSPF** tab of **Configure ▸ Anycast** (the **BGP** tab is the first one); the command line is below. Like BGP it is **per node** and never replicated.
+
+**Turning OSPF on.** OSPF runs on a node while it has at least one interface listed. The settings are the **router ID** (an IPv4 address, unique among your routers; it is required once there is an interface and is saved with the first one), the **hello** and **dead** interval (FRR's 10 and 40 seconds when empty), the **metric** the announced addresses carry (FRR's 20 when empty; give a node a higher one to make it the backup), and per interface the **area** (empty is 0), the **link type** (default, point-to-point or broadcast) and an optional OSPFv2 MD5 **key** (up to 16 characters; OSPFv3 does not use it). AnyTime then renders the OSPF part of `/etc/frr/frr.conf` next to any BGP part, sets `ospfd=yes`, `ospf6d=yes` and `bfdd=yes` in `/etc/frr/daemons` and reloads FRR (a restart when a daemon is switched on or off).
+
+**The OSPF daemons run only while OSPF is set up.** `ospfd` and `ospf6d` are `no` in `/etc/frr/daemons` until the first interface is added, and are switched back to `no` (and FRR restarted) when the last interface is removed or **Disable OSPF** is pressed in Operate ▸ Anycast. `bgpd` follows BGP in the same way, and `bfdd` stays on while either protocol is in use. A node that uses neither never has its FRR files touched.
+
+**Posture.** As with BGP, the node announces its anycast addresses and nothing else: connected routes are redistributed into OSPF through a route-map that permits only those addresses (`redistribute connected metric-type 1 route-map NTPDIR-OSPF-V4`, and `-V6` for OSPFv3), so an address exists in OSPF only while AnyTime holds it on `lo`. Nothing is taken in: a route-map on zebra's OSPF routes (`ip protocol ospf route-map NTPDIR-OSPF-IN`, `ipv6 protocol ospf6 …`) denies every route, so a neighbor cannot change this host's routing table. The networks of the OSPF interfaces themselves are part of OSPF and are advertised as usual. **BFD** is on for every interface.
+
+**Both protocols.** An address is held on `lo` while **BGP or OSPF** can carry it: for OSPF, when an enabled interface has a neighbor in state **Full** (OSPFv2 for an IPv4 address, OSPFv3 for IPv6). The Topology pill shows the better of the two pictures: green when every enabled interface has a Full neighbor, amber when some do, red when none does or OSPF is disabled.
+
+**Turning it off.** Remove all the interfaces: the OSPF part leaves `frr.conf`, `ospfd` and `ospf6d` go back to `no`, and the router ID is cleared with them. **Operate ▸ Anycast** (*Disable OSPF*) does the same without forgetting any setting, and the **Enabled** box of an interface (or right-click ▸ Disable) makes just that interface passive: no hellos, no neighbors, still configured.
+
+**Not with AnyName on the same host.** The same rule as for BGP: when AnyName is installed, ntpdir leaves FRR alone, treats OSPF as off and refuses to set it up or enable it (clearing the settings still works); the Anycast pages say OSPF is unavailable.
+
+```
+ntpdir --ospf                                                    # settings, neighbor state, announced addresses
+ntpdir --ospf-router-id 192.0.2.10 --ospf-interface-add eth0     # the router id is saved with the first interface
+ntpdir --ospf-interface-add eth1 --ospf-area 0.0.0.1 --ospf-network point-to-point --ospf-key SECRET
+ntpdir --ospf-hello 10 --ospf-dead 40 --ospf-metric 100          # - goes back to the default
+ntpdir --ospf-interface-del eth1                                 # the last one turns OSPF off
+ntpdir --ospf-disable                                            # stop OSPF on this node, settings kept (--ospf-enable)
+ntpdir --ospf-interface-disable eth0                             # make one interface passive, kept (--ospf-interface-enable)
+```
+
+**Where to look.** **Monitor ▸ Anycast** shows the OSPF neighbors per interface (`show ip ospf neighbor json`, `show ipv6 ospf6 neighbor json`) with their state and BFD, on its own **OSPF** tab (the BGP neighbors are on the **BGP** tab). **Operate ▸ Anycast** has the same two tabs. The generated OSPF part of `frr.conf` looks like this:
+
+```
+route-map NTPDIR-OSPF-V4 permit 10
+ match ip address prefix-list NTPDIR-ANYCAST-V4
+route-map NTPDIR-OSPF-V6 permit 10
+ match ipv6 address prefix-list NTPDIR-ANYCAST-V6
+route-map NTPDIR-OSPF-IN deny 10
+!
+interface eth0
+ ip ospf area 0.0.0.0
+ ipv6 ospf6 area 0.0.0.0
+ ip ospf network point-to-point
+ ipv6 ospf6 network point-to-point
+ ip ospf bfd
+ ipv6 ospf6 bfd
+!
+router ospf
+ ospf router-id 192.0.2.10
+ redistribute connected metric-type 1 route-map NTPDIR-OSPF-V4
+!
+router ospf6
+ ospf6 router-id 192.0.2.10
+ redistribute connected metric-type 1 route-map NTPDIR-OSPF-V6
+!
+ip protocol ospf route-map NTPDIR-OSPF-IN
+ipv6 protocol ospf6 route-map NTPDIR-OSPF-IN
+```
+
+### Cloud use (untested)
+
+Clouds block multicast and ignore virtual MACs, so the gateway VIP cannot be reached there (real-MAC mode lessens the second problem, not the first). The anycast addresses can: they are plain `/32` routes announced over BGP. A possible setup follows, **not tried in any cloud**:
+
+1. Give a gateway a VIP that is an **unused address in the node's own subnet** (a gateway only starts when the node has an address in the VIP's subnet), and list **every node's address** under *Neighbors (unicast mode)* so the nodes find each other without multicast. The list is shared, so you fill it in once. The VIP forms but nobody uses it.
+2. Add the anycast addresses to that gateway and announce them with BGP (Configure ▸ Anycast). For a peer that is not on a connected subnet, such as an AWS VPC Route Server endpoint, set the neighbor's **Multihop** (usually 2); the peer must use multihop BFD as well.
+3. The gateway joins the election only after its NTP servers answer, and an anycast address is announced only while a server answers.
+4. In AWS, also turn off source/dest check on the instances, and allow BGP (TCP 179) and BFD (UDP 3784 and 4784) in the security groups.
+
+## Gateway roles, virtual MACs and real-MAC mode
+
+This section is the detail behind [How it works](#how-it-works), for when you need to know exactly what the nodes do on the wire.
+
+### The gateway key, clocks and replay
+
+Every packet of the election protocol is signed with the gateway's **HMAC shared key** (Configure ▸ Gateways), so a machine without the key cannot take part. Anyone who has the key can take over the gateway, so use a long random one: a new gateway starts with a random 32-character key, and a gateway whose key is well known (`ntpdir`, `dgw`, `change-me`) or shorter than 12 characters is named in the log, by `--canvas` and in red beside the field in Settings. Changing the key there is pushed to every node by the cluster and restarts the gateway on each; for a moment the nodes do not hear each other, so do it at a quiet time.
+
+Since protocol version 3 every packet also carries the sender's clock (Unix milliseconds) under the signature. A node drops a packet whose clock is more than 30 seconds from its own, and a packet that is not newer than the last one it took from the same sender, so a recorded packet cannot be played back. Keep the nodes' clocks in step with NTP; a node whose clock is off is named in the log once a minute ("is N s off this node's clock"). **Version 3 nodes and version 2 nodes (ntpdir v77 and earlier) do not hear each other**, so while a cluster is being updated a gateway can have more than one controller until all its nodes have the new version; update them close together.
+
+### The VIP on controllers and forwarders
+
+The AGC owns the VIP on its macvlan. An AFN is reached through its vMAC, but the kernel only accepts traffic for addresses it owns. So an AFN adds the VIP to `lo` as a /32 (/128) and sets `arp_ignore=1` and `arp_announce=2` on the parent interface and its macvlan, so it never answers or advertises ARP for the VIP. The AGC stays the only ARP and neighbour-solicitation authority.
+
+### Who is controller
+
+The node that is controller stays controller. A node that joins or restarts becomes a forwarder even when its priority is higher or its address sorts higher. It takes the role only if it has **preemption** enabled (the Settings switch) and outranks the controller, or if two controllers meet and one must give way. So after a node is restarted, the roles stay as they fell, instead of moving twice.
+
+The controller marks its hellos with a flag (bit 3). A node that took over keeps its old slot number, so slot 1 alone no longer tells a joiner who the controller is. A leaving node sets bit 2.
+
+### Slots and virtual MACs
+
+A slot is one MAC (`00:1a:7c:<group>:<slot>:00`) on the wire, whichever address family uses it. A node takes the same slot in IPv4 and IPv6 when it can, and never one that a node it hears (in either family) already has.
+
+A controller that gives way to a better one moves to a free forwarder slot. Two forwarders that picked the same slot settle it by rank (the lower one moves). The IPv4 and IPv6 sides of a node share the interface of a slot, which is removed only when neither uses it any more. The two families elect their controllers separately and may pick different nodes; the IPv6 controller then moves off slot 1 to a free slot, so no MAC is ever on two nodes.
+
+### Real-MAC mode (no virtual MACs)
+
+Virtual MACs need the network to deliver frames addressed to a MAC that is not the NIC's own. A VMware port group with promiscuous mode off drops them, and so do clouds that allow one MAC per interface. For those networks, a gateway has a setting, **Use real MAC addresses** (Configure ▸ Gateways; `real_macs` in the file; `--configure`). It is shared by the cluster, and changing it restarts the gateway.
+
+It is **on for a gateway you create** (first start, Add gateway, `--canvas-add gateway`, `--configure`), because most networks need it. A gateway that already existed keeps the setting it had (a file that does not say `real_macs` means off), so an upgrade changes nothing. Off is the older way: a virtual MAC per node, which fails over without depending on the neighbors (see the last point below).
+
+In real-MAC mode, everything above is replaced as follows:
+
+- **No macvlan, no slot MAC.** Every node, the controller too, holds the VIP on `lo` and has `arp_ignore=1` and `arp_announce=2` set on the real interface (put back when the gateway stops).
+- **The controller still answers** ARP and IPv6 neighbor solicitations for the VIP, and still picks a node by the load-balancing method. The answer names the **real MAC** of the node it picked: its own MAC for its own slot, and also for any node whose MAC it does not know yet (it holds the VIP too, so that is always right). It is sent from the controller's own MAC.
+- **The controller learns the real MACs** without any change to the gateway protocol: from an ARP a node sends, from any IPv6 frame from a node's link-local address, and by asking (an ARP request or a neighbor solicitation of its own) for the ones it has not heard, again every minute. Nodes of any version take part.
+- **A real MAC cannot be taken over.** When a node dies or leaves, the controller announces the VIP at its own MAC with an unsolicited ARP (or neighbor advertisement), now and twice more within a second. Neighbors that honor one repoint at once; the others keep sending to the dead node until their ARP entry ages out (a Palo Alto's default is 30 minutes). Check how your firewalls treat it, and turn the setting off for a gateway whose neighbors do not honor one. A planned stop gives the announcement a head start, because the leaving node stays up for a moment after the controller has been told.
+- **The vMAC column** of Monitor ▸ Gateways shows real MAC addresses (the controller knows all of them; a forwarder only its own).
+
+![Monitor ▸ Gateways: roles, slots and MACs of every node, and the state of each gateway's NTP listener](snaps/gateways.png)
+
+## The web GUI
+
+Everything the command line does is also in a browser, over HTTPS on port **12380** (`web.listen`). The page follows the system light or dark theme automatically. The **?** at the top right of every page opens a slide-out help panel for the screen you are on. Every screen has a panel of its own, and so does every tab and sub-tab (for example Configure ▸ NTP ▸ Security, and the Google, Microsoft and OpenID Connect tabs of Users ▸ SSO); the panel changes when you change tab. Each panel says what the screen is for, what you can do on it, the steps for the usual jobs, every field, and the command-line equivalents.
+
+Saving applies immediately, with the same hot reload as editing the file.
+
+![The sign-in page](snaps/login.png)
+
+### Signing in
+
+**Login** is backed by PAM: a user may log in if PAM accepts their password *and* they are a member of the `ntpdir` group.
+
+```
+groupadd ntpdir
+usermod -aG ntpdir alice
+cp contrib/pam.d/ntpdir.debian /etc/pam.d/ntpdir     # or ntpdir.rhel
+```
+
+Without `/etc/pam.d/ntpdir`, PAM falls back to its `other` policy, which usually denies everything. The help panel has a **Find** box at its top: every match in the page's help is marked, Enter goes to the next one (Shift+Enter the one before) and Esc empties the box. `root` is not special: add it to the group if you want it to log in. Removing a user from the group ends their session within a minute.
+
+For Active Directory (or any directory that sssd serves), see [Signing in with Active Directory](#signing-in-with-active-directory) below.
+
+The PAM binding uses cgo, so build natively with `libpam0g-dev` (Debian and Ubuntu) or `pam-devel` (RHEL) installed. A build without cgo, including any cross-compile, has no PAM, so it **refuses to start the GUI** rather than serve it unauthenticated. The daemon and the command line work normally.
+
+### Signing in with Active Directory
+
+Accounts do not have to be local. A node that is joined to an Active Directory domain (Samba AD or Windows AD) with sssd sees the domain's users and groups through the operating system, and ntpdir signs them in through the same PAM service as a local user: it has no LDAP code of its own and stores no directory password. Tested with a Samba AD domain controller and `realm join`. Do the steps on **every** node: the login groups are a per-node setting, and each node must be joined.
+
+**1. Join the node to the domain.** The node needs DNS that can find the domain controller, and a clock within five minutes of it.
+
+```
+# Debian / Ubuntu
+apt install realmd sssd sssd-ad adcli sssd-tools krb5-user libpam-sss libnss-sss pamtester
+# RHEL / Rocky / Alma
+dnf install realmd sssd adcli oddjob-mkhomedir krb5-workstation samba-common-tools pamtester
+
+realm discover example.com
+realm join -U Administrator example.com
+```
+
+**2. Settings in `/etc/sssd/sssd.conf`**, in the `[domain/example.com]` section that `realm join` made, then `systemctl restart sssd`:
+
+```
+use_fully_qualified_names = False      # sign in as  alice,  not  alice@example.com
+fallback_homedir = /nonexistent        # these accounts only sign in here
+default_shell = /sbin/nologin
+```
+
+**3. Make a group in the directory.** Create a group called `ntpdir-users` in Active Directory and put the people who may sign in in it. Give it a different name from the local `ntpdir` group the installer creates: the local group is looked up first, so a directory group with the same name would be hidden by it and its members could not sign in.
+
+The **Login groups** setting (Configure ▸ Web, or `web.group` in `ntpdir.conf`) takes several groups separated by commas; a member of any of them may sign in, and a group that does not exist on a node is skipped. A new installation has `ntpdir,ntpdir-users`: the local group, which the Users page manages, and the directory group, which is managed in the directory. An existing configuration is not changed by an update. In a cluster the setting is shared: set it on any node (after every node is updated) and the others follow. The setting is live; people who are not in a listed group are signed out within a minute.
+
+**Read-only access.** The **Read-only groups** setting (Configure ▸ Web, or `web.read_group` in `ntpdir.conf`) takes groups in the same form as the login groups; the default is `ntpdir-ro`, the local group the installer creates (`--add-ro-user NAME` adds someone to it; an empty setting turns read-only access off). A member of one of them who is in none of the login groups can sign in and look at every page, but cannot change anything: every save, button and action is refused (HTTP 403, with a message), and Sign out still works. Keys and passwords in the configuration are shown as `(hidden)` and the saved configuration versions cannot be opened or downloaded. **Users page:** choose *Read-only* under Access when adding a user or adding an existing account, or change an existing user's Access and Save; it moves the account between the login group and the first local read-only group, on every node of the cluster. A directory group (for example `ntpdir-ro-users` in Active Directory, added to the setting after a comma) is managed in the directory. A member of a login group keeps full access. The setting is shared by the cluster and is live (a signed-in person moves to or from read-only within a minute). The command line and the local socket are not affected: they are for the administrator of the machine.
+
+**4. Group policy.** sssd applies the domain's group policy (GPO) at the account step of PAM and refuses every PAM service that has no logon right, and `ntpdir` is not one it knows: the password is accepted and the sign-in still fails with `pam account check (password accepted): Permission denied`, even though ssh works. When the daemon starts it looks for this, and if it finds an AD domain in `sssd.conf` that enforces group policy without a mapping for its PAM service it adds the line below to that domain's section, keeps the old file as `sssd.conf.ntpdir.bak` (once) and restarts sssd:
+
+```
+ad_gpo_map_interactive = +ntpdir
+```
+
+AnyName and ntpdir on the same host each add their own item to the same line. A domain that is defined only in a `conf.d` snippet is not edited; the log says what to add. A domain with `ad_gpo_access_control` set to `permissive` or `disabled`, or one that is not Active Directory, needs nothing.
+
+**In a container (LXC, Proxmox).** An unprivileged container has only the user IDs of its `uid_map` (usually 0–65535; see `/proc/self/uid_map`), and sssd makes the IDs of AD users from 200000 up, which do not exist there: the password is accepted and the sign-in fails anyway. When the daemon starts in such a container, and an AD domain in `sssd.conf` has no `ldap_idmap_range_*` of its own, it adds these lines to the domain's section, stops sssd, deletes its cache (`/var/lib/sss/db`, `/var/lib/sss/mc`, which hold the IDs it made), and starts it again:
+
+```
+ldap_idmap_range_min = 10000
+ldap_idmap_range_max = 60000
+ldap_idmap_range_size = 50000
+```
+
+Use the same range on every node, so a user has the same ID everywhere; a node that is not in a container keeps sssd's default unless you set these lines on it too. A range you set yourself is never changed, and a container whose map is smaller than 60000 only gets a warning in the log. Changing the range changes the IDs of every directory user and group on the node. 50000 IDs cover directory objects with a relative ID (the last part of the SID) up to 50000.
+
+**5. Check from the shell** before the GUI:
+
+```
+sss_cache -E
+id alice                                   # lists ntpdir-users
+getent group ntpdir-users                    # lists its members
+pamtester ntpdir alice authenticate acct_mgmt  # both steps must succeed
+```
+
+Then sign in with the name `id` prints (`alice` with the setting above). When it does not work, the reason is in the log (`journalctl -u ntpdir | grep 'login failed'`); the login page gives one message for every cause:
+
+| The log says | Meaning |
 |---|---|
-| `name` | unique; letters, digits, `.`, `-`, `_` |
-| `platform` | `iosxe`, `ios`, `sdwan`, `nsxt`, `aci`, `unimus`, `nxos`, `eos`, `aoscx`, `fortios`, `panos`, `panorama`, `nios`, `technitium`, `bigip`, `meraki`, `entra`, `afc`, `proxmox` (Proxmox VE), `pbs`, `pdm`, `dnsdir`, `netdir` or `mediaencoder` |
-| `address` | IP address or host name, no port or scheme |
-| `port` | the API port; default 443 |
-| `credential` | the name of an entry of `device_credentials` |
-| `tags` | free-form labels to target groups of devices: `site=dc1`, `edge` |
-| `insecure` | skip the certificate check (most devices ship a self-signed one) |
-| `ca_pem` | the CA the device's certificate must be signed by, instead of `insecure` |
-| `options` | per platform: `vdom` for FortiOS; `vsys` (default `vsys1`) and `device_group` for PAN-OS; `api_version` (default `v10.09`) for ArubaOS-CX; `wapi_version` (default `v2.12`) for Infoblox |
-| `disabled` | kept in the inventory, never contacted unless named on purpose |
+| `authentication failed: pam: Authentication failure` | wrong password, or the PAM service file `/etc/pam.d/ntpdir` does not use sssd |
+| `authentication failed: pam account check (password accepted): Permission denied` | sssd refused the service: group policy (step 4), `simple_allow_groups`, or an `ldap_access_filter` |
+| `group lookup failed` / `not a member of group` | the user or the group is not visible to the operating system: look at `id` and `getent group`, and remember that sssd caches (`sss_cache -E`) |
 
-### Cisco Catalyst (IOS-XE, `iosxe`)
+A directory account keeps its password and expiry date in the directory. **Add an existing account…** on the Users page can still add one by name to the local group (instead of using a directory group); the password and expiry buttons then refuse it, and Disable removes it from the group as for any account. Changes to a person's groups in the directory take effect when sssd's cache refreshes; a session that is open is re-checked about once a minute.
 
-RESTCONF, with HTTP basic authentication as a privilege-15 user. On the switch:
+### Which page does what
 
-```
-ip http secure-server
-ip http authentication local
-restconf
-username netdir privilege 15 secret <password>
-```
+| CLI | Web GUI |
+| --- | --- |
+| `--canvas`, `--canvas-add`, `--canvas-del` | Topology page (draw gateways and servers; live colours) |
+| `--canvas-add node` / `--canvas-del node` `--group N` `--node NODE` | Topology page: right-click the gateway ▸ **Add node** / right-click a node ▸ **Remove from this gateway** |
+| `--server-stats ADDR` `[--stats-range 1h\|1d\|7d]` | Topology page: right-click a server ▸ **Statistics** (latency and loss graphs) |
+| `--canvas-move server\|anycast` `--group N` `--server ADDR` `[--address ADDR]` `--to N` | Topology page: drag a server left/right or an anycast address up/down |
+| `--host-lookup IP\|NAME` | Add NTP server form: the Name is filled in from the address (reverse DNS), or the address from a name |
+| `--gateway-stats GROUP` `[--stats-range 1h\|1d\|7d]` | Topology page: right-click the gateway circle ▸ **Statistics** (answer time, errors, availability, requests) |
+| `--show-gateways`, `--show-neighbors` | Gateways page (roles, slots, vMACs, NTP listener state) |
+| `--node-rename NAME` | Topology: right-click a node ▸ **Rename** (the host name and its `/etc/hosts` entry) |
+| `--schedule`, `--schedule-history`, `--schedule-set JSON`, `--schedule-del ID`, `--schedule-run ID` | Operate ▸ **Scheduler** (the tasks, their history on this node; New / right-click ▸ Edit, Copy, Paste, Run now, Disable, Delete) |
+| `--assert-agc` | Operate ▸ Node ▸ **Gateway controller**: "Make this node the gateway controller" (asks to confirm) |
+| `--cluster-status` | Monitor ▸ Cluster (the members) |
+| `--show-ntp` | NTP tab (chrony's state, each server's health and role in chrony) |
+| `--show-config`, `--configure` | Configure pages (form; every edit saves and applies at once) |
+| `--versions`, `--version-show/-diff/-snapshot/-restore/-export`, `--config-import` | Operate ▸ **History** (every saved version; diff, restore, download, upload, snapshot) |
+| `--users`, `--user-add`, `--user-grant`, `--user-revoke`, `--user-passwd`, `--user-expiry`, `--user-del` | Configure ▸ Users |
+| `--tls-status/-install/-csr/-revert/-regenerate` | Configure ▸ Web GUI (certificate) |
+| `--cluster-status/-token/-join/-promote/-remove/-unremove/-leave/-sync` | Cluster tab |
+| `--update-status/-history/-upload/-apply/-push` | Upgrade tab (stats at the top, upload, a paged History of every update event (`--update-history` prints them all; `--update-status` the newest 50), Nodes card: tick members, **Update this node now** / **Update N selected**) |
+| `--update-auto` | Configure ▸ Settings ▸ **Upgrades** tab |
+| `--update-repo` | Configure ▸ Settings ▸ **Upgrades** tab (Online repository) |
+| `--update-cancel` | command line only (the Upgrade tab shows what is queued) |
+| `--stats-clear` `[--all-nodes]`, `--scan ADDR`, `--ping ADDR\|NAME`, `--traceroute ADDR\|NAME` | Statistics page: **Clear**; right-click a client ▸ **Scan**, **Ping**, **Traceroute** |
+| `--stats` `[--stats-range now\|1h\|1d\|7d\|30d] [--stats-outcome KIND] [--stats-client ADDR \| --stats-server ADDR] [--all-nodes]`, `--whois ADDR` | Statistics page (Monitor); `--whois` is right-click ▸ **Whois** |
+| `--host` `[--host-range 1h\|1d\|7d\|30d] [--all-nodes]` | Monitor ▸ Node page; `--all-nodes` is the Node menu's **Cluster** entry (also on Statistics) |
+| `--capture IFACE` `[--capture-seconds N] [--capture-filter EXPR] [--capture-file FILE] [--all-nodes] [--group N]`, `--capture-interfaces` | Capture page (Monitor); `--all-nodes` is the Node menu's **Cluster** entry there, `--group N` (with `--capture -`) its **Gateway** entries |
+| `--tshoot` `[--all-nodes] [--tshoot-file F]` | Log page ▸ tshoot |
+| `--log` `[--log-min LEVEL] [--log-grep WORDS] [--log-since 6h] [--log-lines N]` | Log page (Monitor) |
+| `--power restart\|shutdown\|cancel\|status` `[--in MIN \| --at HH:MM]` | Operate ▸ Node ▸ **Host** |
+| `--node-pause`, `--node-resume`, `--node-status` | Operate ▸ Node ▸ **Maintenance** (Pause / Resume this node) |
+| `--bgp-disable`, `--bgp-enable`, `--bgp-neighbor-disable ADDR`, `--bgp-neighbor-enable ADDR` | Operate ▸ Anycast (Disable / Enable BGP, and per neighbor) |
+| `--ospf`, `--ospf-router-id`, `--ospf-interface-add NAME` `[--ospf-area A] [--ospf-network T] [--ospf-key K]`, `--ospf-interface-del NAME`, `--ospf-hello`, `--ospf-dead`, `--ospf-metric` | Configure ▸ Anycast ▸ OSPF |
+| `--ospf-disable`, `--ospf-enable`, `--ospf-interface-disable NAME`, `--ospf-interface-enable NAME` | Operate ▸ Anycast (Disable / Enable OSPF, and per interface) |
+| `--syslog`, `--syslog-server`, `--syslog-protocol`, `--syslog-facility`, `--syslog-format`, `--syslog-ca`, `--syslog-tls-insecure`, `--syslog-disable`, `--syslog-enable`, `--syslog-test` | Configure ▸ Settings ▸ Logs (Syslog card) |
+| `--lldp-enable`, `--lldp-disable` | Configure ▸ Settings ▸ General ▸ Neighbor discovery |
+| `--lldp` | Monitor ▸ Node (LLDP neighbors card; the state of lldpd also beside the box on Configure ▸ Settings ▸ General ▸ Neighbor discovery) |
+| `--version`, `--help` | version in the header; the **?** at the top right of every page opens a slide-out help panel for that page or tab (what it is for, the steps for the usual jobs, every field, and the command-line equivalents) |
 
-- **Facts** come from the native and device-hardware models.
-- **Interfaces** come from interfaces-oper.
-- **Neighbors** are LLDP, plus CDP on ports LLDP has none for.
-- **Config** is the native YANG model as JSON, not `show running-config` text.
+### TLS and security notes
 
-### Fortinet FortiGate (FortiOS, `fortios`)
+**TLS.** With no certificate configured, a self-signed one is generated next to the config file (`ntpdir-web.crt` and `.key`, key mode 0600) and renewed at start-up when it is within 30 days of expiry. Your browser will warn until you install a real certificate; see [The GUI certificate](#the-gui-certificate).
 
-The REST API with an API token. Make one under System ▸ Administrators ▸ Create New ▸ REST API Admin; a read-only profile is enough.
+**Exposure.** The GUI can reconfigure a daemon that runs as root and listens on all interfaces by default. Bind it to a management address (`"listen": "10.0.0.5:12380"`) or firewall the port.
 
-- **Facts** come from system status.
-- **Interfaces** come from the monitor API, with descriptions and admin state from cmdb.
-- **Neighbors** are LLDP, which needs `set lldp-reception enable` on the interfaces.
-- **Config** is the backup file.
+**Sessions and cookies.** Sessions are kept in memory and saved to `sessions.json` in the state directory (mode 0600, only a SHA-256 of each cookie), so an upgrade or a restart of the daemon does not sign anyone out; the idle timeout and the 12 hour limit still apply. Changing the GUI listen address does sign everyone out. A user's sessions also end when that user's password changes, the account is deleted or it expires. Cookies are HttpOnly, Secure and SameSite=Strict, named with the `__Host-` prefix. Every change carries a CSRF token, and a strict CSP (no inline script) is in force.
 
-### Cisco Nexus (NX-OS, `nxos`)
+**Failed logins** are limited. By default, 3 wrong passwords within 1 minute lock that address, and that address together with that user name (never the user name alone), out for 15 minutes. All three numbers are on Configure ▸ Web GUI (`web.max_failed_logins`, `web.failed_login_window_minutes`, `web.lockout_minutes`). A failed login gets one message that does not say what was wrong, which group is needed, or how many tries are left, because that would give a guesser a target. Only once an address is locked out does the login page say "Too many failed attempts." and disable its form until the lockout ends.
 
-NX-API with HTTP basic authentication as a user with the network-operator role. On the switch: `feature nxapi` (HTTPS on 443 by default; `nxapi https port` changes it).
+**LDAP sign-in (Samba 4 / Active Directory).** Configure ▸ Users ▸ LDAP lets people sign in on the ordinary login form with a directory account. The host's accounts are tried first, then the directory. Keys in the `web` block: `ldap_servers` (list of `ldaps://host:636` or `ldap://host:389` addresses, up to 8, tried in order; `ldap://` requires StartTLS and a password is never sent unencrypted), `ldap_skip_verify` (accept any server certificate: encrypted but not authenticated; off by default and logged), `ldap_bind_dn` and `ldap_bind_password` (a read-only service account), `ldap_base_dn`, `ldap_rw_group` and `ldap_ro_group` (a group name or DN; nested groups count; both means full access). The user is found by `sAMAccountName` or `userPrincipalName`, must be enabled, and the password is checked last by binding as that user. Sessions are rechecked each minute; an unreachable directory leaves them in place. Filters are built from escaped values, empty passwords are never sent, computer accounts and ambiguous names are refused. The Test box tries a lookup and lists the steps. The bind account is optional: with `ldap_bind_dn` and `ldap_bind_password` both empty each person binds as themselves (`alice` becomes `alice@` plus the domain of `ldap_base_dn`; `alice@example.lan` and `EXAMPLE\alice` are used as typed) and their own groups are read, but sessions are then not rechecked. The OpenID Connect provider has a matching `sso_oidc_skip_verify`.
 
-- Only `cli_show` and `cli_show_ascii` are ever sent, and every command goes through `CheckShow`: nothing that writes.
-- **Facts** are `show version` and `show inventory`; **Interfaces** and **Ports** (counters, rates) come from `show interface`.
-- **Neighbors** are LLDP and CDP detail, merged by port; a feature that is off is left out.
-- **Routes** are `show ip route vrf all` (and IPv6); **Routing** lists OSPF, BGP, EIGRP, IS-IS, RIP, BFD, HSRP, VRRP and more as parts, with `unavailable` saying what a switch did not answer.
-- **Firewall** is the ACLs with their match counters, object groups and CoPP; **Resources** are CPU, memory, fans, temperatures and power; **VLANs** are `show vlan brief`.
-- **Config** is `show running-config`; **Show** runs one show command as text.
-- **API** (`device_api_get`) is the NX-API REST object model (`/api/mo/…`, `/api/class/…`), read after a login whose session is closed again.
+**Single sign-on (Google, Microsoft Entra ID, any OpenID Connect provider).** Besides the system password, the login page can offer **Sign in with Google** and **Sign in with Microsoft** (OpenID Connect, authorization code flow with PKCE, nothing outside the standard library). Set it up under Configure ▸ Users ▸ SSO, or in the `web` block: `sso_google_client_id` and `sso_google_client_secret`; `sso_entra_tenant` (the Directory/tenant GUID), `sso_entra_client_id` and `sso_entra_client_secret`; `sso_oidc_name`, `sso_oidc_issuer`, `sso_oidc_client_id` and `sso_oidc_client_secret` for your own OpenID Connect provider (Authentik, Keycloak, Authelia, Zitadel; the issuer is its https address, tokens must be signed RS256 and the address verified, and a private certificate authority must be in the host's trust store); `sso_users`, one `alice@example.com rw`, `bob@example.com ro` or `carol@example.com rw google` per entry (no level means `ro`; a provider, `google`, `microsoft` or `oidc`, admits the address through that provider only, none means any); and optionally `sso_base_url` (`https://name:port`) when the provider should always send the browser back to one address. Register the console with the provider as a web application and give it the redirect URI `https://THIS-NODE:12380/api/sso/callback` (Google Cloud Console ▸ APIs & Services ▸ Credentials ▸ OAuth client ID; Entra ▸ App registrations ▸ Web, with a client secret's Value). A provider appears on the login page only when all its values are filled in. Only the addresses on the `sso_users` list get in, whatever account they use; the ID token's signature, issuer, audience, expiry and nonce are checked, Microsoft accounts must belong to the configured tenant, and Google addresses must be verified. SSO sessions are checked against the list every minute, so removing an address ends them and `rw` to `ro` makes them read-only. The settings are shared by the cluster and the secrets are hidden from read-only accounts. Each node needs HTTPS access to `accounts.google.com` or `login.microsoftonline.com`. The password login stays available either way. The settings are edited in the GUI or with `--config-import`; there is no separate command line for them.
 
-### Arista EOS (`eos`)
+**Passwords** set on the Users page must have at least 8 characters (`web.min_password_length`, 1–128; absent or 0 means 8).
 
-eAPI, the JSON-RPC interface at `/command-api`, with HTTP basic authentication as a user whose privilege level allows the commands (15 for the running configuration). On the switch: `management api http-commands`, `protocol https` and `no shutdown`.
+**Management commands** (everything under `--versions`, `--tls-*`, `--cluster-*`, `--update-*`, and `--assert-agc`) go over the local status socket, which only root may use (file mode plus `SO_PEERCRED`).
 
-- Only `runCmds` with the format `json` or `text` is ever sent, one command per request, and every command goes through `CheckShow`: nothing that writes, and no `enable` or `configure`.
-- **Facts** are `show version` and `show hostname`; **Interfaces** and **Ports** (counters, rates) come from `show interfaces`; **Neighbors** are `show lldp neighbors detail`.
-- **Routes** are `show ip route vrf all` (and IPv6); **Routing** is BGP, OSPF, IS-IS, BFD, VRRP, MLAG, route maps and prefix lists as parts, with `unavailable` saying what a switch did not answer.
-- **Firewall** is the access lists (IP, IPv6, MAC) with their counters; **Resources** are memory, CPU (`show processes top once`), fans, temperatures and power supplies; **VLANs** carry their ports.
-- **Config** is `show running-config` and **Show** runs one show command, both as the text the CLI prints.
-- **API** (`device_api_get`) names a show command as a path and answers its JSON: `/eapi/show/ip/route/vrf/all` is `show ip route vrf all` (`%2F` for a `/` in a word, `?format=text` for text).
+## Users
 
-### Aruba CX (ArubaOS-CX, `aoscx`)
+Configure ▸ Users (or `ntpdir --users`) manages the accounts that may sign in to the GUI: the members of the GUI group (`ntpdir`, or `web.group`). They are ordinary operating-system accounts on the node, managed with `useradd`, `usermod`, `userdel` and `chpasswd`, so PAM stays the single place passwords are checked. A new account has no shell and no home directory and exists only to sign in. Each account can have an expiry date, and the operating system refuses it from that day.
 
-The REST API (10.04 and later) with a user name and password. The driver logs in once (the credentials in the form body, never in a URL; the login is the only POST), keeps the session and logs out when the request ends. On the switch: `https-server rest access-mode read-only` and `https-server vrf mgmt` (or the VRF it is reached on), and a user in a read-only group. The option `api_version` (default `v10.09`) names the REST version; a release that lacks it answers 404.
+The accounts are listed on the left. Pick one to change it on the right: type a new password and/or change the expiry date and press **Save** (leave the date blank and the account never expires). **Disable** takes the account out of the group while keeping it, and **Delete** removes it. **+ New** and **Add an existing account…** open their forms in the same place.
 
-- **Facts** are `/system` (status and configuration) and the chassis subsystem; **Interfaces** and **Ports** (statistics, status and configuration as properties) come from `/system/interfaces`.
-- **Neighbors** are LLDP, asked per front-panel port that is up.
-- **Routes** are every VRF's routes (one entry per next hop); **Routing** is each VRF's BGP, OSPF, OSPFv3 and static routes, route maps and prefix lists.
-- **Firewall** is the ACLs with their entries and hit counters, object groups, classes and policies.
-- **Resources** are CPU and memory from the subsystems' resource utilization, and fans, temperatures and power supplies; **VLANs** carry the ports of each VLAN.
-- **Config** is the running configuration as JSON (`fullconfigs/running-config`). `show` commands are not available: the REST API runs none.
-- **API** (`device_api_get`) reads any `/rest/<version>/...` resource; the login and logout resources are refused.
-
-### Infoblox NIOS (`nios`)
-
-The WAPI (`/wapi/<version>/`) with HTTP basic authentication as an admin whose group may read. Only GET is sent; function calls (`_function`), which change things or make backups, are refused. The option `wapi_version` (default `v2.12`) names the WAPI version.
-
-NIOS is a DNS, DHCP and IPAM appliance, not a switch or a firewall, so only what fits is answered:
-- **Facts** are the grid member whose VIP or host name is the device's address (the only member if there is one), with its hardware model and serial number and the NIOS version from its upgrade status; for an address that is no member's, the grid's name.
-- **Interfaces** are that member's LAN1, LAN2, MGMT and HA addresses (every member's, named `host/lan1`, when the address is no member's).
-- **Resources** are the capacity report (objects held against what the hardware is rated for, as storage) and the state of each member's services (DNS, DHCP, ...).
-- **API** reads any object type: networks, ranges, zones, records, leases, ... (`/wapi/v2.12/network?_max_results=50`); the catalog lists the types the release has.
-- Neighbors, routes, routing, firewall, VLANs, port counters, configuration and `show` answer "unsupported".
-
-### Technitium DNS Server (`technitium`)
-
-The HTTP API (Technitium 15.0 and later) on its HTTPS port, 53443 by default (turn on HTTPS for the web service in Settings ▸ Web Service; the plain-HTTP port is never used). The credential is an API token (Administration ▸ Sessions ▸ Create API Token), sent as `Authorization: Bearer`, never in a URL; or a user name and password, from which the driver logs in and logs out again.
-
-Technitium's API changes things with plain GET requests (a zone is deleted with one), so being a GET is no safeguard here: **only endpoints whose name is `get`, `list` or `query` (or begins with one: `getTop`, `listStoreApps`) are ever sent**, and a token or password parameter in a request is refused.
-
-Technitium is a DNS server and not a switch, so (as with Infoblox) only what fits is answered:
-- **Facts** are the server's name, version and uptime; **Interfaces** are the addresses it listens on; **Resources** are the dashboard's statistics for the last hour and day.
-- **API** reads everything it lists: zones, records, the cache, blocked and allowed domains, DHCP scopes and leases, apps, the query log (`/api/zones/list`, `/api/dashboard/stats/get?type=LastHour`).
-- Neighbors, routes, routing, firewall, VLANs, port counters, configuration (the backup is a file) and `show` answer "unsupported".
-
-### F5 BIG-IP (`bigip`)
-
-iControl REST (BIG-IP 13.1 and later) on port 443, with a user name and password (basic authentication) or an auth token as the credential's token. A user with the Guest or Auditor role reads; changes need an account that may make them. Facts come from `/mgmt/tm/cm/device`; Interfaces are the physical interfaces and the self IPs; Ports are the interface statistics (bits in and out become octets); Routes and Routing are the static routes, BGP, OSPF, BFD and route domains; VLANs carry their tag; Firewall is the AFM policies, rule lists, address and port lists and NAT policies; Resources are CPU, memory, disk and the failover state. The API request reads any `/mgmt/tm/...` path except util, authentication, UCS archives and file transfer. Neighbors, configuration text and `show` answer "unsupported".
-
-### DNS Director (`dnsdir`)
-
-The DNS Director product, managed through its own MCP endpoint (`POST /mcp` on its GUI port, 53853). The credential's token is an **MCP key** made on the director (Configure ▸ Monitoring ▸ MCP ▸ Keys); its `ro` or `rw` is the access, so a `ro` key reads and a `rw` key also changes. A password is not used. The option `node` names the cluster node the tools ask about (an address or host name from the director's node list); without it the node serving the endpoint answers.
-
-- **Facts** are the node and the release (`v635`) from `list_nodes`, with the number of nodes in the cluster; **Interfaces** and **Resources** (CPU, load, memory, swap, file systems, network rate) are the node's host statistics; **Neighbors** are its LLDP neighbors.
-- **Show** takes `show NAME [node=… range=… top=… gateway=… transport=…]`, where NAME is one of the director's read tools: `nodes`, `topology`, `gateways`, `alerts`, `log`, `query-stats`, `host-stats`, `server-stats`, `schedule`, `updates`, `node-status`, `lldp`, and `dns`. **API** reads any `/api/…` route of the director's GUI API (the catalog lists them); **Config** is its configuration.
-- Each director hides its own secrets in every answer. No ports, routes, VLANs or firewall.
-- **Changes** (`device_change_raw`, rw key): method `SET` merges the JSON body into the director's configuration (`{"dns": {"cache_entries": 200000}}`; a dry run asks the director to check it without saving), and `POST` or `PUT` with a path under `/api/` calls a route of its GUI API. The director keeps every configuration change in its own history, which is the way back; netdir does not put it back itself. Login, logout, the session and sign-in routes are refused.
-
-### multi-media[encoder] (`mediaencoder`)
-
-The NVENC HEVC re-encoding daemon (multi-mediaencoder v23 and later), managed through its own MCP endpoint (`POST /mcp` on its web port, 8765). On the encoder: Settings ▸ General ▸ MCP Server ▸ **Generate token**. The credential's token is that token; a password is not used. The encoder has one kind of token, so whoever holds it can also change the encoder: give netdir a token of its own (Revoke ends it at once). Certificate: usually *skip check* (the encoder's is self-signed). The driver checks that the other end says it is a multi-media[encoder] before it asks anything.
-
-- **Facts** are the release (`v23`), the cluster name and node count when the encoder's cluster is on, and the GPU model; **Resources** are the encoder host's CPU, load, memory and swap and its GPU's load, NVENC and NVDEC use, memory, temperature, power and fan (the newest sample of what the encoder keeps). **Config** is the encoder's settings; `cluster_secret`, `plex_token` and `mcp_token` are not in it. No interfaces, neighbors, ports, routes, VLANs or firewall (it is not a network device).
-- **Show** takes `show NAME`, where NAME is `status`, `live-session`, `queue`, `log` (`lines=1..2000`), `history`, `history-log` (`id=` from `show history`), `metrics`, `cluster`, `cluster-check`, `schedules`, `quarantine` (what is in quarantine and what the automatic purge would delete next), `scan` (`target=movies|tv|/absolute/dir`: what a job would encode, without encoding or changing anything; needs multi-mediaencoder v25) or `config`. **API** reads the encoder's own routes that have a read tool: `/api/status`, `/api/live-session`, `/api/queue`, `/api/log?n=`, `/api/sessions`, `/api/sessions/ID/lines`, `/api/sys`, `/api/gpu`, `/api/cluster`, `/api/cluster/check`, `/api/quarantine`, `/api/schedules` and `/api/config` (the catalog lists them).
-- **Changes** (`device_change_raw`, rw): method `SET` with a JSON object of settings (`{"encode_preset": "slow"}`; only the keys given change, and the encoder checks them as its Settings page does), or method `CALL` with the action as the path and its arguments as the body: `start_job` (`{"target": "movies"}`), `stop_job`, `stop_cluster_jobs`, `drain_node` (`{"drain": true}`), `create_schedule`, `update_schedule`, `toggle_schedule`, `run_schedule`, `delete_schedule`, `clear_queue`, `purge_quarantine`, and `clear_log`, `clear_history` and `clean_temp_files`. The encoder has no dry run: a dry run checks the request here and shows what would be replaced (the current settings, the status or the schedules) and sends nothing. The encoder does not undo a change; `Before` holds what was replaced. Its certificate, the Plex sign-in and every secret cannot be reached, and with `NETDIR_DEVICE_GUARDS=1` `clear_log`, `clear_history`, `clean_temp_files` and changing `allowed_groups`, `session_hours` or `port` are refused too.
-- **Deleting the quarantine** (multi-mediaencoder v24 and later): the originals the encoder keeps after an encode are deleted by `device_change_raw` with method `CALL`, path `purge_quarantine` and no body: every file in quarantine is deleted at once (the encoder deletes by age by itself, after `quarantine_days`). Body `{"older_than_days": 30}` deletes only files older than that; `{"dry_run": true}`, or a dry run of the change, asks the encoder what would be deleted and deletes nothing (`Before`). The answer says how many files were deleted and the space freed. The encoder only deletes regular files inside the quarantine folders it made itself (the ones with its marker file), and holds back a file that arrived in the last two minutes. The files are gone for good: with `NETDIR_DEVICE_GUARDS=1` only a dry run is accepted. `show quarantine` says what is there first.
-- Tested against a stub of the encoder's endpoint and, for the reads, changes and the quarantine tools, against a real encoder daemon; the numbers from a sampled host or a real GPU are not.
-
-### MCP Network Director (`netdir`): a federation
-
-A device of this platform is **another MCP Network Director**, reached through its own MCP endpoint (`POST /mcp` on its GUI port, 22161) with an **MCP key** as the credential's token (on that director: Configure ▸ Monitoring ▸ MCP ▸ Keys; `ro` is enough to read). Directors linked this way are a federation, a tree: each keeps the logins of its own devices and nothing else, and a client asks the one at the top.
+![Configure ▸ Users: the accounts on the left, the chosen account on the right](snaps/users.png)
 
 ```
-clients ▸ netdir1 ▸ netdir2 ▸ technitium
-                  ▸ netdir3 ▸ observium
-                            ▸ netdir4 ▸ vcenter
+ntpdir --users
+ntpdir --user-add alice --expires 2027-06-30     # asks for the password
+ntpdir --user-passwd alice
+ntpdir --user-expiry alice --expires never
+ntpdir --user-grant bob                          # an account that already exists joins the group
+ntpdir --user-revoke bob                         # leaves the group; the account is kept
+ntpdir --user-del alice
 ```
 
-- **Links go downward.** On netdir1, netdir2 and netdir3 are devices (platform `netdir`, address, key); on netdir3, netdir4 is. A firewall around a DMZ only has to let the director above reach the one inside; the one inside never connects out.
-- **The devices below show up like any other.** Monitor ▸ Devices lists them with the others (the *Via* column names the directors between this one and the device, e.g. `netdir3 ▸ netdir4`), with the health the owning director sees, and `list_devices` has them under `remote`. Every device tool (`device_facts`, `device_interfaces`, `device_show`, `device_api_get`, ...) and `/api/devices/query` takes them as a target: a name, `tag:`, `platform:` or `all`. A client connected to netdir1 asks for `vcenter` and does not need to know which director has it.
-- **The request goes down and the answer comes up.** netdir1 sends the read to the director that is the next link, with the device's name there; that director asks the device itself, or sends the read down again. The director that holds the login hides the secrets in the answer, so none passes through the others.
-- **Names.** A name that another device here already has is shown as `name@director` (the director that has it); ask for it by that name.
-- **Reads go down for any target; changes and captures for a device named in it.** `device_change_raw`, `device_change` and `device_capture` with the name of a device below (`vcenter`, `sw1@netdir3`) send the same request, with the name that director knows, to the director it is reached through, and join its answer with this director's own. `all`, `tag:` and `platform:` pick this director's own devices only, so a change never fans out through the federation by accident. Whether it may is decided by the **key** of the link (a read-only key has no write tool there; a read-write one does) and by that director's own ACL and refusals, after this director's own gate for the caller has been passed. Every one is logged here and on the director that makes it. A device's configuration is read through the director that holds the login and is filtered again on the way up.
-- **Index.** Each director looks at the directors below it (their `list_devices`) every minute in the background and when someone looks at the device list (at most every 20 seconds), so a chain of directors is ready bottom up. A name that is not in the index yet makes a request look again and wait for it. A director that does not answer is shown in the tooltip of its State, and its devices stay out of the list until it does.
-- **Loops and depth.** Directors may link both ways (netdir1 has netdir2 as a device and netdir2 has netdir1). Every device carries the installation that owns it and the installations a request for it goes through; a device of this installation, or one whose way goes through it, is dropped, so nothing that was published comes back, not even from a list a few seconds old. A device reached by two ways is listed once (by the shorter), and a chain is cut at six directors. A director listed by the one it is a device of shows up as a device of that one (harmless).
-- **Facts, interfaces, resources and neighbors** of the device itself are the node's; **Show** takes `show devices`, `nodes`, `topology`, `gateways`, `alerts`, `log`, `host-stats`, `schedule`, `updates`, `node-status` and `lldp`; **Changes** (`device_change_raw`, rw key) are `SET` on that director's configuration and `POST` or `PUT` on its API, as for the DNS Director.
-- **Alerts stay on the director that owns the device**; the ones above do not collect them.
+**The rules.**
 
-### Microsoft Entra ID (`entra`)
+- Names are 1–32 lower-case letters, digits, `_` or `-`.
+- Passwords go to `chpasswd` on its standard input, never on a command line.
+- *Add user* never touches an account that already exists. **Add an existing account…** (`--user-grant`) puts one in the group with `usermod -aG` and, on the other nodes, adds it where it exists and creates it with the same password hash where it does not.
+- **Disable** (`--user-revoke`) takes any member out with `gpasswd -d` and keeps the account. It is refused for yourself, for the last account, and for one that is a member only as its primary group.
+- Only members of the group can be changed. `root` is never listed or changeable, and neither the signed-in user nor the last account that can sign in can be deleted.
+- Any member can manage the others, which is the same power they already have over the daemon. Every change is logged with who made it. The installer adds the user who ran it to the group.
 
-Microsoft Graph (`https://graph.microsoft.com/v1.0`), **read only**, for one question: which devices belong to a user. Address `graph.microsoft.com` (left empty it is that); `login_host` names another sign-in host for a national cloud (`login.microsoftonline.us` with address `graph.microsoft.us`). Two ways to log in:
+**In a cluster, every change applies to every node.** Add, delete, password and expiry are made on the node you are on and sent to the others over the cluster channel as the password *hash*; the password itself never leaves the node that received it. The reply says on how many nodes the change was applied and names any that were not (a node that was down misses the change, and the CLI exits with 2). To bring such a node in line, set the password again (that re-sends the whole account and creates it where it is missing), or repeat `--user-del` (a node where the account is already gone accepts it). A node never takes over an account that already exists there outside the GUI group.
 
-- **Browser sign-in** (nothing to register in Entra). Add the device with a **new login and leave user name, password and token empty**, then right-click the device ▸ **Sign in with Microsoft** (or `netdir --device-signin NAME`). The page shows a code and a link; you open it on any computer and sign in (multi-factor included). The device then sees what that account may see: delegated `User.Read.All` and `Device.Read.All` through Microsoft's public client "Microsoft Graph Command Line Tools", with no secret. By default any member of a tenant may read users and their devices; a tenant can restrict that or require consent for that client. The refresh token is kept in the login as `rt:…` (a login with only `rt:` is a login not yet signed in) and is renewed as it is used (saved at most once a day); sign in again when it is revoked or unused for 90 days. Option `tenant` (ID or domain) is optional here; without it the sign-in is to "organizations".
-- **Application** (unattended, no person). Register an app in Entra, add the **application** permissions `Device.Read.All` and `User.Read.All` (Microsoft Graph), grant admin consent and create a client secret. The login's **user name** is the application (client) ID and its **password** the secret; option `tenant` is the directory ID or a verified domain. The token is asked for once per connection.
+**A node that joins a cluster gets the cluster's accounts.** Right after joining, it copies the GUI-group accounts (name, password hash, expiry) from the node it joined through. An account that already exists on the new node is left exactly as it is, and accounts with no password are not copied. If that fails, the join still succeeds and the log says so; set a password again to send it.
 
-- **Facts**: the tenant's name and ID. No interfaces, neighbors or configuration.
-- **Show** `show devices user=<sign-in name | object ID | name>`: the devices the user has **registered** and the devices the user **owns**, each once with a `relation` list, sorted by name (id, deviceId, name, operating system and version, trust type, compliance, managed, last sign-in). A name that matches several users is refused with the candidates listed. `show user user=…` shows the user. The API request reads only `/organization`, `/users`, a user's `registeredDevices` and `ownedDevices`, and `/devices`.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` with a path at `/users`, `/devices`, `/groups` or `/organization` (below `/v1.0`) and a JSON body (`PATCH /devices/{id}` with `{"accountEnabled": false}`). The application needs the matching write permission (for example `Device.ReadWrite.All`). With `NETDIR_DEVICE_GUARDS=1` these are refused (by default they are sent): sign-in methods, passwords and keys, roles and consent, policies, and a user's mail and files. The copy of what the path held is returned as `before`; a Graph change is not put back automatically. Starting a sign-in changes a login, so it needs the access a device change needs (not a read-only account, and there is no MCP tool for it).
+## Config history
 
-### Proxmox Backup Server (`pbs`) and Proxmox Datacenter Manager (`pdm`)
+Every change to the configuration, whether from the GUI, the CLI, a cluster sync or a hand edit of the file, is stored as a version in `/var/lib/ntpdir/versions` (one JSON file each; the newest 200 are kept). A version records when it happened, who made it (`alice`, `cli:root`, `file edit`, `cluster sync` and so on) and a one-line summary such as `NTP settings: probe_interval_ms 5000 → 7777`. Secrets (keys) never appear in summaries, and identical saves are not recorded again.
 
-Both have the REST API of Proxmox VE (`https://<host>:PORT/api2/json`, answers `{"data": …}`): Backup Server on port **8007**, Datacenter Manager on port **8443** (a self-signed certificate needs *skip check*). The login is an **API token**: the credential's token is `user@realm!id:secret` (a **colon** before the secret, not the equals sign of Proxmox VE), or its user name is `user@realm!id` and its token the secret. Or a user name with its realm and a password (a ticket; not for an account with two-factor login; the PDM ticket form is not verified). The token is sent as `Authorization: PBSAPIToken=…` or `PDMAPIToken=…`. Give the user and the token the **Audit** permission on `/` to read (a token with privilege separation needs the permission itself).
-
-- **Facts**: the version, the uptime, and the number of datastores (PBS) or remotes (PDM). **Interfaces**: the machine's network.
-- **Show** PBS `show NAME [store=NAME]`: `version`, `datastores`, `datastore-usage`, `datastore-config`, `datastore-status`, `groups`, `snapshots`, `namespaces`, `gc`, `sync-jobs`, `verify-jobs`, `prune-jobs`, `remotes`, `traffic-control`, `tasks`, `failed-tasks`, `node-status`, `node-network`, `node-disks`, `node-services`, `node-time`, `node-syslog`, `subscription` (`store=` for the three that read one datastore). PDM `show NAME [remote=NAME]`: `version`, `remotes`, `resources`, `resources-status`, `subscription`, `remote-tasks`, `node-status`, `node-network`, `node-tasks`, `node-services`, `node-time`, `node-syslog`, and per remote `pve-resources`, `pve-nodes`, `pve-qemu`, `pve-lxc`, `pve-tasks`, `pbs-datastores`, `pbs-tasks`. The API request reads any other path below `/api2/json`; users, tokens, permissions, tickets, consoles and file downloads are never read.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT` or `DELETE` with a path and a JSON body. PBS: below `/admin`, `/config` and `/nodes` (a garbage collection or a verify job, a sync or prune job's settings); a change that starts a task is waited for and a failed task is an error with its log. PDM: any path, such as `POST /pve/remotes/NAME/qemu/100/start`; a task it starts is named in the answer and not waited for (read it with `show remote-tasks`).
-- **Read and write by access.** A read-only MCP caller (ro key or ACL entry) reads everything above, including the API request on `/admin/...` (datastores, snapshots, jobs) and a datastore, remote or job called `backup` or `access`; a read-write caller also has `device_change_raw`. The Proxmox family (`proxmox`, `pbs`, `pdm`) is checked by its own driver (accounts, consoles, keys, files and the backup protocol are refused by the API's own segments, and secrets in an answer are hidden); the generic list of secret words that guards the other platforms' paths over MCP is not applied to them, because it refused the whole `/admin` tree and anything named `backup`.
-
-> **`rw` means rw.** From v172 an `rw` key is not held back by lists of what is never changed: users, tokens and login, keys and certificates, file operations, deleting infrastructure, and shutting the management port are all sent if the device's own login allows them. A path must still start at the API root and a body must be well formed. The read before a change, put-back, Junos and EOS confirmed commits and the NX-OS checkpoint stay. `ro` keys stay read-only and secrets stay masked on reads. Set `NETDIR_DEVICE_GUARDS=1` in the daemon's environment to turn the old lists back on (the "Never done here" paragraphs below describe them).
-
-- **Refused only with `NETDIR_DEVICE_GUARDS=1`** (off by default; see the note above): users, tokens, permissions and realms; certificates and ACME accounts; consoles and shells; restarting or shutting down the machine; stopping a service; wiping disks; PBS: deleting a datastore, backup group, snapshot or namespace, tape encryption keys, a prune that is not a dry run (`"dry-run": true`), a sync with `remove-vanished`; PDM: removing a remote, rolling back a snapshot, migrating a guest to another cluster. A body that restores (`archive`) is refused, and so is one that purges, except on the deletion of one VM or container (`DELETE …/qemu/ID` or `…/lxc/ID`, where `purge` and `destroy-unreferenced-disks` say how far it goes). An `rw` caller may create, delete and resize VMs and containers on PDM.
-- Not run against a real Backup Server or Datacenter Manager; the paths come from Proxmox's API viewers (the PDM ones are the least certain: the API request reaches any path that is wrong in a `show`).
-
-### Proxmox VE (`proxmox`)
-
-Proxmox VE over its REST API (`https://<host>:8006/api2/json`; the port defaults to 8006, and a self-signed certificate needs *skip check*). The login is an **API token** (Datacenter ▸ Permissions ▸ API Tokens): the credential's token is `user@realm!id=secret`, or its user name is `user@realm!id` and its token the secret. A token whose user has only the `PVEAuditor` role reads and nothing more. Or a user name with its realm (`root@pam`) and a password, for which the driver takes a ticket and renews it (not for an account with two-factor login). Option `node` is the node that node-scoped reads ask when none is named (default: the node answering).
-
-- **Facts**: the cluster's name, its node count and the Proxmox VE version. **Interfaces**: the node's network (bridges, bonds, NICs, with address and active state). No neighbors or configuration text.
-- **Show** `show NAME [node=N] [vmid=ID]`: `version`, `cluster`, `resources`, `vms`, `storage`, `nodes`, `tasks`, `backups`, `not-backed-up`, `ha`, `ha-resources`, `firewall`, `firewall-options`, `options`, `log`, `pools`; per node `node-status`, `node-network`, `node-disks`, `node-services`, `node-tasks`, `node-storage`, `node-time`, `node-vms`, `node-cts`, `node-syslog`; per guest `vm-config`, `vm-status`, `vm-snapshots`, `vm-firewall`, `vm-agent`, `ct-config`, `ct-status`, `ct-snapshots`, `ct-firewall`, `ct-interfaces`. A guest's node is found from its `vmid`. The API request reads `/version`, `/cluster/…`, `/nodes/…`, `/pools` and `/storage`; accounts, tickets, consoles, ACME accounts, join information and the guest agent's commands and files are never read. Secrets by name (a guest's `cipassword` and the like) are hidden.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT` or `DELETE` with a path below `/nodes`, `/cluster`, `/pools` or `/storage` and a JSON body: start, stop, shut down or reset a guest (`POST /nodes/pve1/qemu/100/status/start`), change its configuration (`PUT …/config`), snapshots, backups (`POST /nodes/pve1/vzdump`), migration, storage, network, HA and firewall settings. A change that starts a task is waited for (up to ten minutes) and answers with how the task ended; a failed task is an error with the last lines of its log. A dry run reads what the path holds now and sends nothing. A `PUT` is not put back on failure (the configuration's digest changes), the copy in `before` shows what was there.
-- **Refused only with `NETDIR_DEVICE_GUARDS=1`** (off by default; see the note above): users, roles, permissions, tokens and realms; cluster create, join and removal; rebooting or shutting down a node, or stopping everything on it; stopping a node's services; consoles and shells; certificates; **deleting a storage or its volumes; restoring a backup** (a body with `archive`) **or rolling back a snapshot**; removing or wiping disks; the guest agent's commands and files. They are refused before anything is sent. What an `rw` caller does on a VM or container: **create** (`POST /nodes/N/qemu` or `/lxc` with the guest's parameters; a body with `archive` is a restore and is refused), **delete** (`DELETE /nodes/N/qemu/ID`, with `purge` and `destroy-unreferenced-disks` in the body when its disks and job entries are to go too) and **change CPU, memory and disks** (`PUT …/config` with `cores`, `sockets`, `memory`, a new disk line; `PUT …/resize` with `disk` and `size`).
-- **Import**: right-click the Proxmox device ▸ **Import ▸ Devices** (or **Preview**): every **running** VM and container of the cluster becomes a `linux` device (stopped ones are listed as skipped), disabled, no login, tagged `source=proxmox`, `node=…`, `vmid=…` and `type=qemu` or `lxc`. The name is the guest's name; the address is what the QEMU guest agent or the container's `/interfaces` reports while it runs, else a static address in its configuration (cloud-init `ipconfig0`, a container's `net0` `ip=`), else the name itself (tagged `address=name`; it only works if DNS has it). A VM whose `ostype` is Windows (`win*`, `w2k*`, `wxp`, `wvista`) becomes a `windows` device; other `ostype`s, templates and unmanaged containers are listed as skipped, as are guests already in the inventory (same name or address). Give each device a login and enable it before anything contacts it.
-- Not run against a real Proxmox.
-
-### Aruba Fabric Composer (`afc`)
-
-The on-site controller for Aruba CX VXLAN/EVPN fabrics, over its REST API (`https://<host>/api/v1`). The login is a user name and password; the driver asks for a token (`POST /api/v1/auth/token`), sends it as the `Authorization` header, renews it when refused and deletes it when it is done (a user may hold ten). Port 443; a self-signed certificate needs *skip check*.
-
-- **Facts**: the fabrics the controller manages. **Show** `show <resource> [name=value …]` reads any resource collection (`show fabrics`, `show switches`, `show vrfs`, `show vlans`, `show vlan_groups`, `show switches name=leaf1`); the AFC's own API Explorer (the ? at the top right of its web page) lists the resources. The API request reads `/<resource>`, `/<resource>/<uuid>` and `/<resource>/<uuid>/<sub resource>`. Users, roles, authentication servers, tokens, keys, licences and backups are never read. Aruba's pages show the resources both below `/api/v1/` and below `/api/v1/api/`; a 404 at the first is tried at the second.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` with a path below `/api/v1/` and a JSON body. A `PUT` keeps the old record and puts it back when the request fails in a way that may have changed something. Not changed: users, roles, authentication, certificates, keys, licences, backups and restores, upgrades, reboots and resets. Not run against a real controller.
-
-NetEdit has no documented API, so it has no driver; the Aruba CX switches it manages can be added directly as `aoscx`.
-
-### Active Directory (`ad`)
-
-Looks up users, computers and groups in a domain over LDAP (`device/ad.go`, standard library). Add a device with the domain controller (or the domain's name, which resolves to one) as its address and a login whose user name is `user@domain`, `DOMAIN\user` or a DN and whose password is that account's; an ordinary domain user can read what is looked up. The connection is always TLS: LDAPS on port 636, or StartTLS on 389 with the option `starttls=true` (a clear-text bind is never made, and a login with no password is refused). Certificate: *skip check*, or the CA's PEM. Option `base` is the search base (`DC=corp,DC=example,DC=com`); by default the controller's own domain.
-
-**Show** takes `show user NAME`, `show computer NAME`, `show group NAME`, the lists `show users NAME` and `show computers NAME` (up to 50 lines) `show domain`, and three searches for accounts that need a look: `show locked` (users with a lockout time), `show disabled` (disabled users that are still in groups) and `show stale users|computers [DAYS]` (enabled accounts with no sign-in for DAYS days, default 90, or never, created before that). NAME is a sign-in name (`jsmith`, `CORP\jsmith`, `jsmith@corp.example.com`), a mail address, a display name or a computer name, or the start of one; an exact match comes first. A user shows: name, account, mail, enabled, locked out, title, department, manager, when the password was last changed and whether it never expires, the last sign-in, groups; a computer: DNS name, operating system, last sign-in, who manages it, groups; a group: its members. Ask the device (MCP `device_show`) with `show user NAME`, `show computer NAME` or `show group NAME`. Facts are the controller's name and the domain level. Only a fixed list of attributes is asked for: passwords and hashes, LAPS and BitLocker secrets and security descriptors are never read. The names are values in the search (BER), not filter text, so a name cannot add to the filter. Nothing is changed (`device_change_raw` is refused). Certificate *skip check* is the device's usual Certificate setting (the LDAPS certificate of a domain controller is often from an internal CA). The troubleshooting (`tshoot user` / `tshoot host`) adds the account as `directory` when an Active Directory device is in the inventory (parameter `ad` picks one of several): enabled, locked out, when the password last changed, last sign-in, groups; for a host the computer account. It does not say where the user is signed in: the directory does not hold that. "Last sign-in" is `lastLogonTimestamp`, which a domain replicates only every 9 to 14 days; "locked out" is the lockout time being set, not a check against the lockout duration. Not run against a real domain controller.
-
-### Unimus (`unimus`)
-
-Unimus keeps the configuration backups of a network's devices. The driver uses its REST API (`https://<host>/api/v3`, Unimus 2.2.0 and later; the driver tries v3 and falls back to v2 by itself; option `api_version` forces one) with an **API token** (Settings ▸ User management) as the login's token. Unimus listens on 8085 in plain HTTP by default; this driver only speaks HTTPS, so put Unimus behind a TLS proxy and set the Port when it is not 443.
-
-- **Server** (no options): **Facts** are its health and the number of devices. **Show** `show health|devices|zones|tags|jobs|backups [name=value …]` (`show devices vendors=Cisco`, `show backups device=10.0.0.5`); the API request reads `/devices`, `/devices/backups`, `/zones`, `/tags`, `/jobs/tasks/status`. The text of a backup is never part of these answers.
-- **Backup text**: `show backup <name|address|id>` on the server device gives the latest backup of one device (found by address, by the name Unimus shows, or by ID), secrets hidden.
-- **One device** (option `device`: its address as Unimus has it, or its UUID): **Facts** are that device's; **Configuration** is its latest backup, filtered like any configuration over MCP.
-- **Changes** (`device_change_raw`, rw key): for example `POST /jobs/backup` to start a backup. With `NETDIR_DEVICE_GUARDS=1` these are refused (by default they are sent): pushing configuration (`jobs/push`), credentials, connections, uploading or deleting backups and deleting devices, zones or schedules.
-- **Import**: right-click the server ▸ **Import ▸ Devices**: each device with a known vendor and type is made with the matching platform (`iosxe`, `ios`, `nxos`, `eos`, `aoscx`, `fortios`, `panos`, `junos`, `bigip`, `nios`), disabled, tagged `source=unimus`, `vendor=…` and `type=…`; the others are listed as skipped.
-- Not run against a real Unimus: paths and fields come from the published OpenAPI description (the v3 one is a draft); the backup text is read from the Base64 `bytes` field.
-
-### Cisco IOS (`ios`)
-
-Classic Cisco IOS has no REST API, so the driver reads it over **SNMP** (UDP 161; Port empty). It reads facts (system group and ENTITY-MIB: model and serial of the chassis), interfaces and ports (IF-MIB with the 64-bit counters, IP-MIB addresses), LLDP and CDP neighbors, the routing table (IP-FORWARD-MIB) and any subtree by its numeric OID (`show oid 1.3.6.1.2.1.1`, `/oid/…` in `device_api_get`). It cannot read the running configuration, run `show` commands or change anything: SNMP has no way to, and an SSH transport does not exist in this program (netdir uses the standard library only). The subtrees that hold SNMP's own users and communities and the configuration-copy MIBs are never read.
-
-- **v2c:** a login with the community as its **token** (or password) and no user name.
-- **v3:** a login with the user name, the authentication passphrase as the password and the privacy passphrase as the token (passphrases are at least 8 characters). Options: `auth` = `md5`, `sha` (the default), `sha224`, `sha256`, `sha384`, `sha512`; `priv` = `aes` (the default when there is a privacy passphrase), `des` or `none`; `snmp_version` = `2c` or `3`. Not offered: AES-192/256 and 3DES.
-- Not tried against a real device: the OIDs are those of the standard and Cisco MIBs, and the SNMPv3 implementation is checked against the RFC 3414 key examples and an agent written for the tests.
-
-### Cisco Catalyst SD-WAN (`sdwan`)
-
-The device is the **SD-WAN Manager** (vManage), a user name and a password. The driver logs in (`/j_security_check`), takes the XSRF token, logs in again when the session expires and logs out at the end. Facts name the Manager's version and count the devices it manages; `show <resource> [key=value]` and `device_api_get` read any path below `/dataservice` (`device`, `alarms`, `device/monitor`, `template/device`, …). Accounts, certificates, settings and the session are not read. Changes (`device_change_raw`, rw key): POST, PUT, PATCH or DELETE below `/dataservice/` except accounts, certificates, settings, backups, upgrades and restarts. Not tried against a real Manager.
-
-### VMware NSX-T (`nsxt`)
-
-The device is the **NSX Manager** (give the cluster's address), a user name and a password sent as HTTP basic authentication. Facts: product version, uptime and host name. `show <path> [key=value]` and `device_api_get` read the Manager API (`/api/v1/…`) and the Policy API (`/policy/api/v1/…`; a `show` path that begins with `infra`, `global-infra` or `orgs` is a Policy path). Users, certificates, keys, directory logins, backups and licences are not read. Changes: POST, PUT, PATCH or DELETE below `/api/` and `/policy/api/` except those and upgrades, restarts and the Manager's services (NSX needs the current `_revision` in a PUT, so a PUT is not put back automatically when it fails). Not tried against a real Manager.
-
-### Cisco ACI (`aci`)
-
-The device is the **APIC** (the cluster's address), a user name and a password. Facts are the APIC's own (`topSystem`); interfaces and neighbors (LLDP and CDP) are those of every node of the fabric, named `node-101/eth1/1`; the configuration is the tenants' configuration as the APIC holds it (properties of configuration only, JSON). `show <class> [property=value]` (`show fvTenant`, `show faultInst severity=critical`), `show mo <dn>` and `device_api_get` (`/api/node/class/<class>.json`, `/api/node/mo/<dn>.json`) read the object model. Logins, keys, certificates and communities are not read. Changes: POST or DELETE of `/api/node/mo/<dn>.json` except logins, keys, firmware, restarts, exports and imports. Not tried against a real APIC.
-
-### Cisco Meraki (`meraki`)
-
-The Dashboard API (`https://api.meraki.com/api/v1`), with an **API key** as the credential's token (a dashboard administrator with read-only access makes a key that only reads). Address `api.meraki.com` (left empty it is that). A Meraki network is a cloud, so a device here is one of two things:
-
-- **An organization** (no options; option `org` is its ID and may be left out when the key sees only one): **Facts** are the organization's name and its device count; **Interfaces** are the MX uplinks of every appliance (`Q2XX-… wan1`, status, address); **Show** takes `show NAME [network=ID] [serial=SERIAL]` with `networks`, `devices`, `statuses`, `uplinks`, `inventory`, `changes` (the dashboard's change log), `clients`, `ssids`, `vlans`, `firewall`, `device`, `switchports`, `portstatus` and `lldp`; **the API request** reads any `/organizations/…`, `/networks/…` or `/devices/…` path. Administrators, SAML, SNMP, VPN and license paths are refused over MCP, and keys, pre-shared keys and community strings are hidden.
-- **One Meraki device** (option `serial=Q2XX-XXXX-XXXX`): its facts (name, model, firmware), a switch's **ports** (name, enabled, status, speed, uplink flag) and interfaces, its LLDP and CDP **neighbors**, and **typed port changes** in plain English with ports as Meraki numbers them (`change the description for ports 1-8 to read "desks"`, `shut down 12`). A switch's uplink port is never shut down, because it would cut the switch off from its dashboard.
-
-**Changes** (`device_change_raw`, rw key): `POST`, `PUT` or `DELETE` with a path below `/organizations/`, `/networks/` or `/devices/` and a JSON body. Meraki has no commit: a change is live at once. A `PUT` keeps the copy of what the path held and puts it back when the request fails in a way that may have changed something (a 5xx, a lost connection); a `POST` or `DELETE` is not undone. With `NETDIR_DEVICE_GUARDS=1` these are refused (by default they are sent): administrators, SAML, login security, SNMP, licenses, the management interface, firmware, reboot, claim, remove, release, clone, combine, split, and deleting an organization, network or device. Options are set in the device dialog (Options) or as `"options": {"serial": "Q2XX-XXXX-XXXX"}` in `devices`. Rate limits (HTTP 429) are waited out twice; lists are asked with `perPage=1000` and further pages are not fetched; the redirect to a regional shard (`nNNN.meraki.com`) is followed with the key, to a `meraki.com`, `.cn`, `.ca` or `.in` host over https only.
-
-### Palo Alto Networks (PAN-OS, `panos`, and Panorama, `panorama`)
-
-The XML API at `/api/`, with an admin's API key as the credential's token, or a user name and password from which a key is made (the only POST sent, with the password in the body, never in a URL). The key travels in the `X-PAN-KEY` header and never reaches an error text. Give the admin an XML API role that allows Operational Requests and Configuration, read only, and **Log** if the logs are to be searched (`device_api_get` with `/api/?type=log&log-type=globalprotect&query=…&nlogs=50`: traffic, threat, url, system, globalprotect, userid, auth and the other log types; the configuration log is not read over MCP). A log search is three GETs on the device (start the job, read it, remove it) and one read for the caller.
-
-- Platform `panos` recognises a Panorama from its system information; `panorama` forces it. Options: `vsys` (default `vsys1`) and, for a Panorama, `device_group`.
-- **Facts** are `show system info`; **Interfaces** and **Ports** are `show interface all` and the interface counters, with comments and link state from the configuration; the management interface is included.
-- **Neighbors** are LLDP; **Routes** and **Routing** (BGP, OSPF, RIP, BFD, multicast and the virtual routers' configuration) are a firewall's.
-- **Firewall** is the rules' hit counters (security, NAT, PBF, decryption, application override), sessions and the policy and object configuration. On a Panorama it is the managed devices, device groups, templates, and shared and device-group rules and objects.
-- **Resources** are CPU and memory (from `show system resources`), disks and the environmentals; **VLANs** are the VLAN interfaces.
-- **Config** is the running configuration as XML. **Show** takes an operational command as typed on the CLI (`show system info`; a double-quoted word is a value) and is converted to XML; pipes are refused.
-- **API** reads `type=op` (a `<show>` command) or `type=config` with `action=show` or `get`; other types, a `key` parameter and anything that writes are refused.
-- A Panorama answers no routes, routing or VLANs (`unsupported`). PAN-OS's advanced routing engine's live state is not read.
-
-### Importing devices from a monitor or a manager
-
-Right-click the Observium, IP Fabric, Centreon, Panorama, Proxmox Datacenter Manager, Aruba Fabric Composer, Unimus or Device42 server on a gateway ▸ **Import ▸ Devices** (**Import ▸ Preview** lists them first), or `netdir --device-import SERVER [--dry-run]`, or `POST /api/devices/import {"device":"SERVER","dry_run":true}`. Each device the server knows that has a driver here, and is not in the inventory yet (by name or address), is added **disabled and with no login**, tagged `source=observium|ipfabric|centreon` and `site=LOCATION` (Observium's location, IP Fabric's site) or `poller=NAME` (Centreon); the others are listed as skipped with the reason. Nothing is contacted until you give a device a login and enable it (a disabled device may have none; enabling one without a login is refused when saved). It is a change to netdir, so it is GUI, CLI and API only, never MCP.
-
-The inventory name is the first part of the host name (`lphxpve12.net.axway.int` is `lphxpve12`), without a trailing `-m` or `-new` (`aptxipm02-m` is `aptxipm02`); a device whose name is already in the inventory, or was made earlier in the same import, is skipped. The driver is picked from what the server says each device is: Observium's OS name (ios, iosxe, nxos, eos, junos, fortigate, panos, aoscx, bigip, infoblox, pve); IP Fabric's vendor, family and platform; Centreon's host templates (read from `/configuration/hosts`), where a Cisco template gives `iosxe` and a Nexus one `nxos`. A Proxmox Datacenter Manager gives the nodes of its remotes (`/remotes/remote`): a Proxmox VE remote's as `proxmox`, a Backup Server remote's as `pbs`, tagged `remote=ID` (a node listed by address is named `ID-N`). An Aruba Fabric Composer gives its switches (`/switches`) as `aoscx`, tagged `fabric=NAME`, by their management address (else the switch name). A Panorama gives the firewalls it manages (`show devices all`) as `panos` devices tagged `dg=DEVICE_GROUP`, named by host name. A Centreon host with no network-vendor template is skipped, since Centreon does not otherwise say what a host is. Cisco IOS is imported as `iosxe`, which needs RESTCONF; a classic IOS switch without it will fail until it has it.
-
-### Observium (`observium`)
-
-The REST API of Observium (`https://HOST/api/v0/`; switch it on with `$config['api']['enable'] = TRUE;` in `config.php`; the documentation lists the API as a feature of the Subscription Edition), over HTTPS, port 443. The credential is an **API token** (Profile ▸ API tokens; one made *read only* only reads), sent as a Bearer token, or a **user name and password** (HTTP basic authentication). Neither is ever put in a URL, and reading sends only `GET`. Observium is a monitor, so a device here is one of two things:
-
-- **The Observium server** (no options): **Facts** say how many devices it monitors; **Resources** are the alerts that have failed and the state of every device; neighbors, ports and interfaces answer `unsupported` (ask for a device). **Show** takes
-  - `show device NAME`: **everything Observium knows about one monitored device in one answer**: its record, ports, addresses, neighbours, sensors, status indicators, storage, memory pools, processors, inventory, counters, probes, alerts and its recent alert log, with a count of each and a note for a part Observium would not answer. NAME is the host name, a short name that fits exactly one device (`ipam2` finds `ipam2.example.com`), or the Observium device ID; a name that fits several is refused with the list.
-  - `show NAME [device=NAME] [filter=value …]` for one list: `devices`, `ports`, `neighbours`, `sensors`, `status`, `storage`, `mempools`, `processors`, `inventory`, `counters`, `probes`, `alerts`, `alert_log`, `address`, `groups`, `maintenance`, `vlans`. With `device=NAME` the list is that device's; any other `filter=value` is passed to Observium (`show alerts status=failed`, `show devices os=ios`, `show ports device=ipam2 ifOperStatus=down`). A list that is not about one device is cut to 500 rows (the answer's `count` says how many there are; `pageno=2` asks for the next page).
-- **One monitored device** (option `device`, its host name or Observium device ID): **Facts** (host name, vendor or OS, hardware, version, serial, uptime), **Interfaces** and **Ports** (state, speed, MAC, addresses, every counter and every other field of the port; deleted ports are left out), **Neighbors** (LLDP, CDP and the like, with every field Observium holds; inactive ones are left out), **Resources** (CPU from the processors, memory pools, storage, and sensors with kind, state, reading and units), and `show device` without a name.
-
-**Import the devices it monitors:** see [Importing devices](#importing-devices-from-a-monitor-or-a-manager).
-
-The **API request** (`device_api_get`) reads `/devices/…`, `/ports/…` and the other entities above, and `/openapi.json`, Observium's own description of every answer. SNMP communities and SNMP authentication and privacy passwords in a device's record are hidden everywhere. Option `prefix` is the path Observium is served below (`/observium`). A `429` (Observium throttles) is waited out once.
-
-The documentation of the API gives the shape of an answer for devices only. The driver finds the rows of any answer whatever its wrapper, reads each field under the names Observium's database uses, and **keeps the whole row** next to what it reads from it (`properties`, `detail`, `raw`, `details`), so a field it does not know is still there. **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` with a path below `/api/v0` and a JSON body (`PATCH /devices/12/`). Users, tokens and login are refused. Observium's documented API is read-only, so whether a request is accepted depends on the edition and build; a refused request changes nothing, and nothing is put back automatically.
-
-### IP Fabric (`ipfabric`)
-
-The REST API of IP Fabric (`https://HOST/api/<version>/`), over HTTPS, port 443. The credential is an **API token** (sent as `X-API-Token`) or a **user name and password** (`POST /auth/login`, then a Bearer token); neither is ever put in a URL. The URL form is found by the driver: IP Fabric 7.5 and later have no version in the path (`/api/snapshots`, the version is the `X-API-Version` header, whose default is used), and 8.1 refuses the old `/api/v8.1/snapshots` (404 `API_NOT_FOUND`); older releases need `/api/v7.3/…`. The driver reads the release from `GET /api/version`, tries the form that fits it first and uses the first that answers; the option `api_version` forces one (`none` for `/api/…`, `v7.3` for `/api/v7.3/…`); the option `snapshot` (default `$last`) picks the snapshot the tables are read from. IP Fabric models a whole network, so the device here is the IP Fabric server:
-
-- **Facts**: the release and how many devices the snapshot holds. **Interfaces**: the interfaces table, named `hostname:interface` (up to 5000 rows). No neighbors, routes or configuration through the named tools.
-- **Show** (`device_show`): `show devices|interfaces|sites|hosts|arp|snapshots [snapshot=ID] [columns=a,b] [limit=N] [start=N] [sort=col|-col] [column=value ...]` (`*` in a value is a substring match), `show tables/<section>/<table>` for any other table, **`show device NAME`**: the record, interfaces and ARP entries of one discovered device in one answer, and **`show diagnose`**: sends a fixed set of requests (version, `/os/version` with and without the credential, snapshots, two tables) and lists what IP Fabric answered to each, to tell a wrong path from a refused credential.
-- **API request** (`device_api_get`): `/tables/<section>/<table>?columns=a,b&limit=100&snapshot=$last&column=value` (IP Fabric reads tables with POST; the driver sends that read), `/snapshots`, `/jobs`, `/version`, `/os/version`.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` with a path below `/api/<version>` and a JSON body: lock, unlock, load, unload and delete snapshots, start a discovery, add or rediscover devices. Users, tokens, login, single sign-on, licences and the system are refused only with `NETDIR_DEVICE_GUARDS=1`. A dry run returns the copy of what the path holds; nothing is put back automatically.
-
-The column names are those IP Fabric documents for these tables. A column a release does not have is refused by the server (the driver then retries with a minimal set); pick columns with `columns=`. Secrets found by name in an answer are hidden. IP Fabric was written against its documentation only and has not been run against a live IP Fabric; the sign-in with a user name and password in particular.
-
-### Aviatrix (`aviatrix`)
-
-The Aviatrix Controller's API (`https://HOST/v2/api`; option `api_path` for another, such as `/v1/api`), over HTTPS, port 443. Every call is an *action* with parameters, sent as a form; the answer is `{"return": true|false, "results": …, "reason": "…"}`. The credential is the controller's **user name and password**: the driver asks for an API token (`get_api_token`), signs in with it (`login`, header `X-Access-Key`), keeps the session ID (CID) and sends it in the form of each call (never in a URL; reads are POSTs too). An expired session is renewed once. The device is the controller:
-
-- **Facts**: the release and how many gateways it manages. **Interfaces**: the gateways, with state, addresses, size, cloud and region.
-- **Show** (`device_show`): `show gateways|transit|spoke|peerings`, **`show gateway NAME`** (summary, details and transit peerings of one gateway in one answer) and `show ACTION [name=value …]` for any read action (`list_…`, `get_…`, `show_…`).
-- **API request** (`device_api_get`): `/ACTION?name=value`, the same reads. Actions whose names speak of users, administrators, passwords, keys, certificates, tokens, SAML, LDAP, single sign-on, licences or backups are refused.
-- **Changes** (`device_change_raw`, rw key): method `POST`, body `{"action": "edit_gw_config", "gateway_name": "gw1", …}` or `action=…&name=value`; the session ID is added. Login, users and administrators, credentials, backups and restores, and deleting a gateway, and any parameter named like a password, key or token, are refused only with `NETDIR_DEVICE_GUARDS=1`. A dry run returns the gateway's details when a `gateway_name` is given; nothing is put back automatically. No reboot: no action for it is known.
-
-The action names and result fields are those of Aviatrix's Terraform provider. This driver has been tested against a stub only, never a real controller.
-
-### Centreon (`centreon`)
-
-The REST API v2 of Centreon (`https://HOST/centreon/api/latest/`), over HTTPS, port 443. Option `prefix` says where Centreon is below the host (`/centreon` by default, `none` for the root), option `api_version` fixes a release (`24.04`) instead of `latest`. The credential is an **API token** (a personal access token, Centreon 23.10 and later; sent as `X-AUTH-TOKEN`) or a **user name and password** (`POST /login`, then the session token in `X-AUTH-TOKEN`; an expired session is renewed once). Neither is ever put in a URL.
-
-The device is the Centreon central server:
-
-- **Facts**: the platform version and how many hosts it monitors. **Interfaces**: the monitored hosts (up to 5000), with address, poller, and up or not.
-- **Show** (`device_show`): `show platform|pollers|hostgroups|servicegroups|downtimes`, `show hosts [status=down|unreachable|up|pending] [search=TEXT] [limit=N]`, `show services [host=NAME] [status=ok|warning|critical|unknown|problem] [search=TEXT] [limit=N]`, `show problems` (hosts that are not up, services that are not ok) and **`show host NAME`** (name, alias, address or ID): the monitoring record, the configuration, the services with their status and the recent timeline of one host in one answer. A part the user may not read is named under `errors`; the rest is still answered.
-- **API request** (`device_api_get`): any read below `/monitoring`, `/configuration` and `/platform`; lists take `limit`, `page`, `sort_by` and `search`. Users, contacts, access rights, tokens, authentication and administration are refused. The prefix and `/api/latest` may be left out or given.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` below `/monitoring` (acknowledge, downtime, check, submit result) and `/configuration` (hosts, services, templates, groups, commands, pollers) with a JSON body. Centreon applies a configuration change to the pollers only when it is exported: send the request with *save* (it posts to `/configuration/monitoring-servers/generate-and-reload`, Centreon 23.10 and later) or export from the web interface. A dry run returns the copy of what the path holds; nothing is put back automatically. Commands defined in `/configuration/commands` run on the pollers: give that access only to keys that should have it.
-
-Secrets found by name in an answer (SNMP communities, passwords, tokens) are hidden. The field names are those of Centreon's API documentation; `show host` keeps the whole record, so a field a release names otherwise is still shown. This driver has been tested against a stub only, never a real Centreon.
-
-### Windows host (`windows`)
-
-A Windows host over **OpenSSH** and PowerShell. On the host: the *OpenSSH Server* optional feature (Windows 10, 11, Server 2019 and later: `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, then `Start-Service sshd` and `Set-Service sshd -StartupType Automatic`). The transport is the Linux driver's (the system `ssh`, a password through `SSH_ASKPASS` or a PEM private key as the token, host keys learned on first use, `insecure` to skip the check, port 22). The login is `user`, `DOMAIN\user` or `user@domain`; for an administrator's key the public key goes in `C:\ProgramData\ssh\administrators_authorized_keys`. The script is base64-encoded into one line of PowerShell that decodes and runs it and is fed to `powershell -Command -` on standard input, so cmd.exe's quoting and its line length do not matter. A user in Administrators has a full token over OpenSSH, so no sudo-like step exists.
-
-- **Reads**: facts (host name with its domain, edition, version, uptime, model, serial), interfaces and ports with counters (`Get-NetAdapter`, `Get-NetAdapterStatistics`, `Get-NetIPAddress`), routes, resources (CPU load, memory, fixed disks) and a configuration of `ipconfig /all`, `route print`, DNS client, firewall profiles and the enabled inbound rules. No neighbors: Windows has no LLDP. `device_show` takes `show ip|links|routes|neighbors|ports|services|service NAME|processes|eventlog [N]|log System|Application|Security|Setup [N]|disk|memory|cpu|version|firewall|dns|time|users|updates|shares`, with the usual `| include|exclude|begin|head|last|count`; nothing else is run.
-- **Typed changes** (`device_change`, rw key): shutdown and no shutdown (`Disable-NetAdapter`, `Enable-NetAdapter`). An adapter's name has spaces (`Ethernet 2`), so type `ethernet2`; it is matched to the host's own name. An adapter has no description to set and no counters to clear.
-- **Raw changes** (`device_change_raw`, rw key): `lines` of PowerShell, one script with `$ErrorActionPreference = 'Stop'`, so the first line that fails ends the run. There is no rollback; the result says what ran. A line that restarts or powers off the host is accepted and the dropped connection counts as success.
-- **Import**: Windows VMs of a Proxmox VE host import as `windows` devices.
-- Tested on real Windows hosts, besides the unit tests (canned PowerShell JSON and a stand-in `ssh`).
-
-### Linux host (`linux`)
-
-A Linux host over SSH. The daemon runs the OpenSSH client (`ssh`; install `openssh-client`, or set `NETDIR_SSH` to its path), the way the SFTP backup does, so there is no new dependency. The login is a user name with a **password** (given to ssh through `SSH_ASKPASS`, never on a command line, and to `sudo -S` for what needs root) or an SSH **private key** as the credential's token (PEM). With neither, the daemon's own keys and agent are tried and `sudo -n` is used. The host key is learned on first contact (`StrictHostKeyChecking=accept-new`, kept in `NETDIR_SSH_KNOWN_HOSTS` or the user's cache folder) and checked after that; `"insecure": true` skips the check. Port 22. Option `sudo` = `no` runs everything as the login user; a login as `root` never uses sudo. The host needs a POSIX `sh` and `base64`; the script is sent base64-encoded, so the login shell does not matter.
-
-- **Reads**: facts (host name, distribution, kernel, uptime, model), interfaces (`ip -j addr`, with the interface alias as the description), ports with the kernel's counters, routes, resources (load per CPU, memory, file systems, temperatures), LLDP neighbors when `lldpd` runs, and a configuration made of addresses, routes, rules, resolver, netplan, ifupdown and systemd-networkd files, `/etc/hosts`, and (through sudo) the firewall. NetworkManager and wpa_supplicant files are not read. `device_show` takes `show ip|links|routes|neighbors|ports|services|service NAME|logs [N]|log UNIT [N]|disk|memory|cpu|processes|version|firewall|dns|time|users`, with `| include|exclude|begin|head|last|count`; nothing else is run.
-- **Typed changes** (`device_change`, rw key): description (the interface alias), shutdown and no shutdown, through `ip link set`. They are what the running kernel has until the host restarts; `save` has nothing to save and says so. Counters cannot be cleared.
-- **Raw changes** (`device_change_raw`, rw key): `lines` of shell, run as root through sudo as one script with `set -e`, in order, stopping at the first that fails. A Linux host has no transaction: the result says what ran, nothing is undone, and a line that cuts the SSH access cuts it. A line that restarts or powers off the host is accepted and the dropped connection is taken as success.
-- Tested on real Linux hosts, besides the unit tests (a stand-in `ssh`, canned `ip -j` and `lldpctl -f json` output).
-
-### Juniper Junos (`junos`)
-
-Junos through its REST API: every RPC is `https://HOST:3443/rpc/<rpc-name>?<arguments>` (GET), or `POST /rpc` with the RPC as XML. On the device: `set system services rest https port 3443 server-certificate <name>` (HTTPS only; the driver never uses plain HTTP) and a user whose login class runs the operational commands (`view` reads; `configure` or `all` writes). HTTP basic authentication with a **user name and password**; the port is 3443 unless the device says otherwise. Answers are asked in JSON; Junos wraps a value as `[{"data": "x"}]` and the driver unwraps it.
-
-- **Facts**: host name, model, release, chassis serial number, uptime. **Interfaces**: the physical interfaces with admin and oper state, speed, MAC, description and the addresses of their units. **Neighbors**: LLDP.
-- **Show** (`device_show`): any `show …` command, in the CLI's own text, with `| match`, `| except`, `| count`, `| display json` and the other filters. `show configuration` (also abbreviated) and commands about secrets are refused.
-- **API request** (`device_api_get`): `/rpc/get-<name>?argument=value` for any read RPC (`get-route-information`, `get-bgp-neighbor-information`, …; a flag has an empty value: `?terse=`). The name of the RPC behind a command is shown by `show <command> | display xml rpc`. The configuration, keys, passwords, licences and users are refused.
-- **Changes** (`device_change_raw`, rw key): `lines` of configuration in **set format** (`set interfaces ge-0/0/1 description uplink`, `delete …`, `deactivate …`). The driver refuses to start when the candidate configuration already holds uncommitted changes, loads the lines, runs the commit check, commits with `commit confirmed 3` and confirms the commit once the device still answers; if it does not, Junos rolls the change back by itself after three minutes. `dry_run` loads, compares and checks, returns the device's own diff as `before` and puts the candidate back. Users and login, the REST, NETCONF and SSH services, the management interfaces and a `delete` of a whole hierarchy are refused only with `NETDIR_DEVICE_GUARDS=1`. Junos has no separate startup configuration, so `save` changes nothing. An operational RPC (`clear-bgp-neighbor`, …) is `method` `POST`, `path` `/rpc` and the XML in `body`; with `NETDIR_DEVICE_GUARDS=1`, commits, locks, zeroize, power off, software and file operations are not sent that way. A reboot is the one line `request system reboot`.
-
-Secrets found by name in an answer are hidden. This driver has been tested against a stub only, never a real Junos device: the shape of the JSON answers (and how `<command>` and `get-configuration` answer through REST) is the likeliest place for a release to differ.
-
-### NS1 (`nsone`)
-
-The REST API of NS1 (IBM NS1 Connect), `https://api.nsone.net/v1/`, over HTTPS, port 443. The address may be left empty (`api.nsone.net`); a private NS1 deployment gives its own, and option `prefix` the path (`/v1` by default). The credential is an **API key** as the token (Account Settings ▸ API Keys; a key that has only the read permissions reads and nothing more), sent in the header `X-NSONE-Key` and never in a URL.
-
-The device is the NS1 account:
-
-- **Facts**: the number of zones. **Interfaces**: the zones (DNSSEC, primary or secondary, record count when NS1 gives it).
-- **Show** (`device_show`): `show zones [search=TEXT] [limit=N]`, `show zone NAME [limit=N]` (the zone and its records in one answer), `show records zone=NAME [type=TYPE] [search=TEXT] [limit=N]`, `show record ZONE DOMAIN TYPE` (answers, filter chain and metadata of one record), `show monitors`, `show datasources`, `show feeds source=ID`, `show networks`, `show qps`, `show usage`.
-- **API request** (`device_api_get`): any read below `/zones`, `/data`, `/monitoring`, `/networks`, `/stats`, `/views`, `/search`, `/export` and `/account`. API keys, users, teams, account settings, billing, TSIG keys and notification lists (they hold webhook addresses) are refused.
-- **Changes** (`device_change_raw`, rw key): `PUT` (NS1's create), `POST` (its update) and `DELETE` below `/zones`, `/data`, `/monitoring`, `/networks` and `/views`, with a JSON body. A whole zone is not deleted (it takes every record with it). An update is read first, so the answer holds a `before` copy; nothing is put back by itself.
-
-A zone's records come in pages of 2500; `show zone` reads the first page and says so when it was full. Fields named like a credential (a monitor's authorization, a data source's key, a TSIG secret) are hidden. This driver has been tested against a stub only, never a real NS1 account: the field names (`short_answers`, `records`, `dnssec`) are those of NS1's documentation and client libraries.
-
-### RcodeZero (`rcode0`)
-
-The REST API of RcodeZero (nic.at's anycast DNS), `https://my.rcodezero.at/api/v1/`, over HTTPS, port 443. The address may be left empty; option `api_version` is `v1` (default) or `v2`, option `prefix` replaces `/api/<version>`. The credential is an **API token** as the token (Settings ▸ API Tokens), sent as a Bearer token and never in a URL.
-
-The device is the RcodeZero account:
-
-- **Facts**: the number of zones. **Interfaces**: the zones (master or slave, DNSSEC state).
-- **Show** (`device_show`): `show zones [search=TEXT] [limit=N]`, `show zone NAME` (the zone, its rrsets and its query statistics in one answer), `show rrsets zone=NAME [type=TYPE] [search=TEXT] [limit=N]`, `show stats [zone=NAME] [kind=queries]` (`magnitude`, `qnames`, `nxdomains` for a zone), `show messages`, `show secondaries`, `show settings`.
-- **API request** (`device_api_get`): any read below `/zones`, `/stats`, `/settings`, `/messages` and `/reports`. Lists are asked with `page_size=-1` and further pages are followed. Transfer (TSIG) keys, API tokens and users are refused.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` and `DELETE` below `/zones` and `/settings`. Records change with `PATCH /zones/NAME/rrsets` and a list such as `[{"name": "www.example.com.", "type": "A", "changetype": "update", "ttl": 300, "records": [{"content": "192.0.2.10"}]}]` (`changetype` is `add`, `update` or `delete`). A whole zone is not deleted. The answer holds a `before` copy; nothing is put back by itself.
-
-Fields named like a credential are hidden. This driver has been tested against a stub only, never a real RcodeZero account: the Bearer scheme, `page_size=-1` and the field names follow RcodeZero's client libraries and documentation, and the likeliest places for a difference are the statistics paths and the account-level `/stats` kinds.
-
-### VMware vCenter (`vcenter`)
-
-The vSphere Automation API of vCenter Server, `https://HOST/api/`, over HTTPS, port 443 (vCenter 7.0 Update 2 and later; an older vCenter serves `/rest/` with its answers wrapped in `{"value": …}`: the driver finds out by itself, and option `api_style` is `api`, `rest` or `auto` (default)). The credential is a **Single Sign-On user name and password** (`user@vsphere.local`; a read-only role reads and nothing more). The driver creates a session (`POST /api/session`, the user and password in the Authorization header, never in a URL), sends the session ID in `vmware-api-session-id`, renews an expired session once and deletes the session when it is done.
-
-The device is the vCenter server:
-
-- **Facts**: the release and build. **Interfaces**: the ESXi hosts (connected or not, powered on or not).
-- **Show** (`device_show`): `show vms [state=POWERED_ON|POWERED_OFF|SUSPENDED] [search=TEXT] [limit=N]`, `show vm NAME|ID` (everything about one virtual machine in one answer: its record, power state, guest identity and network, VMware Tools; a part that cannot be read is named under `errors`), `show hosts|clusters|datacenters|datastores|networks|folders|resourcepools`, `show version`, `show health` (the appliance's health).
-- **API request** (`device_api_get`): any read below `/vcenter`, `/appliance`, `/cis`, `/content`, `/esx` and `/vstats`; filters are query parameters (`?names=web01`, `?power_states=POWERED_ON`). Sessions, users, accounts, tokens, passwords, certificates and keys, KMS, guest processes and files, and console tickets are refused.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` and `DELETE` below `/vcenter`, `/cis` and `/content`; a power action is `POST /vcenter/vm/ID/power?action=start|stop|reset|suspend`. With `NETDIR_DEVICE_GUARDS=1` the following are refused (by default they are sent): deleting a host, cluster, datacenter, datastore, folder, resource pool, network or disk, deployment, restore, updates, certificates, guest operations and console tickets, and changes to the appliance itself (network, time, services, shutdown, reboot, SSH).
-
-- **Import**: right-click the vCenter device ▸ **Import ▸ Devices** (or **Preview**): every **powered-on** virtual machine becomes a device, disabled, no login, tagged `source=vcenter` and `vm=vm-12`. The platform is `linux` or `windows` by the guest family VMware Tools reports (`/vcenter/vm/ID/guest/identity`), or, for a machine without Tools, by the guest OS it was created for (`UBUNTU_64`, `WINDOWS_9_SERVER_64`). The address is the first usable IPv4 address the Tools report, else the guest's host name or the machine's name (tagged `address=name`; it only works if DNS has it). Machines that are off or suspended, of another system (macOS, Solaris, `OTHER_64`) or of one that cannot be told are listed as skipped, as are machines already in the inventory (same name or address).
-
-Fields named like a secret are hidden. This driver has been tested against a stub only, never a real vCenter: the paths and field names are those of VMware's API reference, and the likeliest places for a difference are the old `/rest` mode, the appliance health names, and a large inventory (lists are asked in one call, without paging).
-
-### Device42 (`device42`)
-
-The REST API of Device42 (`https://HOST/api/1.0/` and `/api/2.0/`), over HTTPS, port 443. The credential is a **user name and password** (HTTP basic authentication; never in a URL). A user that may only read is enough for everything but the changes. The device is the Device42 appliance:
-
-- **Facts**: how many devices it holds. **Interfaces**: the devices it holds (up to 5000) with their addresses.
-- **Show** (`device_show`): `show platform`, `show devices [search=TEXT] [os=NAME] [type=NAME] [limit=N]`, `show device NAME|ID` (everything about one device: its record, IP addresses, MAC addresses and switch ports) and `show ips|subnets|vlans|racks|buildings|macs|hardwares|vendors|customers [search=TEXT] [limit=N]`.
-- **API request** (`device_api_get`): any read below `/api/1.0` and `/api/2.0` (the version may be left out: 1.0). Lists take `limit` and `offset`. Passwords, users, keys, tokens and authentication are refused.
-- **Changes** (`device_change_raw`, rw key): `POST`, `PUT`, `PATCH` or `DELETE` below `/api/1.0` and `/api/2.0`; the body is form fields (`name=core1&serial_no=S1`, Device42's usual form) or JSON. `POST /api/1.0/device/`, `/ips/`, `/subnets/` and the like create or update by name and are the way to change a record; `PUT`, `PATCH` and `DELETE` first read the path to keep a copy as `before`, and a path that cannot be read is not changed. A read-only MCP key has no tool for changes. Passwords, users, keys, tokens and authentication are refused.
-- **Import**: right-click the Device42 server ▸ **Import ▸ Devices** (see *Importing devices*): each device with a driver here is added disabled and with no login, tagged `source=device42`, `site=BUILDING` and `type=TYPE`, by its first address (else its name). The driver is picked from its operating system, manufacturer and hardware model.
-
-Secrets found by name in an answer are hidden. The answer shapes differ between Device42 releases, so the driver finds the rows whatever the wrapper and keeps whole rows. Written against the documentation only; never run against a real Device42.
-
-### Micro Focus SMAX (`smax`)
-
-Service Management Automation X, the service desk behind the Anywhere Service Portal (`https://HOST/saw/...`), over its REST API (HTTPS, port 443). Option `tenant` (required) is the tenant ID, the number after `TENANTID=` in the portal's address. The credential is a **user name and password** of an integration user, or of an account user with database authentication (single sign-on users cannot use the API). The driver signs in (`POST /auth/authentication-endpoint/authenticate/login?TENANTID=ID`), sends the session as the `LWSSO_COOKIE_KEY` cookie, and signs in again once when it expires. The device is the SMAX tenant:
-
-- **Facts**: the tenant, and that it answers. No interfaces, neighbors or configuration.
-- **Show** (`device_show`): `show requests|incidents|changes|problems [phase=NAME] [search=TEXT] [limit=N]` (newest first; `search` looks in the 500 newest) and `show request|incident|change|problem ID` (one record with its text).
-- **API request** (`device_api_get`): `/ems/Request`, `/ems/Incident`, `/ems/Change`, `/ems/Problem` and one record by ID, with `layout` (the properties wanted, named one by one), `filter`, `order`, `size` (up to 500) and `skip`. People, groups, roles and settings are refused.
-- **Changes** (`device_change_raw`, rw key): `POST /ems/bulk` with `{"operation": "CREATE" or "UPDATE", "entities": [{"entity_type": "Request", "properties": {...}}]}` for Request, Incident, Change and Problem (up to 50 entities). Deletes and every other entity type are refused. An `UPDATE` cannot be put back by itself: read the record first with `show request ID`. A read-only MCP key has no tool for changes.
-
-The property names are the tenant's own and can be customized; SMAX refuses a layout with a name it does not know (HTTP 400), and the driver then asks again with a short layout. Secrets found by name in an answer are hidden. Written against the documentation only; never run against a real tenant. SMAX holds tickets, not network devices, so there is no import.
-
-### The MCP content log
-
-Everything that goes into the MCP endpoint and everything that comes out of it can be written to one log: **Configure ▸ MCP ▸ Log all MCP requests and replies** (or `settings.mcp_log` in the configuration). It is **off** by default. It is one log for the whole endpoint, not one per device.
-
-| Setting | Meaning |
-|---|---|
-| `mcp_log` | `true` or `false` (default `false`). Turn it off and writing stops; the files stay until you delete them. |
-| `mcp_log_mb` | The most disk the log may use, 1 to 1000 MB (default 50). At half of it `/var/lib/netdir/mcp-content.log` becomes `mcp-content.log.1` and the older `.1` is deleted, so the oldest entries go first. |
-| `mcp_log_entry_kb` | The most of one request, and of one reply, that is written, 1 to 8192 KB (default 256); the rest is cut and the line's `note` says how much. |
-
-The log is `/var/lib/netdir/mcp-content.log` on each node (the state directory, `--state-dir`), one JSON line per HTTP request: `t`, `from` (the caller's address), `who` (key name and address), `access` (`ro` or `rw`), `method`, `status`, `ms`, `request` (the JSON-RPC message as sent) and `reply` (the answer as sent). Both are embedded as JSON, so `jq` reads into them: `jq 'select(.request.params.name=="device_change_raw")' mcp-content.log`. The reply is written **exactly as the caller got it**, so it is already masked to that caller's privacy level; a secret in a request (a password in a change) is hidden by name; the `Authorization` header and so any key is never written. A request that is refused (no key, an address that is not allowed) is logged too, with its status and reply but no request. The file is mode 0600 and holds what callers asked and were told, so it is for the person who runs the gateway. Each node writes its own file: the log is not shared across a cluster and is not part of a backup. The troubleshooting bundle (`netdir --tshoot`, the Node menu ▸ tshoot) always includes the newest 4 MB of each node's log as `netdir/mcp-content.log`, with secrets removed again; when the log is off, a note says so.
-
-### How often the devices are looked at
-
-In a cluster each device is checked by the controller of its gateway (the lowest-numbered gateway that holds it and is not paused; the IPv4 controller of a dual-stack gateway; a 10-second hold against election flaps), and the primary also checks any device no other node reports; a node outside a cluster checks its own, for the colours in the GUI and the device alerts: a plain TCP connect to its API port (no login), and now and then a real request for its facts (which also shows that the login still works). While **nobody is looking** (no Monitor ▸ Devices or Topology page open and no device request over MCP in the last 10 minutes) a node connects every **180 seconds** and asks for the facts every **360 minutes**; someone looking brings it to every 30 seconds and every 5 minutes, and the first look checks at once. The facts are also asked when a device is first seen and when it answers again after being down. **Configure ▸ Devices ▸ Checks** changes the intervals: `device_check_s` (30 to 3600) and `device_facts_min` (5 to 1440) when nobody looks, `device_live_check_s` (10 to 600) and `device_live_facts_min` (1 to 60) while someone looks. Every node reads the others' results (`GET /api/devices/health`, over the cluster channel, cached 10 s; the newest result wins and names the node that checked), so a device is reached once per interval however many nodes there are, and a look on any node speeds up the checking nodes. A device that is added, enabled, disabled or edited is checked within 3 seconds, whatever the intervals. A result older than a few check intervals shows as not checked until the primary or the new controller takes the device over.
-
-### Adding a platform
-
-A platform is one file in `source/device/`. It implements `device.Driver` (Facts, Interfaces, Neighbors, Config, Show, Close) and registers itself with `device.Register`. Something a platform cannot do answers `device.ErrUnsupported`.
-
-## Connecting an assistant
-
-1. **Allow the caller.**
-   - By address: add it to `settings.mcp_acl`. `"10.0.0.0/24"` may read; `"10.0.0.20 rw"` may also change devices (rw is for single addresses only). A privacy level may follow: `"10.0.0.0/24 strict"` (see [Privacy levels](#privacy-levels)). An entry may end in a note after a `#` (`"10.0.0.20 rw # mike's laptop"`, up to 200 characters, one line): it says what the entry is for and changes nothing, and a word in it such as `rw` or `disabled` is only text.
-   - An entry (or a key) can be switched off without deleting it: right-click ▸ **Disable**. In the file an address then ends with `disabled` (`"10.0.0.20 rw disabled"`) and a key has `"disabled": true`; it allows nothing until enabled.
-   - **Which devices.** A key (`"devices": ["sw1", "tag:site=dc1"]`) or an allowed source (`"10.0.0.20 rw devices=sw1,tag:site=dc1"`) can be limited to some devices: device names, `tag:TAG`, `all` (the default) or `none`, or a gateway (`gateway:3`, shown by its name in the GUI: the gateway and every device on it, now and later; a caller with only device entries sees no gateway). A caller with both a key and a source may use only what both allow. The devices outside the list are not shown and are refused like devices that do not exist; `all` and tags reach only the ones it may use; a change or a capture that picks one it may not use is refused whole. A limited caller is not offered `device_troubleshoot_user`, which reaches every device. `get_topology` shows it only the gateways it was given.
-   - Or with a key that works from any address: Configure ▸ MCP ▸ Keys ▸ right-click ▸ **Add key** makes one and shows it once. In the file, `{"name": "laptop", "access": "rw", "key": "<at least 32 random characters>"}` in `settings.mcp_keys` does the same. Only a SHA-256 hash of the key is kept. Both a key (`"expires": <unix time>`) and an address-list entry (`10.1.1.50 rw until=2026-12-31T17:00Z`) can have an expiry, in UTC; after it the key is refused as expired and the entry allows nothing, and the row stays in the list. A key may have `"notes"` (up to 200 characters, one line) saying what it is for; Configure ▸ MCP shows it in a Notes column beside the key.
-2. **Give the gateway a certificate the client trusts.** The GUI starts with a self-signed one; install yours with `netdir --tls-install --cert-file F --key-file F`. The primary's certificate is copied to every node.
-3. **Point the client at the VIP.** For Claude Code:
+![Operate ▸ History: every saved version, with who made it and what changed](snaps/history.png)
 
 ```
-claude mcp add --transport http netdir https://GATEWAY/mcp --header "Authorization: Bearer KEY"
+ntpdir --versions                         # list
+ntpdir --version-diff 1790827200558       # that version → live config
+ntpdir --version-diff A..B                # two versions
+ntpdir --version-snapshot --note "before the VIP change"
+ntpdir --version-restore 1790827179815    # applies it; the live config is saved first
+ntpdir --version-export [ID] > ntpdir.conf  # download
+ntpdir --config-import ntpdir.conf          # validate and apply a file
 ```
 
-The endpoint is MCP over streamable HTTP with JSON answers (protocol versions 2024-11-05 to 2025-11-25). Requests from a browser page on another origin are refused.
+In the GUI, **Operate ▸ History** lets you view a version, diff it against the live config, the previous version or two selected ones, restore, download, upload and snapshot. A snapshot note can only be given on the command line. In a cluster, restoring changes the shared part through the primary, like any other edit.
 
-## MCP tools
+## The GUI certificate
 
-| Tool | What it does |
-|---|---|
-| `list_devices` | the inventory (never the credentials) and the platforms that have a driver |
-| `device_facts` | host name, vendor, model, OS version, serial number and uptime |
-| `device_interfaces` | name, description, admin and link state, speed, MAC, IPv4 address |
-| `device_ports` | every port with its counters (octets, packets by kind, errors, discards, rates, flaps; `counters.all` has every statistic the device returned) and all its other properties |
-| `device_neighbors` | LLDP (and CDP) neighbors: local port, remote name, port and address |
-| `device_neighbor_details` | the same neighbors with every field the device reports about each |
-| `device_routes` | the routing table: protocol, prefix, next hop, interface, metric, distance, VRF, and the entry as the device reported it |
-| `device_routing` | the state and configuration of each routing protocol (OSPF, BGP, EIGRP, IS-IS, RIP, BFD, static, policy routes); `unavailable` says what a device did not answer |
-| `device_firewall` | firewall rules with their hit counters, address and service objects, NAT, zones, shapers |
-| `device_resources` | CPU, memory and storage utilization, and power supplies, fans and temperatures (state and reading) |
-| `device_vlans` | VLAN IDs, names, status and member ports (a firewall: its VLAN interfaces) |
-| `device_api_catalog` | what a device's own API offers (IOS-XE: the top-level node of every YANG model; FortiOS: how its paths are built; NX-OS: its REST object model; Arista: how show commands are named as paths; ArubaOS-CX: how its REST resources are read; PAN-OS: how its XML API is asked; Infoblox: the object types of its WAPI; Technitium: its read endpoints) |
-| `device_api_get` | `GET` any path of the device's API (`/restconf/data/...`, `/api/v2/monitor|cmdb|log/...`, NX-OS `/api/mo/...`, Arista `/eapi/show/<command words>`, ArubaOS-CX `/rest/<version>/system/...`, PAN-OS `/api/?type=op&cmd=<show>...`, Infoblox `/wapi/<version>/<type>`, Technitium `/api/zones/list`): everything the named tools do not cover. Only GET is sent; JSON has keys and passwords hidden; a text answer is refused |
-| `device_show` | one `show …` command; NX-OS and PAN-OS run it; an error per device on platforms whose API runs no commands (IOS-XE, FortiOS) |
-| `device_change_raw` | **rw callers only.** Any configuration change on any platform, in the platform's own terms: `method`, `path` and `body` for a REST platform (IOS-XE RESTCONF, AOS-CX, Aruba Fabric Composer, Proxmox VE, FortiOS cmdb, Infoblox WAPI, F5 iControl, Technitium, Meraki), the action and XPath for PAN-OS and Panorama, `lines` of configuration for Arista EOS, NX-OS and Juniper Junos (set format; committed with a timer and confirmed once the device answers); `dry_run` shows what the path holds now (EOS: the switch's own diff) and changes nothing; `save` keeps it over a reboot |
-| `device_capture` | **rw callers only.** Capture packets for a few seconds on the DNS Director, Arista EOS or F5 BIG-IP and return a summary (`target`, `interface`, `filter`, `seconds`, `packets`): the busiest address pairs and the protocols counted, the first packets one line each (headers only, no payload) |
-| `device_change` | **rw callers only.** Change ports of Catalyst IOS-XE, Arista EOS, Aruba CX and Meraki switches: `text` in plain English (`change the description for ports gi1/0/1-24 to read "devices"`, `clear the description on …`, `shut down …`, `no shutdown …`, `clear all port counters`, `clear counters on gi1/0/1-4`) or typed `action`, `ports`, `value`; `dry_run` plans without changing; read back and put back on failure |
-| `list_nodes`, `get_topology` | the cluster status: the nodes (reachable, paused, primary, version, update state) and the gateways with their active node and anycast addresses |
-| `device_config` | a device's running configuration with secrets hidden (shared secret-word list) |
-| *(nothing else)* | **An MCP caller can only ask the gateway about its devices.** Besides the device tools, `list_devices` (the device list and each device's health), the network tools and the cluster status above, there is no tool for netdir's own configuration, the GUI's API, alerts, the scheduler, updates, the host's load, LLDP, the log, users, backups or cluster tokens, and no tool takes a `node`: the node that serves the endpoint answers, and a `node` argument is refused. Those are read in the GUI or the CLI by an administrator. |
+`web.cert_file` and `web.key_file` take precedence, and are re-read when the files change, so a renewal needs no restart. Without them you can manage the certificate at runtime, under Configure ▸ Web GUI or with the commands below.
 
-**Reads keep their login.** A read of a device (every `device_*` read tool, `tshoot`) keeps the driver it used, with its connections and its session, for the next read of that device: for two minutes of idleness and at most ten minutes in all, one request at a time per driver, at most two idle per device. What the device answers is asked anew every time; only the TLS handshake and the login are saved (`"reused": true` in an answer says so). A kept session the device has ended is noticed and the read is made once more with a new login. Changes, captures and the health check always log in anew. The kept drivers are logged out when the configuration is saved and when the daemon stops. `NETDIR_DEVICE_REUSE=0` in the daemon's environment switches it off. **A read an MCP caller repeats within 30 seconds comes from memory** (`"cached_s"`, its age, is on that device's result; `fresh: true` asks again): only for reads that hold no secret, never a configuration, a CLI command, a log search or a change, and never in the GUI. `tshoot` also keeps the Meraki network list (5 minutes), the networks a machine was found in (30 minutes; a repeat asks those first and says so) and the Entra lookups (90 seconds). `device_facts` is answered from the health monitor's copy (`"from_monitor": true`) when that is at most 5 minutes old and good. `NETDIR_DEVICE_CACHE=0` switches all of this off. Every device tool takes a `target`: a device name, `tag:TAG`, `platform:PLATFORM` or `all`, several separated by commas. A term that matches no device is an error, so a typo never quietly asks fewer devices. Each device's answer carries `ok`, `error`, `data` and the time it took. **No MCP caller sees a public IP address, a public AS number or the domain of an e-mail address, and a serial number is shown by its last four characters only (`****1234`)** (the assistant is a public service): every answer of every tool is scrubbed, an address is written with an x for each hidden part (`x.x.x.x`, `x.x.114.7`, IPv6 `x:x:123::456`), a MAC address with `xx` for each hidden byte (`xx:xx:xx:3c:4d:5e`), an AS number or a route distinguisher by its last three digits (`xx169`, `xx000:x00`), and an e-mail address by the name before the `@` only (`jo.doe@example.com` is `jo.doe`); a serial number or word of yours that is hidden whole becomes a token like `MASKED-SERIAL-3fa91c` (a keyed hash with a salt made at start-up: it cannot be reversed and changes at a restart and between nodes). Two addresses that differ only in the hidden parts read alike. A hidden value (or a `****1234` serial) sent back in `edit_config` keeps the real value. Private, link-local, CGNAT and documentation addresses and private AS numbers are shown. Host names, MAC addresses and free text are not scrubbed. **No MCP caller, read-only or read-write, is handed a device's secrets**: the running configuration is offered only through `device_config`, filtered by the shared secret-word list (Configure ▸ Privacy ▸ Secret words; a secret kept under a name nobody listed is not recognised, so add such words there), keys, passwords, communities and PEM keys in answers read `(hidden)`, `device_show` output is scrubbed line by line, text answers of `device_api_get` are refused, and the parts of a device's API for users, keys, certificates, SNMP and AAA are refused (ArubaOS-CX's `fullconfigs`, `accounts` and users, Infoblox's admin users, authentication services and keys, and EOS's running configuration, users, SNMP, AAA and `show tech-support`, also when the CLI word is abbreviated (`show run`), included; Technitium's admin and user endpoints; for PAN-OS this is checked in the query: a whole-configuration xpath, `show config` and the management, authentication and key parts are refused). This works by name and by path, so it hides more than it has to and is a safeguard, not a guarantee: keep read-only, least-privilege logins on the devices.
-
-**Rebooting devices** is accepted on every platform that has a restart in its API, as a `device_change_raw` (rw key): IOS-XE `POST /restconf/operations/Cisco-IOS-XE-rpc:reload`, AOS-CX `POST /rest/<version>/boot?image=primary`, FortiOS `POST /api/v2/monitor/system/os/reboot`, BIG-IP `POST /mgmt/tm/sys` with `{"command":"reboot"}`, Meraki `POST /devices/<serial>/reboot`, Proxmox `POST /nodes/<node>/status` with `{"command":"reboot"}`, PAN-OS and Panorama method `reboot`, EOS and NX-OS the one line `reload`, Junos the one line `request system reboot`. The request is matched exactly; the usual check that the device still answers and the put-back are skipped, a connection that ends counts as the restart, and `save` writes the configuration first. Infoblox, Technitium, Aruba Fabric Composer, the DNS Director, Observium and Entra have no restart in their APIs here. Halting or shutting down is still refused.
-
-**Changing devices** is the one thing here that writes. There are two ways. The typed one (`device_change`, below) is narrow on purpose; the raw one (`device_change_raw`, further down) sends any configuration change. Platforms: IOS-XE (RESTCONF), NX-OS (an NX-API `cli_conf` request after a checkpoint), EOS (a configuration session), Aruba CX (REST), Meraki (Dashboard), Junos (set-format lines, a commit with a confirmation timer; ports as `ge-0/0/1`), FortiOS (`PUT /cmdb/system/interface/NAME`; ports as `port1`, `dmz`) and BIG-IP (`PATCH /mgmt/tm/net/interface/NAME`; ports as `1.1`), the last four through the same `RawChange` path and guards a raw change uses. `save` (`"save": true`, `--device-save`) also saves the configuration after a change that was made: IOS-XE `save-config`, NX-OS and EOS `copy running-config startup-config` / `write memory`, Aruba CX the startup configuration copied from the running one, BIG-IP `save sys config`; Junos (committed), FortiOS and Meraki keep a change on their own. A change is one of five typed actions on a range of ports (set or clear the description, shut down, no shutdown, clear counters). Clearing counters (`clear all port counters`, `clear counters on gi1/0/1-4`) is sent on Catalyst IOS-XE (RESTCONF RPC `Cisco-IOS-XE-rpc:clear`, `count` leaf: the `clear counters [interface]` command) and Arista EOS (`clear counters [interface]` over eAPI) for named ports or all of them, and on Juniper Junos (`clear-interfaces-statistics all`) and Palo Alto PAN-OS (`clear counter interface`) for all ports only; Aruba CX, Meraki, FortiOS and NX-OS answer that their API has no way to do it. Counters are not configuration: a clear is planned from the device's own port list, sent, and not read back or put back. English becomes that typed change in a small fixed grammar, with no model in the daemon, so what will happen is what the plan shows; anything the grammar does not know is refused. Nothing a caller types is sent to a device as it is: each driver builds its own request from the validated fields (RESTCONF PATCH and DELETE of the interface leaves on IOS-XE; one configuration session, committed at the end, on EOS; one PATCH of each interface on Aruba CX, which keeps the rest of its `user_config`), after checking every port against the device's own list. A change is planned first, written to the ports that differ, read back, and put back as it was if the device refuses it or does not hold it. A port that holds the address the gateway reaches the device on is not shut down when the lists are on (`NETDIR_DEVICE_GUARDS=1`); by default it is, and the device then stops answering. Permission is the access you already give: an MCP key or ACL entry with `rw`, or a GUI account outside the read-only group, may change devices; `ro` may not, and has no `device_change` tool. There is no separate switch. Each change is written to the Log with who made it and what every port held before and after. The same change is on the GUI (Monitor ▸ Devices ▸ Change ports: Plan, then Apply), the CLI (`netdir --device-change "…" --target sw1 [--dry-run] [--yes]`) and the API (`POST /api/devices/change`).
-
-**Any configuration change** (`device_change_raw`, `POST /api/devices/raw`, `netdir --device-raw "PATCH /restconf/data/…" --device-body '{…}' --target sw1`, `netdir --device-lines FILE --target eos1`, and Monitor ▸ Devices ▸ Change ports ▸ Advanced) sends what the platform itself takes: a REST request (`method` POST, PUT, PATCH or DELETE, `path` and `body`) on IOS-XE, ArubaOS-CX, FortiOS, Infoblox, F5 BIG-IP and Technitium; an XML API action (`set`, `edit`, `delete`, `rename`, `move`, XPath, element) on PAN-OS and Panorama; lines of configuration on Arista EOS and NX-OS; `SET` with a JSON object of settings, or `POST` and `PUT` of an `/api/` route, on the DNS Director. The same permission applies (`rw`; `ro` has no tool and is refused). What the daemon still does: the path must be a plain path of the device's API (one that starts with a single `/`, with no host, space, control character, `#` or backslash), and a body must be well formed. Since v172 there is no list of what may not be changed: users, login, keys, file operations, reload, erase, shell and management-interface lines are sent when an `rw` caller asks for them (`NETDIR_DEVICE_GUARDS=1` in the daemon's environment brings the old lists back: the configuration tree of the platform, and no RESTCONF operations, login, users, key files, file operations or reload, nor CLI lines that end the session, reload, erase, copy files, run a shell or turn off the management API or interface). A dry run reads what the path holds now (`before`; EOS: the switch's own diff) and changes nothing, and every real change is logged with who made it, to which device, the request and the old state. Putting it back: a REST PUT or PATCH that fails in a way that may have changed something, or after which the device stops answering, is put back with the saved copy; EOS commits with a three-minute commit timer and confirms it only when the switch answers again; NX-OS takes a checkpoint and rolls back to it. What it does not do: a POST (create) or a DELETE over REST, a PAN-OS action and a Technitium call are not undone by the daemon (the result says so and shows the old state), and no change is read back for equality because devices normalise what they store. `save` makes the change survive a reboot (IOS-XE and BIG-IP save, EOS `write memory`, NX-OS `copy running-config startup-config`, PAN-OS commit)  and is off by default.
-
-**Packet capture** (`device_capture`, `POST /api/devices/capture`, `netdir --device-capture IFACE --target ns1 [--capture-filter "udp and port 53"] [--capture-seconds 5]`, and Monitor ▸ Devices ▸ Capture packets) runs a timed capture on a DNS Director, an Arista EOS switch or an F5 BIG-IP and returns a summary instead of the file: protocol and address-pair counts, and the first 100 packets one line each with the headers only. A capture shows other people's traffic, so it takes the same permission as a change (`rw`; `ro` has no tool). Limits: 30 seconds, 2000 packets, the first 96 bytes of each packet, 10 devices at once; the filter is tcpdump syntax made of words, numbers and `. : / ( ) _ -` (it is put inside quotes in a shell command, so nothing else is allowed). How each does it: a director runs its own timed capture into a private buffer (`/api/capture/job`, through its MCP key); EOS runs `tcpdump` in the switch's shell through eAPI (`bash`), where Linux sees only traffic to or from the switch's CPU, so it suits the management plane and control protocols and not what is switched in hardware; BIG-IP runs `tcpdump` through iControl `util/bash` (interface `0.0` is every VLAN). The capture file is read back as text, decoded here, and removed from the device again, also when the capture failed. Not available: PAN-OS and FortiOS (their capture is global debug state on the box), NX-OS, IOS-XE, Aruba CX, Infoblox and Technitium; they answer that they cannot. The management session is not excluded from the capture: write the filter to leave it out when it matters.
-
-**Network tools for the assistant** (`net_ping`, `net_mtr`, `net_dig`, `net_curl`, `net_whois`, `net_scan`, `net_port`, `net_tls`, `net_arp`, `net_wake`; `GET /api/dig`, `/api/curl`, `/api/portcheck`, `/api/tlscheck`, `/api/arp`, `POST /api/wake`): add one device of platform *Network tools* (no address, no login) to a gateway and these tools can be used for that gateway. The `gateway` argument (label or number) picks it, so "scan 10.1.1.1 from paris" is `net_scan` with `host` `10.1.1.1` and `gateway` `paris`; it may be left out when only one gateway has the device. The job runs on a netdir node that serves the gateway (relayed through the cluster when it is not this one). Fixed options only and every argument is checked before it reaches the program: a host or address for ping and mtr, one address or host name for the scan (the 100 commonest TCP ports, service and OS detection, two minutes at most), a name, a record type and optionally a DNS server address for dig, an http or https URL (HEAD or GET, optional follow and skip of certificate checks) for curl. `net_ping` takes `count`, `size` and `df` (path MTU) and, with `net_mtr`, `net_port` and `net_tls`, `family` 4 or 6; `net_port` tests TCP ports, `net_tls` shows a host's certificate chain, expiry and protocol, `net_arp` the MAC of a host on the node's own segment, and `net_wake` sends a Wake-on-LAN packet; `net_dig` answers PTR and the common types from the node's resolver when `dig` is not installed. All but `net_wake` (it powers a machine on) work with a read-only key, and none is offered to a key limited to some devices. The programs (`ping`, `mtr`, `nmap`, `dig`, `curl`) must be installed on the node; the device's health lists which are. Public addresses in an answer are masked as in every answer.
-
-**Troubleshoot a user or a host** (`device_troubleshoot_user` with `user` or `host`, `GET /api/devices/troubleshoot?user=…` or `?host=…` with `&hours=6&devices=1`, `netdir tshoot user msmith [6]` and `netdir tshoot host PC-123 [6]` (the same as `--troubleshoot-user` / `--troubleshoot-host NAME [--troubleshoot-hours 6]`; `troubleshoot` is the same word as `tshoot`, and `tshoot msmith` without `user` is a user; the user is a sign-in name, an account name such as `msmith`, an object ID or a name; `--tshoot` alone is still the node's troubleshooting bundle); GUI: right-click an Entra device, a Panorama or a PAN-OS firewall ▸ *Troubleshoot user or host*; read only, so `ro` keys and read-only accounts may use it). Three systems are asked, each when it is in the inventory (one that is missing is left out with a note): Entra, the firewall logs of the Panorama (or of the one PAN-OS firewall; `panorama=NAME` picks one, and its API role needs **Log**) and the Meraki organization. For a user, the VPN (GlobalProtect) log is searched for the account (`(srcuser contains 'msmith')`): it names the machine they connected with and its addresses, so a user who is only on the VPN is found too. For a host, the VPN log (`(machinename contains 'PC-123')`) says who connected with it last and Entra which users are registered on a device of that name (`last_user`). Every machine found (at most 3) is then followed on the Meraki network as described below; for a user, the clients that signed in to the network with the account (802.1X, for example a phone on the Wi-Fi) are reported too, whatever their host names. A wireless client's `connection` starts with `now` (SSID, AP, the newest RSSI and SNR) and has the signal quality, data rate and latency over the window. Every network of the organization that has an AP, a switch or an appliance is searched (at most 400, five at a time), and a network the dashboard fails on is named in the notes instead of ending the search, and the firewall's newest 50 traffic and 20 threat log entries for the addresses found (`(addr in 10.1.2.3)`, at most 4 addresses: the VPN address and the address on the network) are added as `firewall`. The log entries are the newest ones whatever their age; `hours` bounds the Meraki part. It looks the user up in Entra, takes the device with the latest sign-in (`devices=` up to 3), finds it among the Meraki clients of the last `hours` hours (1 to 168, default 6; every network of the organization, or one with `network=L_…`), and reports: the Entra device (OS, management type such as MDM, compliance, last sign-in); the Meraki client (IP, MAC, VLAN, SSID, the AP or switch and port it was on, first and last seen, usage), its usage history and device policy; for a Wi-Fi client the connection statistics, latency, connectivity events and failed connections; for a wired client the status of its switch port (speed, duplex, errors, warnings, traffic); and whether the AP or switch it was on is online. A part the dashboard does not have is marked unavailable and the rest is still given. The two systems are matched by name: the Entra device name against the host name the client gave on the network (case and domain ignored), so a phone with another host name is reported as not seen. With several Entra or several Meraki organization devices, `entra=` and `meraki=` name the one to use.
-
-**Microsoft sign-in** (Entra devices with a browser login): right-click the device ▸ *Sign in with Microsoft*, or `netdir --device-signin NAME` (`POST /api/devices/signin`, then `POST /api/devices/signin/poll`). It changes a login, so a read-only account is refused and there is no MCP tool.
-
-
-The same queries are on the API: `GET /api/devices` and `GET /api/devices/query?target=…&op=facts|interfaces|ports|neighbors|neighbor_details|routes|routing|firewall|resources|vlans|api_catalog|api[&path=…]|config|show[&cmd=…]`.
-
-## Security
-
-- **MCP changes devices, never netdir.** An `rw` caller can run `device_change`, `device_change_raw` and `device_capture`; settings, the cluster, gateways, schedules, updates, alerts, users and certificates cannot be changed over MCP and are changed in the GUI. The rule is in the request path, so no route is missed.
-- **Read-only by default.** A caller is read-only unless its address entry or key says `rw`. A read-only GUI account is refused a device's configuration, as it is refused the GUI's own config versions; an MCP caller gets it filtered.
-- **One list of secret words.** What marks a secret is decided in one place for every filter: the built-in words (password, secret, passkey, auth_pass, priv_pass, authentication_key, keepalive_key, ciphertext, SNMP communities, keys, tokens …) and **Configure ▸ Privacy ▸ Secret words** (`settings.privacy.secret_words`) of your own. A key whose name holds one has its value hidden, a line of text that holds one is hidden from that word on, and a path or XPath that holds one is refused. It applies at every privacy level except `none`, where what a device answers is given as it is. The filter works on names, so it hides less than it should rather than more only when a secret has a name nobody listed: add it there.
-- **Secrets never reach a caller.** Device passwords and tokens, SNMP communities, keys and join codes read `(hidden)` to every MCP caller, read-write included. A read-only GUI account sees `(hidden)` too. Secrets are also scrubbed from device error messages.
-- **Commands are gated.** `show` accepts one line starting with `show`, optionally with output filters (`| include`, `exclude`, `begin`, `section`, `count`, `json`). It refuses `;`, redirection, `| tee`, `| redirect` and anything else.
-- **TLS to devices** checks the certificate against the system's roots, or `ca_pem`, unless the device is marked `insecure`. Redirects are never followed with credentials, and answers are capped at 32 MB.
-- **Everything is logged.** Each device query is logged with the caller's name (`KEYNAME@ADDRESS` or the address) and the target. Each configuration change goes into the history under the caller's name.
-- **Treat answers as data.** Whatever a device answers is data for the assistant, never instructions. The MCP server says so in its instructions to the client.
-- **Where credentials live.** They are kept in the configuration file (`/var/lib/netdir/netdir.conf`, mode 0600, root) and replicated to the cluster's nodes over the pinned, signed cluster channel.
-
-## MCP usage
-
-**Monitor ▸ MCP** shows what the MCP endpoint is used for on the node the Node menu has picked: calls by **key** (or *(address list)* for a caller let in by its address), by **source address**, by **tool** and by **device, tag or target**, with errors, refused changes, changes made, the data returned and the average time; a chart of calls per hour; and the newest 200 calls. The page is laid out like Monitor ▸ Node (time range buttons, tiles, charts per hour, tables), sits just below it in the menu, and its time range is the last hour, day or week. The daemon keeps the counts by the hour for 8 days (`mcpusage.json` in the state directory, so they survive a restart and an upgrade); the newest-calls list lives in memory. Only names, sizes and times are kept, never what a caller sent or was answered. The same numbers are `GET /api/mcpusage?window=24h`. Each node counts the calls it answers, so pick each node in turn to see a whole cluster.
-
-## Privacy levels
-
-What an assistant is told can be limited, because the assistant is usually a public AI service. Every answer is rewritten on its way out: a hidden address becomes `x.x.x.x` (or shows some of its parts), a hidden AS number shows its last three digits, an e-mail address shows only the name before the `@`, and a serial number or word of yours becomes a token that is the same for the same value. The tokens change when the daemon restarts and cannot be turned back into the value. Three levels:
-
-| Level | Hides |
-|---|---|
-| `none` | nothing: what a device answers (configuration, `show` output, API reads) is given as the device has it, secrets included. netdir's own logins, keys and tokens (`list_devices`) stay hidden. Every such answer is logged. |
-| `standard` (default) | public IP addresses and AS numbers, e-mail addresses, SNMP contact and location, serial numbers except the last four characters |
-| `strict` | all of that, private IP addresses and AS numbers, MAC addresses, serial numbers completely |
-
-Configure ▸ Privacy sets the **default** level, for callers that have none of their own, and what each of `standard` and `strict` hides: public and private addresses, AS numbers, e-mail addresses, contacts, serial numbers (shown, last four, hidden), MAC addresses (shown, vendor part, last three bytes, hidden), how many leading or trailing digits of a hidden address stay readable (`203.0.x.x`, or `x.x.114.7`), and a list of your own words (company, site and host names) that are always hidden. A key has a **Privacy** setting in Configure ▸ MCP ▸ Keys and an allowed source has one in the same table. A caller with both a key and an address gets the strictest.
-
-In the file:
-
-```json
-"settings": {
-  "mcp_acl": ["10.0.0.20 rw strict # mike's laptop", "10.0.0.0/24 none"],
-  "mcp_keys": [{"name": "laptop", "access": "ro", "privacy": "strict", "notes": "for the audit", "key": "…"}],
-  "privacy": {"default": "standard", "strict": {"public_ips": true, "private_ips": true, "ip_keep": -2,
-    "public_asns": true, "private_asns": true, "serials": "hide", "macs": "nic", "emails": true,
-    "contacts": true, "words": ["contoso", "lab-edge"]}}
-}
-```
-
-Hiding is best effort: a value written in an unusual way, an address split over two fields or a host name is not recognised. A word that is also a device name hides the name too, so the assistant cannot name that device in a request. A stand-in sent back in a change is turned back into the real value from the current configuration. Nothing changes on upgrade: with no `privacy` setting the standard level applies, as before. `sh tools/leaktest.sh` (in `source/`) records what every driver's tests return and checks that none of the addresses, MAC addresses, e-mails, AS numbers, serial numbers or secrets of that data gets through the strict level.
-
-## Trying a device first: devprobe
-
-In the GUI, a device's right-click menu on Topology asks it for its facts, interfaces, port counters, neighbors, routes, routing protocols, firewall rules, configuration or a show command, Monitor ▸ Devices lists the devices with their state, and Configure ▸ Devices edits the inventory and the logins.
-
-`source/tools/devprobe` runs the same drivers from any machine, macOS included, against an inventory file. It's the quickest way to check a device before it goes into a gateway:
+![Configure ▸ Web GUI: the certificate card, the listen address and the login limits](snaps/web-certificate.png)
 
 ```
-cd source
-cp tools/devprobe/lab.json.example lab.json      # edit the addresses
-export CAT_PASSWORD='…' FGT_TOKEN='…'             # "env:NAME" in the file reads these
-go run ./tools/devprobe -inventory lab.json -target all -op facts
-go run ./tools/devprobe -inventory lab.json -target fg100e -op config > fg100e.conf
+ntpdir --tls-status
+ntpdir --tls-csr --cn gw.example.com --san gw.example.com,10.0.0.5   # key stays on the node
+ntpdir --tls-install --cert-file gw.pem --key-file gw.key             # key optional after a CSR
+ntpdir --tls-revert                                                   # back to self-signed
+ntpdir --tls-regenerate                                               # new self-signed
 ```
+
+An installed certificate is checked (chain order, key match, validity, server auth, names) and served from the next connection on, with no restart and no logout. The order of precedence is: files named in the config, then the installed certificate (or the one replicated from the cluster), then self-signed. The GUI warns when the certificate expires within 30 days. The primary's certificate is copied to every member, and reverting it on the primary reverts them all.
 
 ## Clustering
 
-Several nodes are managed as one cluster. The cluster is for management and is independent of the gateway election.
+Clustering is for **management only**. It keeps the settings of several AnyTime nodes in step and lets you update them together, and it is independent of the AGC/AFN election. It is always on: every node is the primary of a cluster of one until it joins another. The only settings are:
 
-- **Roles.** One node is the primary and the others are replicas.
-- **Shared and per-node settings.** The `settings` block, the gateways' VIPs, keys and timers, the web login groups and the sign-in rules are shared. They can be edited on any node and are applied on the primary. Interface, priority, weight and the web and cluster blocks stay per node.
-- **Joining.** Create a join code on a member (`--cluster-token`) and use it on the new node (`--cluster-join CODE`). A code works once, for an hour. A node keeps at most 20 unused codes; `--cluster-token-clear` (Operate ▸ Cluster ▸ **Clear join codes**) withdraws them.
-- **Trust.** Nodes pin each other's certificates and sign every request.
-- **Promotion and failover.** Promotion is explicit (`--cluster-promote`). With three or more members there is also automatic failover after 5 minutes, and the primary role is handed over before a planned restart. For an update the hand-over is temporary: the node that was primary when the update began is remembered (by whichever node holds the role, as it passes from node to node), and once nothing is queued, installing or restarting any more (30 seconds in a row) the role goes back to it. A node whose update failed, a member that was removed, or a promotion by hand (or by failover) drops it; a plain restart or shutdown leaves the role where it landed.
-- **Updates.** Upload a release archive on any node (`--update-upload`). Each node then builds it, swaps its binary and restarts, one node at a time, with automatic rollback.
+```
+"cluster": {"listen": ":12381", "self": "10.0.0.5:12381"}
+```
 
-## Anycast addresses, BGP and OSPF
+`self` is the address the other nodes use to reach this node. Open TCP **12381** between the nodes.
 
-A gateway's anycast addresses (`extra_vips`) are held on `lo` of every node that runs the gateway, with a 10 s lifetime renewed every 3 s. FRR announces them over BGP (with BFD) or OSPF. An address is withdrawn when:
+The gateway protocol (election, heartbeats) uses UDP **12382** and the multicast groups `224.1.3.123` and `ff02::1:123`; open UDP 12382 between the nodes. These differ from the AnyName DNS Director's (4729, `224.1.3.7`, `ff02::1:307`), so both products can run on one host, provided their gateway ids differ. BGP is not available in ntpdir while AnyName is installed (see below), so only AnyName can announce anycast addresses.
 
-- the node's listener is not serving,
-- the gateway is paused or stops,
-- no BGP neighbor of its family is established (and OSPF is not carrying it), or
-- netdir stops.
+![Monitor ▸ Cluster: the members, their role, address, version and whether they have caught up](snaps/cluster.png)
 
-A `kill -9` takes it away within the lifetime. BGP and OSPF settings are per node: `--asn`, `--bgp-neighbor-add`, `--ospf-interface-add`; see `netdir --help`.
+### How nodes reach each other
 
-## Neighbor discovery (LLDP)
+Nodes are reached by **every address they have**, not by one name. `self`, the host name, and all the node's IPv4 and IPv6 addresses (link-local and loopback excluded) go into the join code and are shared between members. The joining node tries them in order until one answers, and every later request tries the IP address that last worked first, then the rest.
 
-With `settings.lldp` on, every node runs lldpd. The switches then see the nodes, and each node reports the switch port it is on (`netdir --lldp` and the GUI). This is reporting only. The devices' own neighbor tables come from `device_neighbors`.
+IP addresses are tried before names, and a name is looked up for at most 2 seconds. Each node saves the addresses its peers report about themselves with the member list, so cluster traffic keeps working while a name cannot be resolved (the gateway being paused on every node, say), and also right after a restart. Addresses are re-read at every sync, so a changed IP is picked up on its own.
 
-## Configuration file
+### Joining and roles
 
-`/var/lib/netdir/netdir.conf` (JSON, mode 0600). Changes apply live: the daemon watches the file. `source/netdir.conf.example` is a starting point, and `netdir --help` lists every key. The top-level blocks are:
+One node is the **primary** and the rest are **replicas**. A new node is the primary of a cluster of one. To join:
 
-- `groups`: the gateways
-- `settings`: shared by the cluster
-- `web`: the GUI and MCP listener
-- `cluster`, `bgp`, `ospf`, `snmp`, `syslog`, `log_level`
+1. On any member, run `ntpdir --cluster-token`. It prints a join code (single use, valid for one hour).
+2. On the new node, run `ntpdir --cluster-join 'ntpdir-join-v1:…'`. In the GUI, use Cluster tab ▸ Create join code / Join.
 
-Every change from any source is kept as a version in `/var/lib/netdir/versions`: `--versions`, `--version-diff`, `--version-restore`.
+Joining replaces the new node's *shared* settings with the cluster's, after saving a snapshot of what it had. A node cannot join a cluster while it has the same cluster address (`cluster.self`) as a member, for instance a cloned machine: both sides refuse, and the message says to give the new node its own address first.
+
+### What is shared and what is per node
+
+**Shared** settings are the NTP block and, per group, `group_id`, `name`, `vip4`, `vip6`, `more_vip4`, `more_vip6`, `key`, `lb_method`, `hello_ms`, `hold_ms`, `max_afns` and `neighbors` (the unicast list: every node's address; each node skips its own). **Per node** are the interface, priority, weight, preempt, the log level, and the web and cluster blocks, except the web **Login groups** (`web.group`), the sign-in lockout (`max_failed_logins`, `failed_login_window_minutes`, `lockout_minutes`) and the minimum password length, which are shared too: the same people may sign in on every node, under the same rules. A cluster whose login group is still the single group `ntpdir` and whose lockout and password length are the defaults shares nothing; any other value is replicated, so update every node before changing them (a node on an older version does not know these settings). Putting a setting back to its default on the primary does not reach nodes that kept another value; set it on them, or give it any other value and then the default again from a node that has the change.
+
+You can edit anywhere. A change to shared settings made on a replica is forwarded to the primary, validated there, and replicated to everyone within the sync interval (5 seconds). A group added on the primary appears on replicas with the primary's interface and priority as a starting point.
+
+### The node picker
+
+In a cluster, the GUI has a drop-down at the top right to configure and monitor any member from the node you are logged in to. Requests are relayed over the cluster channel and recorded as `user via node`. Every page follows the picked node, including Cluster (leave, promote, join code, sync), Upgrade (upload, update now) and Configure ▸ General ▸ Upgrade (auto-update); only the sign-in is always on the node you logged in to. Uploads through another node are limited to 5 MB.
+
+### Security between nodes
+
+Nodes authenticate each other with a pinned per-node identity certificate (SHA-256 from the join code) and an HMAC over every request using the cluster secret, with timestamps and a replay cache. The cluster port is not the GUI port and is not affected by GUI certificates.
+
+### Promotion, removal and the epoch
+
+**Promotion is explicit.** If the primary is gone for good, run `ntpdir --cluster-promote` on the replica you want; the others follow. Nothing promotes itself after a failure, so a network split cannot silently create two primaries, and a primary that sees a higher epoch becomes a replica. The one planned exception: a primary that restarts into an update lends the role to another member, and once the whole update is over (nothing queued, installing or restarting for 30 seconds, home up and not failed) the role goes back to the node that was primary when the update began. A failed update of that node, a removed member or a promotion by hand drops it; a plain restart or shutdown leaves the role where it landed.
+
+The **epoch** (shown on the Cluster page) is the counter that says which node is the primary. It starts at 1 and goes up by one on every `--cluster-promote` and on every planned hand-over, and at no other time. **Planned hand-over:** when the primary is restarted or shut down from the GUI or `--power now`, or restarts to install an update, it first gives the role to the reachable replica with the newest shared settings (one that is not itself updating); that node is the primary from then on, and the old one comes back as a replica. If no replica can take it, nothing changes. A primary that goes offline unexpectedly keeps the role until you promote another node or **automatic failover** does: when the primary has not answered for 5 minutes and a strict majority of the members (this one included) say so, the replica with the newest shared settings (then the newest version, then the lowest address) promotes itself and the others follow. It is not a setting: it is on from three members and off with two, where each side would see the other as down. A replica cut off from the others never has a majority, so it never promotes. The old primary comes back as a replica and shared-settings edits it took while cut off are overwritten. A restart or shut down scheduled with `--power ... in`/`at` (or with `shutdown` directly) hands the role over in the last minute before it fires; cancelling it before then leaves the role alone. Members follow the primary with the highest epoch; a returning old primary at a lower epoch is ignored, and two different claims at the same epoch are refused.
+
+To manage members: `--cluster-delete ADDR` deletes a member for good (nothing is kept about it, so its address is free to use again; right-click ▸ **Delete** on the Cluster page), `--cluster-remove ADDR` drops a member but blocks its address and identity (it resets itself to a cluster of one when it next hears from the cluster), `--cluster-unremove` allows it back, `--cluster-leave` leaves from the node itself, and `--cluster-sync` syncs now.
+
+### Members on different subnets
+
+Members may sit in different subnets; the cluster only needs them to reach each other's cluster port. A gateway, however, runs on a node only if that node's interface has an address inside the gateway's VIP subnet for every family the gateway has, because the election runs on that network. IPv4 is always checked. IPv6 is checked when the interface has a global (non link-local) address, so globally addressed v6 gateways are protected too, while a node with only link-local v6 is let through.
+
+A node without such an address does not start that gateway. It shows grey ("not running here — no address in the gateway's subnet"), is not counted as serving it by the update check, and starts it by itself within seconds of getting an address there. It stays a full cluster member and still takes shared settings and updates. A node that is already running a gateway when its address changes is not stopped. If the VIP prefix differs from the prefix the node has on the same link, the node is held back: give the node an address in the VIP prefix.
+
+### How many members?
+
+There is no member limit. Measured on one 2-core host with real daemons on loopback: 40 members joined in about 40 ms each. A settings change made on any member, primary or replica, reached all 40 within about one sync interval (5 seconds by default). The Cluster page answered in under 15 ms. Five members frozen (not refusing, just silent) were marked unreachable within seconds, did not slow the others, and caught up when resumed. Real networks add latency this loopback test cannot show.
+
+A hand edit of the config file on a *replica* is not a shared edit and is overwritten by the primary's next sync; use the GUI or CLI there.
+
+## Monitoring
+
+The Monitor section of the GUI has pages for statistics, the host, packet capture and the log. Each has a command-line equivalent, and in a cluster each follows the node picked in the Node menu at the top right.
+
+### Alerts
+
+**Monitor ▸ Alerts** shows the alerts of the node picked in the top bar; **Configure ▸ Alerts** (`alerts` in the shared `ntp` block: `webhook`, `repeat_hours`, `rules`) holds the rules. The engine looks at the node every 15 seconds. A rule opens an alert when its condition has held long enough: *N failed checks in a row*, *N minutes*, or *M of the last N checks* for up/down rules (chrony not running, clock not synchronised, no time source answers, upstream server down or a falseticker, only fallback servers in use, a fallback server not answering, NTP listener down, no active gateway), and *past a threshold for N minutes* for value rules (clock offset, stratum, certificate days left, CPU, memory, disk; stratum is off by default). It closes by itself after *N good checks in a row* or *N minutes* good (**Clear**). Only rules that are changed are written to the configuration; the others follow the defaults. An alert has a severity (info, warning, critical).
+
+States: open, recovering (good again, clear time not over), acknowledged (ends with the alert), silenced (a silence covers a rule and subject for 15 minutes to 7 days and outlives the alert) and closed (cleared, marked resolved, or rule switched off). An alert that closes and reopens within an hour is the same alert with its count raised. Right-click: Acknowledge, Silence…, Mark resolved, Copy, and More (Fix actions that are safe for the rule - check upstream servers now, restart chrony -, Go to, Edit rule…). Opened and resolved alerts are posted to the webhook as JSON and written to the log; with a repeat time the webhook is told again while the alert stays unacknowledged. Alerts and silences are kept per node in `alerts.json` in the state directory (30 days, 1000 alerts) and are not replicated. `/metrics` carries only counts: `ntpdir_alerts_active{severity}`, `ntpdir_alerts_acknowledged{severity}`, `ntpdir_alerts_opened_total`. API: `GET /api/alerts`, `POST /api/alerts/{ack,silence,resolve,fix,test}`.
+
+### Backup
+
+**Configure ▸ Backup** (`backup` in the shared `ntp` block: `targets`; when it runs is a Scheduler task with the action `backup`) makes every node copy its state to one or more servers of yours. `targets` is a list of up to eight servers, each with `name`, `host`, `port`, `user`, `dir` and `keep`; the single server of v184 (`host`, `port`, `user`, `dir`, `keep` directly in the block) is read as the first entry and rewritten that way on the next save. The nodes do it themselves; the settings are cluster-wide, the SSH key (`/var/lib/ntpdir/backup/id_ed25519`, ed25519, made on first use) is each node's own and one key serves all of its servers. The servers need an SFTP service; no shell is needed. ntpdir runs the system `sftp` (`StrictHostKeyChecking=accept-new`, its own `known_hosts` in the backup directory, key login only).
+
+**Installing the keys.** Instead of copying public keys by hand, **Install key…** on a server asks for the password of the account there, logs in once with it (through `SSH_ASKPASS`; the password is never written to disk or logged), asks every node of the cluster for its public key and adds them to `~/.ssh/authorized_keys` of the account, each as `restrict ssh-ed25519 …` (no shell, no forwarding), skipping keys that are already there and keeping all other lines. It then tests the key login and reports it.
+
+An archive is a gzip-compressed tar of the state directory, sealed in 64 KiB pieces with AES-256-GCM, so a cut-off or changed file is refused. There is no password to set (since v188 the key comes from an empty one, PBKDF2-HMAC-SHA256, 600000 rounds, random salt): anyone who can read an archive can read the private keys in it, so keep the backup directories private. Archives of v184–v187 were sealed with the `password` of that time; it stays in the settings and a restore tries it when an archive does not open without one. The first entry is `MANIFEST.json`. What is in it: the configuration file, `versions/`, the web and DNS certificates and keys, `acme/`, the cluster identity, `scheduler.json`, `alerts.json`, the users, and `backup/` (the node's key and known hosts). What is not: the log, `update/`, `blocklists/`, `pairs/` and `stats.json.gz`, `sessions.json`. Files are named `NODE-YYYYMMDD-HHMMSS.ntpbak`, uploaded as `.part` and renamed, and after each upload this node's oldest files beyond that server's `keep` (default 14) are removed; files of other names are never touched. One archive is made per run and sent to every server; a server that fails does not stop the others, and only the failed ones are tried again (after 15 minutes). **When backups run is the Scheduler's**: a task with the action `backup` (*Back up this node*) backs up every node it is for to every server, and its history on each node says which servers took the archive and which failed. **Schedule daily backups** on the Backup page adds one (`id` `backup`, daily at 02:30 UTC, the nodes spread over five minutes); change or add tasks on Operate ▸ Scheduler. The `enabled`, `hours` and `at` of v184–v187 are turned into such a task the first time the configuration is read (the time of day converted from the node's clock to UTC) and then dropped. While a backup task runs on a node, a server that failed is tried again after 15 minutes and a server added later gets its first backup at once. The alert rule **Backup failed** opens when it keeps failing and names the servers that failed.
+
+**Restore from the GUI.** On the Backup page, the **Restore** card (the node picked in the top bar) takes the backup from one of the configured servers (picked first, using the same server settings and key as the backups; this node's backups on it are listed as soon as it is picked, and **All nodes** shows every node's, to rebuild a lost node), from another server (host, user, directory and the account's password, so a brand-new node needs nothing set up) or from a file uploaded from the browser (32 MB at most, 5 MB through another node). **Restore** opens the archive, verifies it, unpacks it next to the state directory (`/var/lib/ntpdir.restore-pending`) and asks for one confirmation that names its node and date (with a note when it was made by a newer version); for another node's backup that confirmation is an "Are you sure?" that says this node then takes over that node's identity. Declining drops what was unpacked. On confirming, the node restarts, and before it reads its configuration the start-up swaps the files in, keeping the old state in `/var/lib/ntpdir.before-restore-TIME`. A preparation that is not confirmed is dropped at the next start.
+
+**Restore from the command line.** Install ntpdir on the new machine without starting it (or stop it), fetch the file (`scp user@server:dir/NODE-...ntpbak .`) and run `ntpdir --restore FILE`, then start the service. Only an archive of v184–v187 needs a password: it is asked for, or given with `--restore-password-file FILE` or `NTPDIR_BACKUP_PASSWORD`. The archive is read completely and checked before anything is replaced; each top-level entry it holds replaces the one in the state directory, and the old ones are kept in `/var/lib/ntpdir.before-restore-TIME`. Entries with paths that leave the directory, and links, are refused. Restoring a node's backup while the original node is still running gives two nodes the same identity: use it to replace a lost node. Other commands: `ntpdir --backup-status`, `ntpdir --backup-now`. API: `GET /api/backup`, `POST /api/backup/run`, `/test`, `/install`, `/files`, `/upload`, `/restore/prepare`, `/restore/apply`, `/restore/cancel` (any node can be picked in the top bar).
+
+### Statistics
+
+Monitor ▸ Statistics (or `ntpdir --stats`) shows what chrony has done (read from chrony every 10 seconds, so the figures have that granularity):
+
+- the total number of requests and how they ended (Answered, Refused; Failed and Kiss-o'-death are always 0 because chrony does not report them), and the **RPS** (requests per second in the last finished interval, with the peak of the range under it; click it to draw the rate in the chart),
+- the number of different clients,
+- a line chart over time (hover for the values, click a name in the legend to hide a line),
+- donuts for the outcome (answered, refused, kiss-o'-death, failed) and the IP family, and
+- the top clients (with the reverse-DNS name once it is known). The top-servers list shows one entry, `chrony`.
+
+![Monitor ▸ Statistics: request rates, outcomes, IP families and top clients](snaps/statistics.png)
+
+The range is Last Hour, Last Day, Last Week, Last Month, or a custom start and end.
+
+**Drilling down.** Click a tile (Answered, Failed, Kiss-o'-death, Refused) to limit the chart, the donuts and the top lists to that outcome, for example to see which servers fail and for whom. Total Requests clears it. Click a client to list the servers that answered it, or a server to list the clients it served; this combines with the tiles.
+
+**Naming a client.** Right-click a client in Top Clients ▸ **Name** gives it a name by hand (up to 64 characters), shown under its address instead of the reverse-DNS name, found by the Filter box, and shared by the cluster (`client_names` in the `ntp` block: address to name). A named client's menu has **Rename** and **Remove name** instead.
+
+**Filtering the lists.** The Filter box of Top Clients and Top Servers lists every client or server whose address or name contains what you type (any case, from everything counted in the range, not just the ten shown); Esc empties it. The box on one list does not change the other.
+
+**Ping and traceroute.** Right-click a client or a server ▸ **Ping** or **Traceroute** opens a popup with the output of `ping -n -c 4 -W 2` or of `mtr -n --raw -c 10` (shown as the usual table, growing hop by hop), run on the node you are looking at (four pings, at most 15 seconds; mtr at most two minutes; four at a time). **Run again** repeats it. Both programs are prerequisites the installer adds; without them the popup says so.
+
+**Scanning a client.** Right-click a client ▸ **Scan** runs nmap on the node you are looking at (`-Pn -F -sV -O`, the 100 commonest ports with service and OS detection, at most two minutes; two scans at a time). When it is done a popup shows a short summary: whether the host is up, its operating system, the MAC address and its maker, and the open ports with the service and version on each (twelve at most). nmap is a prerequisite the installer adds; without it the scan says so.
+
+**Clearing the statistics.** **Clear** (next to the range buttons) forgets the counts and top lists of the node, or of every node when the Node menu says Cluster, and rewrites `stats.json.gz` at once.
+
+**Whois.** Right-click a client or a server ▸ **Whois** opens a popup with the address block, name, organization, country and origin AS from its regional registry (found through whois.iana.org; none for private addresses). It is fetched only when asked for, by the daemon on the picked node (TCP port 43), and cached for a day. That sends the address, and nothing else, to the registry; a node without outbound port 43 says "not reachable".
+
+**How long it is kept.** The counters are kept for **30 days**. They live in memory and are saved to `stats.json.gz` in the state directory every 5 minutes and when AnyTime stops, and read back at start-up, so a restart or an update does not empty them. The time AnyTime was not running is a gap. The file is gzip-compressed JSON, mode 0600, and holds client addresses; delete it, with AnyTime stopped, to forget them.
+
+Top lists are collected in 10-minute steps for the last day and in hourly steps beyond that, keeping the busiest 300 clients and 600 servers per step (the rest count as "(others)"), so a flood of random addresses cannot use up memory.
+
+**In a cluster.** Each node counts its own requests and has its own file; nothing is shared. Pick a member in the top-bar Node menu to see its statistics, or **Cluster** (its last entry, on Statistics and Host only) to see every node's numbers added together (`--all-nodes` on the command line).
+
+**Who asked for what, on disk.** The pairs behind "what did this client ask for" and "who asked for this" are in `<state-dir>/pairs/`, one gzip file per 10 minutes. Once an hour is over its six files are merged into one hour file, and once a day is over its hour files into one day file; identical pairs add up, so these are also smaller. The 10-minute files are kept for 26 hours, the hour and day files for the whole 30 days (about twice the space of the hour files alone). A range uses a day file for each whole day, an hour file for each whole hour and 10-minute files for the rest, so picking a client over a week reads about a dozen files instead of a thousand; what a finished file holds for the picked client or domain is also remembered in memory, so a refresh reads only the file still being filled. The merging runs in the background (at start-up for what an earlier version left, then every five minutes); a merged file keeps up to 2 million (hour) or 4 million (day) distinct pairs, beyond that a flood shows as "(others)" as before.
+
+```
+ntpdir --stats
+ntpdir --stats --stats-outcome failed          (also answered, kod, refused)
+ntpdir --stats --stats-client 192.0.2.7        (the servers that answered that client)
+ntpdir --stats --stats-server 10.0.0.124       (the clients that server served)
+ntpdir --whois 192.0.2.7                       (registry record of an address)
+ntpdir --stats --stats-range now
+ntpdir --stats --stats-range 1d
+ntpdir --stats --stats-range 30d
+ntpdir --stats --all-nodes                     (every cluster node's numbers added together)
+```
+
+### The memory guard
+
+The statistics and the host history live in memory. Every 30 seconds AnyTime looks at how much memory the machine is using. That is the figure Monitor ▸ Node shows: what programs hold, caches excluded; in a container with a memory limit, the container's use against its limit, whichever is higher.
+
+At **85%** or more it drops the **oldest data**. Each round removes the oldest tenth of the time span the statistics and the host history cover (top lists, per-minute counters and host minutes alike, so they stay consistent). It then hands the memory back to the system and measures again, up to 5 rounds per check, until use is below the limit. If it is still above, the next check carries on.
+
+Newer data always outlives older data, and the newest hour of statistics and host history is never dropped. That hour is tiny, and a machine short of memory for another reason should not lose its recent history too. Cuts are made at whole hours so the top lists and the counters go together.
+
+Each time it drops something, the log says so (WARN), and the Statistics and Monitor ▸ Node pages (and `ntpdir --stats`, `ntpdir --host`) show a line with the count, the time and what was dropped. What is dropped is gone from the saved file too after the next save.
+
+The limit is the environment variable `NTPDIR_MEMORY_LIMIT_PERCENT` of the daemon (1–99, default 85); there is no other switch. It can only drop what AnyTime itself holds (at most about 100 MB), so if something else fills the machine, it will keep trimming and cannot fix that.
+
+### Host
+
+Monitor ▸ Node (or `ntpdir --host`) shows how busy the machine is: **CPU**, **memory**, **disk** (space used per filesystem, and how busy the busiest disk was) and **network** (traffic in and out of the real interfaces, and each link's use when the driver reports its speed).
+
+![Monitor ▸ Node: CPU, memory, disk and network over time, with the filesystems and interfaces below](snaps/host.png)
+
+The daemon samples `/proc` and `/sys` every 10 seconds and keeps per-minute averages and peaks for **30 days** (about 4 MB in memory; saved with the Statistics file, so a restart keeps them). Tiles show the latest sample, four charts follow the range (Last Hour, Day, Week, Month or custom; hover for value and peak), and two tables list the filesystems and network interfaces. In a cluster the Node menu picks the member. Loopback, ntpdir's own `ntpdirN.M` links, container and bridge plumbing, and bridge or bond ports are left out of the network totals.
+
+```
+ntpdir --host
+ntpdir --host --host-range 1d
+ntpdir --host --all-nodes                      (the cluster as one machine)
+```
+
+With **Cluster** chosen in the Node menu (or `--all-nodes`), the nodes are added together. Network rates, load averages, memory, swap, disk sizes and cores are summed; CPU is averaged over all the cores; memory and each filesystem are taken per byte of the whole; disk-busy is the mean. A peak is the busiest node's (the network's is the sum of the nodes' peaks, an upper bound). A node that cannot answer is named and left out.
+
+### Capture
+
+Monitor ▸ Capture (or `ntpdir --capture`) is a `tcpdump` on any node of the cluster, or on all of them at once. It only listens: nothing is sent and nothing is changed. It uses a raw socket (no libpcap), so it needs only the privileges the daemon already has, and it does nothing until you press Start.
+
+![Monitor ▸ Capture: a live packet list with a filter, on one interface](snaps/capture.png)
+
+**One node** (the Node menu picks it). Choose an interface (a gateway's is marked; the virtual-MAC `ntpdirN.M` interfaces are listed too), optionally a filter, and Start. The newest packets are listed live, one line each, with TCP flags, NTP packets (`NTPv4 client`, `NTPv4 server stratum 2`, `kiss-o'-death RATE`) and, for ARP and IPv6 neighbor discovery, the Ethernet addresses they were sent from and to, so a virtual MAC that is announced but not the one that answers shows at once. The buffer holds the newest 5000 packets or 32 MB. **Download .tgz** saves it as an archive with one `.pcap` in it, for Wireshark. A node has one capture of its own: starting another replaces it.
+
+**Every node.** Choose **Cluster** in the Node menu, an interface (every node needs one of that name), a filter, and 5, 10, 30 or 60 seconds. All nodes capture at the same moment into a buffer of their own (so nobody's Capture page is disturbed) and keep their newest packets (about 4 MB each). **Download .tgz** gives one `.pcap` per node (this node's ends in `-this-node`), a `summary.txt`, and an `errors.txt` naming any node that could not capture and why (a node on a version without capture says so). One capture of this kind runs at a time. It is the way to see whether what one node sent is what another received.
+
+**The filter** is a small version of the tcpdump language, applied in the daemon before a packet is kept:
+
+- `host`, `src host`, `dst host`, `net 10.0.0.0/24`
+- `port 123`, `src port`, `dst port`, `portrange 50-60`
+- `tcp`, `udp`, `icmp`, `icmp6`, `arp`, `ip`, `ip6`, `ntp` (port 123)
+- `ether host 00:1a:7c:01:02:00` (also `src` and `dst`)
+- joined with `and`, `or`, `not` and brackets; a protocol before host, net or port narrows it (`udp port 123`).
+
+Addresses only, no names. A filter that is not understood is refused when the capture starts. The filter runs in the daemon, not in the kernel, so a very busy interface still costs the daemon every packet; keep captures short.
+
+```
+ntpdir --capture-interfaces
+ntpdir --capture eth0 --capture-seconds 10 --capture-filter "host 10.20.0.205 and port 123"
+ntpdir --capture eth0 --capture-file /tmp/eth0.pcap
+ntpdir --capture eth0 --capture-seconds 30 --all-nodes --capture-file /tmp/cluster.tgz
+ntpdir --capture - --group 100 --capture-seconds 30 --capture-file /tmp/gateway.tgz
+```
+
+The last form captures one gateway: it runs only on the nodes that serve it (every node but the ones removed from it), on the gateway's interface (`-`; give an interface instead to override), and keeps only the packets to and from the gateway's addresses (its VIPs, further shared addresses and anycast addresses), narrowed further by `--capture-filter`. On the Capture page it is the Node menu's **Gateway** entries.
+
+Without `--capture-file` the packets are printed (the first 500); with `--all-nodes` or `--group` a file is required. Every start is logged with the name of the user who made it.
+
+### Log
+
+Monitor ▸ Log (or `ntpdir --log`) shows the daemon's log and filters it by words (every word must appear), by level, by time range and by line count, with the matches marked. **Live** mode follows the newest line, and **Download** saves what is on screen. With the Node menu the page shows any member's log. `--log` without `--log-lines` prints the whole matching log.
+
+![Monitor ▸ Log: filtered by level and words, with the matches marked](snaps/log.png)
+
+The text is the same that goes to stderr (the system journal under systemd). AnyTime also keeps it in `ntpdir.log` in the state directory (`/var/lib/ntpdir`, root-only), rotated at 100 MB with the two previous files kept, so it survives restarts and needs no journal access. Besides the usual events, it logs server up and down changes and each domain that starts or stops answering on a server, so one failing domain shows even while the server stays up.
+
+**Sending the log to a syslog server (Configure ▸ Settings ▸ Logs).** Every line the log shows can also be sent to a syslog server, over TCP, UDP or TLS, as RFC 5424 (or RFC 3164 for an old collector) messages with the severity of the line and the facility you pick (`daemon`, `local0` to `local7`, …). It is set per node and is not replicated. A server that is down never holds AnyTime up: messages wait in a queue of 2000, the oldest are dropped when it fills, and the connection is retried with a growing pause. On TLS the server's certificate is checked against the CA file you give (or the system's authorities); ticking *Do not check the server's certificate* turns the check off. The tab shows whether the connection is up, how many messages were sent and dropped, and has a **Send test message** button. From the command line: `ntpdir --syslog`, `--syslog-server HOST[:PORT]`, `--syslog-protocol udp|tcp|tls`, `--syslog-facility`, `--syslog-format`, `--syslog-ca FILE`, `--syslog-tls-insecure`, `--syslog-disable`, `--syslog-enable`, `--syslog-test`. The local file and the journal are written as before, whatever the syslog server does.
+
+**tshoot** (Monitor ▸ Log ▸ tshoot, or `ntpdir --tshoot [--all-nodes]`) downloads one `.tgz` with what is needed to find out why something does not work, from every node:
+
+- the log (newest 20000 lines), the configuration and its versions;
+- cluster, gateway, NTP, BGP, anycast, virtual-MAC and update state, and host numbers;
+- addresses, links, routes, rules, neighbors, ARP, sockets, the ARP and routing sysctl settings, firewall rules, and FRR's BGP, OSPF and BFD output;
+- service status, the journal and the kernel log tail;
+- 8 seconds of ARP and neighbor-discovery traffic per gateway interface (always; `--tshoot-capture` is still accepted and does nothing);
+- a dump of every goroutine of the daemon (`ntpdir/goroutines.txt`: what it is busy with, for a node that is up but stuck). `kill -USR1 $(pidof ntpdir)` writes the same dump to standard error (`journalctl -u ntpdir`), for a daemon whose pages and cluster port do not answer.
+
+Passwords, the gateway key, tokens, join codes and private keys are removed (each node's `README.txt` says how many), and other programs' command lines are not included. It is read-only, and a node that cannot be reached has a note in the bundle.
+
+```
+ntpdir --tshoot --all-nodes                # ntpdir-tshoot-HOST-TIME.tgz, every node
+ntpdir --tshoot --tshoot-file /tmp/t.tgz   # this node only
+ntpdir --log --log-min warn --log-since 6h
+ntpdir --log --log-grep "server 192.0.2.123" --log-lines 200
+```
+
+## Operating a node
+
+The Operate section of the GUI is for actions on a node: Node (controller, maintenance, host power), Cluster, Anycast and Upgrade. With the Node menu, each page acts on any member.
+
+![Operate ▸ Node: make this node the controller, pause it for maintenance, or restart or shut down the host](snaps/node.png)
+
+### Rename a node
+
+Right-click a node on the Topology page ▸ **Rename** (or `ntpdir --node-rename NAME` on the node itself) changes the operating system's host name and `/etc/hosts` on that node. In `/etc/hosts` every name that was the old host name, short or full, becomes the new one, keeping the addresses, the other aliases and comments; when no line names the host, a `127.0.1.1` line is added. The host name is set with `hostnamectl`, or with `hostname` and `/etc/hostname` where systemd is not running. A name is letters, digits and hyphens, in up to four parts separated by dots. If the host name cannot be set, `/etc/hosts` is put back as it was. The cluster identifies nodes by address, so a rename changes only the name shown.
+
+### Make this node the gateway controller
+
+Operate ▸ Node (or `ntpdir --assert-agc`) asks the current controller to hand the shared address to this node. The node takes the role first (the VIP on its macvlan, announced) and only then asks the old controller to step down. The old controller steps down in place: it keeps its own virtual MAC, the MACs it covers and its NTP up (it only stops answering ARP and neighbour solicitations and moves the VIP onto `lo`), and releases a MAC it no longer needs after a few seconds.
+
+When a controller stops (a restart, an update, **Pause this node**), it tells the group twice, and the node that takes over announces the MAC it inherits again and again for a couple of seconds, so the last word at the switch is the new owner's. A controller that dies is noticed after the hold time, as before. To prefer a node permanently, raise its priority and turn on preemption in Settings.
+
+### Maintenance: pause this node
+
+Operate ▸ Node ▸ *Maintenance* (or `ntpdir --node-pause`, `--node-resume`, `--node-status`) pauses every gateway on the node in one step. It resigns, stops answering NTP and stops probing, and the other nodes carry the traffic; the gateway controller role moves to another node, and if this node was the cluster's primary the primary role is handed to a running node too. Nothing is shut down.
+
+The flag (`node_paused` in the config file) is local to the node, never replicated, and survives restarts of AnyTime and of the host. Resuming brings the gateways back once their NTP servers answer. A gateway you paused on its own stays paused after the node resumes. With the Node menu, the page pauses any member, so to send all traffic to one node (to benchmark it, say), pause the others instead of shutting them down.
+
+**Self-check (a node whose NTP stops answering pauses itself).** The gateway address and the anycast routes follow what ntpdir says the node can do: the gateway runs, chrony is up and keeping time, an upstream server is healthy. A chrony that is stuck while it still runs would keep both on the node and clients would time out. So every 5 seconds the node sends a real NTP request, over UDP from its own loopback address (chrony always allows 127.0.0.0/8 and ::1 while it serves, whatever `allowed_clients` and `blocked_clients` say, and the address is the node's own, so the request reaches chrony's socket), to each address it serves: the gateway's shared addresses while the node is the active or a forwarding member, and the anycast addresses that are on lo. A kiss-o'-death answer counts as an answer. After 3 misses in a row the node pauses itself, in memory only, like Operate ▸ Node ▸ Pause: its gateways resign, the addresses come off and the other nodes carry on; the log says why and the Node page and `--node-status` show that the node paused itself. The configuration file is not changed, so a restart starts clean. After a minute the gateways start again to check, and 6 good answers in a row end the trouble; if they fail again the node pauses for twice as long, up to 10 minutes. Pause or Resume by hand takes over at once. Nothing counts as a miss while chrony is silent on purpose (no server in service, the clock too far off, chrony not running yet or its allow rules not sent yet) or for an address that is not on the machine. It never pauses the only node in service or the only node serving a gateway (it logs that instead), and it does nothing while AnyName is installed on the host. A request goes out once every 5 seconds to each address, far under any `client_rate`. Switch it off in Configure ▸ Settings ▸ General (`self_check: false` in the file; it is on when the key is absent, and a file that never mentioned it stays readable by older versions).
+
+```
+ntpdir --node-pause
+ntpdir --node-resume
+ntpdir --node-status
+```
+
+### Restart or shut down the host
+
+Operate ▸ Node ▸ *Host* (or `ntpdir --power`) restarts or shuts down the whole host: now, in 1–10080 minutes, or at a time of day. A scheduled action is kept by the operating system (`shutdown(8)`, so it survives a restart of AnyTime), shows on the page, and can be cancelled. It needs `shutdown` (systemd or sysvinit-compatible) on the host.
+
+An action started *now* is refused when this node is the only member serving one of its gateways (the same check updates use). The GUI asks whether to go ahead anyway, and the CLI needs `--yes`. The check is made when you ask, not at a scheduled time. A stopping controller announces that it is leaving, so another member takes over at once.
+
+```
+ntpdir --power restart --in 10
+ntpdir --power shutdown --at 02:30
+ntpdir --power status
+ntpdir --power cancel
+```
+
+## Scheduled tasks
+
+Operate ▸ **Scheduler** runs tasks on every node of the cluster, or on the nodes you pick: restart chrony, pause or resume the node, clear the statistics, or a **shell command** (`/bin/sh -c`, as root; anyone who can sign in to the GUI can therefore run commands on every node). The task list is part of the shared settings, so every node has it; what ran is kept per node (the last 300 runs, with the output of a command) and shown for the node picked at the top right.
+
+A task runs **once** (on a date you pick) or repeats **hourly, daily, weekly, monthly or yearly**, every N of them if you like. A monthly or yearly task can be on a day of the month (the 31st means the last day in a shorter month, `-1` the last day) or on the **1st to 4th or last** occurrence of one or more weekdays — "the 3rd Saturday of every month", or "the 2nd or 3rd Saturday or Sunday". The window is a **To** time next to **At** ("any time between 01:00 and 10:00": At 01:00, To 10:00; for an hourly task, a minute past the hour). **All times are UTC**, on every node.
+
+A shell command **fails** when it exits with anything but 0, or when the time limit stops it. Tick **Ignore the exit status** (`"ignore_exit":true` on the command line) for a command whose non-zero exit is an answer, such as `systemctl status` on a stopped service: the run then counts as ok and its output ends with the exit status. A command that cannot start, or that the time limit stops, still fails.
+
+When a monthly or yearly task names several occurrences or weekdays (the 2nd or 3rd Saturday or Sunday), it runs **once** in that month, on the first of the days that match, unless *run on* is set to *each of those days* (`"each_day":true`), which runs it on every matching day, or to *one of those days, chosen per node* (`"pick_day":true`): each node runs it on one matching day of the month, picked from the node, the task and the month, so the nodes do not all act on the same day (and **To** spreads the time of day).
+
+**To** spreads the nodes: a task is due at its **At** time and, when you give a **To** time, each node runs it at a time of its own between the two (on an hourly task they are minutes past the hour, and the window is at most 59 minutes), the same place every time for the same node and task (a hash of the node, the task and the occurrence). Without **To** every node runs it at **At**. A task saved by an older version with an offset window shows it as its **To** time. Tasks whose windows overlap are **staggered** on a node: no two start less than a minute apart (a task with no window keeps its time, the others move to the next free place in their window). A node that was off or busy runs a missed task once when it comes back, if that is still inside the window; older runs are skipped and the history says so. **One job runs at a time on a node**: a job that falls due while another is running waits in a queue (first come, first served) and starts as soon as the one before it has finished, however late that is; *Run now* is refused while a job is running. A task whose previous run is still going or waiting when its next one falls due skips that one, and the history says so. A new or re-enabled task owes nothing for times before that.
+
+Right-click a task for **Edit, Copy, Paste, Run now on… (this node, or all nodes), Disable/Enable and Delete**; *Paste* adds a copy with a new name. *All nodes* asks every node the task is for to run it now, one after another 1 minute apart in node-ID order; each node runs it when it has finished what it is doing. On the command line: `--schedule`, `--schedule-history`, `--schedule-set '{"name":"3rd Saturday","action":"chrony_restart","freq":"monthly","nths":[2,3],"weekdays":[6,0],"at":"01:00","until":"10:00"}'` (give `"id"` to replace a task; actions `chrony_restart`, `node_pause`, `node_resume`, `stats_clear`, `update_online` (fetch the newest release online and queue this node for the update, when it is newer), `node_reboot` (restart the host once it is safe), `backup` (back this node up to the servers of Configure ▸ Backup and wait for it; the history names the servers that failed), or `shell` with `"command"`), `--schedule-del ID` and `--schedule-run ID`.
+
+## Upgrading a running cluster
+
+Upload a release archive (`ntpdir_vN.tgz` or `.zip`, the same one you would install from) on the Upgrade tab, or with `ntpdir --update-upload FILE`. The node checks it (safe extraction, module `ntpdir`, integer `VERSION`), keeps the source under `/var/lib/ntpdir/update/source` and offers it to its peers. Instead of a file you can tick **Fetch from online** next to the file box: **Upload** then has this node download the newest release of `micush/ntpdir` (or its highest `v<number>` tag when there is no release; the same lookup `get.sh` does) and stage it exactly like an uploaded archive. The node needs to reach api.github.com and github.com.
+
+![Operate ▸ Upgrade: the update status, the nodes and a history of every update event](snaps/upgrade.png)
+
+```
+ntpdir --update-status
+ntpdir --update-apply                 # build and install on this node now
+ntpdir --update-push all              # ask nodes (or ADDR,ADDR) to update
+ntpdir --update-auto on               # every node follows the newest source
+ntpdir --update-repo https://github.com/you/ntpdir   # where "fetch online" downloads from (default: micush/ntpdir)
+ntpdir --update-cancel all
+ntpdir --update-history
+```
+
+### How a node updates
+
+A node that has just joined a cluster does not offer the source it had staged at that moment to the other members, so joining with a newer version never makes auto-update pull the cluster up to it; uploading or fetching a release on that node (or staging a newer one) offers it. A joining node on an older version updates itself from the cluster as usual. Each node that is asked pulls the source from the peer that has the newest one and **builds it natively** (the Go toolchain, gcc and the PAM headers, which is what `install.sh` sets up). It checks the result (version number, PAM linked), keeps the old binary as `/var/lib/ntpdir/update/ntpdir.prev`, swaps it in and re-executes itself.
+
+A new binary that does not stay up is rolled back automatically (three boot attempts; it is confirmed after 60 seconds), and the failure is shown in the Upgrade tab. The queue and the auto-update setting are cluster-wide and live on the primary. Run it under a supervisor that restarts the process; the unit does (`Restart=always`).
+
+### One node at a time, and only while the gateways stay served
+
+Nodes update one at a time, and **only while the gateways stay served**. A node holds back its update until every gateway it is serving is also being served by another reachable member, so a node that is still recovering from its own update keeps the next one waiting. **The first node to take a new version is the canary:** the others hold while it has run the new version for less than 2 minutes, while any gateway on it shows bad, and while an update to that version has failed on any member (including one the boot guard rolled back, which stays failed until a newer version is staged, and one that vanished while updating) (a canary that crashes restarts the clock, and one that rolls back holds the rest for the retry period). While it soaks, an hourglass next to its name shows `soaking: Ns remaining` when you hover it. Once one node has settled, the rest follow in turn. A node that stops answering while it installs an update is shown as restarting (grey on the Topology, "restarting" on the Cluster and Upgrade pages), not as down, for up to 5 minutes after it was last seen. `--update-apply` on one node refuses in the same situation unless you add `--yes` (the GUI asks).
+
+A node that is not clustered, is the only member, or serves nothing is never held back (a lone node restarts briefly; nothing could cover for it). The same goes for a gateway that no other member can serve because they are all on another subnet (sites that each have their own gateway): waiting for them would be for ever, so that gateway no longer holds the update back.
+
+**Paused nodes update first.** A node that is paused serves nothing, so it can restart at any time. A member that is held back only because it is the sole one serving a gateway (the others are paused or down) does not make the rest wait for it: the paused nodes update one after another, then you resume one and the last node follows. The held node says why on the Upgrade page.
+
+### No outage while a node restarts
+
+After building, the node does not restart until another member has been serving each of its gateways for at least 15 seconds (the same check that gates a rolling update; `--update-apply --yes` skips it). A stopping node says so: a controller announces that it is leaving and the best remaining node becomes controller at once, and a forwarder tells the controller, which covers its virtual MAC immediately instead of a hold time later.
+
+Whoever covers a MAC also announces it on the wire (an ARP probe or IPv6 DAD solicitation from that MAC, which changes no host's neighbour cache). A switch or a Linux bridge keeps a MAC on its old port until something transmits from the new one, and clients cached on that MAC would lose their answers for about 3 seconds. A returning node announces its MAC once it can answer, and the controller hands the MAC back a moment later. Forwarders, and a controller for the MACs it covers, repeat the announcement every 2 seconds, so a switch entry that went stale is corrected in seconds. On start-up a gateway joins only after its NTP pool answers.
+
+Measured with two real nodes in network namespaces on a bridge and a client sending NTP requests to the VIP every 100 ms, pinned to the restarting node's MAC: restarting the controller or a forwarder caused no failed requests.
 
 ## Build from source
 
-From `source/`:
-
 ```
-go build -o netdir .
-go test ./device             # the drivers: runs on any OS
-go test ./...                # the daemon: Linux only
+# the Go module is in source/; docs/ has the changelog
+cd source
+go build -o ntpdir .          # no third-party dependencies
+go test -race ./...
+./ntpdir --config ./ntpdir.conf
 ```
-
-netdir uses Go's standard library only. The GUI's PAM login needs cgo and the PAM headers. A build without cgo serves no GUI, and with it no MCP endpoint.
 
 ## License
 
-GPL-3.0; see `LICENSE`.
+AnyTime is free software under the GNU General Public License, version 3 (see `LICENSE` next to this file).

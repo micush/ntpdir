@@ -103,17 +103,6 @@ func TestScanRun(t *testing.T) {
 	if g.State != "done" || !strings.Contains(g.Text, "-Pn") || !strings.HasSuffix(g.Text, "-- 10.9.9.9") {
 		t.Fatalf("result %+v", g)
 	}
-	nj, err := scanStart("NS1.cush.local.", "tester") // a host name goes to nmap as it is (lower case, no trailing dot)
-	if err != nil {
-		t.Fatalf("name: %v", err)
-	}
-	for i := 0; i < 100 && nj.State == "running"; i++ {
-		time.Sleep(50 * time.Millisecond)
-		nj, _ = scanGet("ns1.cush.local")
-	}
-	if nj.State != "done" || !strings.HasSuffix(nj.Text, "-- ns1.cush.local") {
-		t.Fatalf("name result %+v", nj)
-	}
 	if n, _ := scanGet("10.8.8.8"); n.State != "none" {
 		t.Errorf("never scanned: %+v", n)
 	}
@@ -123,5 +112,25 @@ func TestScanWithoutNmap(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := scanStart("10.9.9.8", "t"); err == nil || !strings.Contains(err.Error(), "nmap is not installed") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestQStatsClear(t *testing.T) {
+	s := NewQStats()
+	for i := 0; i < 50; i++ {
+		s.Record(netip.MustParseAddr("10.1.1.1"), "10.9.9.1:123", 4, outAnswered)
+	}
+	now := time.Now()
+	if r := s.Query(now.Add(-time.Hour), now.Add(time.Minute), QFilter{}); r.Sums.Total != 50 {
+		t.Fatalf("before: %d", r.Sums.Total)
+	}
+	s.Clear()
+	r := s.Query(now.Add(-time.Hour), now.Add(time.Minute), QFilter{})
+	if r.Sums.Total != 0 || len(r.Clients) != 0 || len(r.Servers) != 0 {
+		t.Fatalf("after: %+v", r.Sums)
+	}
+	s.Record(netip.MustParseAddr("10.1.1.2"), "10.9.9.1:123", 4, outAnswered)
+	if r := s.Query(now.Add(-time.Hour), now.Add(time.Minute), QFilter{}); r.Sums.Total != 1 {
+		t.Fatalf("counting again: %d", r.Sums.Total)
 	}
 }

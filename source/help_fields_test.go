@@ -32,17 +32,15 @@ func TestHelpCoversEveryField(t *testing.T) {
 	// the arrays of the Settings schema and the panel their fields belong to
 	arrays := []struct{ name, topic string }{
 		{"GROUP_FIELDS", "config_groups"},
+		{"NTP_FIELDS", ""}, // by section, below
 		{"WEB_FIELDS", "config_web"},
 		{"SSO_FIELDS", ""}, // by tab, below
 		{"LDAP_FIELDS", "users_ldap"},
 		{"SNMP_FIELDS", "config_snmp"},
 		{"PROM_FIELDS", "config_metrics"},
 		{"MCP_FIELDS", "config_mcp"},
-		{"TOPO_FIELDS", "config_general"},
 		{"LLDP_FIELDS", "config_general"},
-		{"DEVICE_FIELDS", "config_devices"},
-		{"DEVCRED_FIELDS", "config_logins"},
-		{"DEVCHECK_FIELDS", "config_checks"},
+		{"SELF_FIELDS", "config_general"},
 		{"CLUSTER_FIELDS", "config_cluster"},
 		{"LOG_FIELDS", "config_logs"},
 		{"SYSLOG_FIELDS", "config_logs"},
@@ -63,6 +61,11 @@ func TestHelpCoversEveryField(t *testing.T) {
 			end = eol // an array on one line
 		}
 		spans = append(spans, span{i, i + end, a.topic, a.name})
+	}
+	// section of the page's settings -> panel
+	sections := map[string]string{
+		"Upstream servers": "config_ntp0", "Health": "config_ntp1", "Timing": "config_ntp1",
+		"Serving": "config_ntp2", "Client Rate Limiting": "config_ntp2", "Authentication": "config_ntp3", "Leap seconds": "config_ntp4",
 	}
 	// single sign-on: the tab each field is on
 	ssoTab := map[string]string{}
@@ -85,6 +88,15 @@ func TestHelpCoversEveryField(t *testing.T) {
 				if m[0] > sp.from && m[0] < sp.to {
 					tp = sp.topic
 					switch sp.name {
+					case "NTP_FIELDS":
+						// the section heading before the label says which tab it is on
+						best, bestAt := "", -1
+						for sec, panel := range sections {
+							if at := strings.LastIndex(app[sp.from:m[0]], `section: "`+sec+`"`); at > bestAt {
+								best, bestAt = panel, at
+							}
+						}
+						tp = best
 					case "SSO_FIELDS":
 						line := app[strings.LastIndex(app[:m[0]], "\n"):m[1]]
 						k := regexp.MustCompile(`\bk: "([a-z_]+)"`).FindStringSubmatch(line)
@@ -109,6 +121,7 @@ func TestHelpCoversEveryField(t *testing.T) {
 	}
 
 	extra := map[string][]string{
+		"topology":        {"Time range"},
 		"config_upgrades": {"Update every node automatically when a newer release is staged (one node at a time)", "Online repository"},
 		"config_web":      {"Username", "Password", "Certificate", "Private key", "Main name", "Other names (one per line)", "IP addresses (one per line, optional)", "Pending CSR"},
 		"cluster":         {"Node", "Join code"},
@@ -116,6 +129,7 @@ func TestHelpCoversEveryField(t *testing.T) {
 		"anycast_bgp":     {"Local AS number", "Router ID", "New neighbor address", "New neighbor AS", "New neighbor description", "New neighbor password"},
 		"anycast_ospf":    {"Router ID", "Hello interval", "Dead interval", "Metric", "New interface name", "New interface area", "New interface link type", "New interface key"},
 		"history":         {"Compare version", "Configuration file"},
+		"stats":           {"Time range", "From", "To"},
 		"host":            {"Time range", "From", "To"},
 		"capture":         {"Interface", "Filter"},
 		"log":             {"Filter text", "Level", "Time range", "Lines", "Live"},

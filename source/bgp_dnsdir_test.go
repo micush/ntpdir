@@ -33,13 +33,13 @@ func TestBGPBlockedFollowsDnsdir(t *testing.T) {
 	}
 }
 
-// With dnsdir installed netdir must not touch frr.conf, the daemons file, the marker or the FRR service, even when
+// With dnsdir installed ntpdir must not touch frr.conf, the daemons file, the marker or the FRR service, even when
 // it had managed FRR before and the config still has an AS.
 func TestBGPApplyLeavesFRRAloneWithDnsdir(t *testing.T) {
 	calls, dir := fakeFRR(t, nil)
 	state := t.TempDir()
 	m := NewBGPManager(state)
-	if r := m.applyNow(bgpDC(true)); !r.OK { // netdir managed FRR before dnsdir was installed
+	if r := m.applyNow(bgpDC(true)); !r.OK { // ntpdir managed FRR before dnsdir was installed
 		t.Fatalf("%+v", r)
 	}
 	dm, _ := os.ReadFile(filepath.Join(dir, "daemons"))

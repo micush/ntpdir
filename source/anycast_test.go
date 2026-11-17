@@ -107,6 +107,32 @@ type fakeLo struct {
 	failA bool
 }
 
+func hookLo(t *testing.T) *fakeLo {
+	resetAnycast()
+	t.Cleanup(resetAnycast)
+	f := &fakeLo{on: map[string]bool{}}
+	oa, od := anycastAddFn, anycastDelFn
+	anycastAddFn = func(a string) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.failA {
+			return false
+		}
+		f.on[a] = true
+		f.adds++
+		return true
+	}
+	anycastDelFn = func(a string) { f.mu.Lock(); delete(f.on, a); f.dels++; f.mu.Unlock() }
+	t.Cleanup(func() { anycastAddFn, anycastDelFn = oa, od })
+	og := anycastGateFn // these tests are not about BGP: the gate is open unless a test closes it
+	anycastGateFn = func(*BGPConfig, string) string { return "" }
+	t.Cleanup(func() { anycastGateFn = og })
+	oc := chronyServingFn
+	chronyServingFn = func() bool { return true }
+	t.Cleanup(func() { chronyServingFn = oc })
+	return f
+}
+
 func (f *fakeLo) has(a string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.on[a] }
 
 func freeUDPPort(t *testing.T) int {
@@ -116,6 +142,157 @@ func freeUDPPort(t *testing.T) int {
 	}
 	defer l.Close()
 	return l.LocalAddr().(*net.UDPAddr).Port
+}
+
+// The address is on lo only while a DNS server answers, is renewed while it
+// does, and is taken off when the pool goes down, the gateway stops or ntpdir stops.
+func TestAnycastFollowsNTPHealth(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
+	_ = freeUDPPort
+	const addr = "127.0.0.9" // loopback so the test can bind it; the real config refuses loopback
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
+	a.step()
+	if !lo.has(addr) || !a.state()[0].Up {
+		t.Fatalf("not announced while healthy: %+v", a.state())
+	}
+	a.step()
+	if lo.adds < 2 {
+		t.Fatal("the address lifetime is not renewed")
+	}
+	up.mode.Store(2) // stops answering
+	p.ProbeNow(context.Background())
+	a.step()
+	if lo.has(addr) || a.state()[0].Up || a.state()[0].Reason == "" {
+		t.Fatalf("still announced with no healthy NTP server: %+v", a.state())
+	}
+	adds := lo.adds
+	a.step()
+	if lo.adds != adds {
+		t.Fatal("renewed while unhealthy")
+	}
+
+	up.mode.Store(0)
+	p.ProbeNow(context.Background())
+	a.step()
+	if !lo.has(addr) {
+		t.Fatal("not announced again after recovery")
+	}
+
+	lo.mu.Lock()
+	lo.failA = true
+	lo.mu.Unlock()
+	a.step()
+	if a.state()[0].Up || a.state()[0].Reason == "" {
+		t.Fatalf("reported up although lo refused it: %+v", a.state())
+	}
+	lo.mu.Lock()
+	lo.failA = false
+	lo.mu.Unlock()
+	a.step()
+
+	a.cancel = func() {}
+	a.done = make(chan struct{})
+	close(a.done)
+	a.stop()
+	if lo.has(addr) {
+		t.Fatal("still on lo after stop")
+	}
+}
+
+// The address is taken off while chrony is not running or not synchronised, even with every upstream server up.
+func TestAnycastFollowsChrony(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
+	const addr = "127.0.0.9"
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
+	a.step()
+	if !lo.has(addr) {
+		t.Fatalf("not announced while chrony serves: %+v", a.state())
+	}
+	chronyServingFn = func() bool { return false }
+	a.step()
+	if lo.has(addr) || !strings.Contains(a.state()[0].Reason, "chrony") {
+		t.Fatalf("still announced with chrony down: %+v", a.state())
+	}
+	chronyServingFn = func() bool { return true }
+	a.step()
+	if !lo.has(addr) {
+		t.Fatal("not announced again when chrony came back")
+	}
+}
+
+// The supervisor holds the addresses with the gateway and drops them when it stops.
+func TestSupervisorHoldsAnycastWithGateway(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	g := defaultGroup()
+	g.Interface = "ntpdirnone0"
+	d := testNTPCfg(up.addr)
+	d.ListenPort = freeUDPPort(t)
+	g.NTP, g.ExtraVIPs = &d, []string{"127.0.0.9"}
+	dc := newDaemonConfig()
+	dc.Groups = []GroupConfig{g}
+	s := NewSupervisor(context.Background(), dc)
+	t.Cleanup(s.StopAll)
+	s.refreshPool(dc, true)
+	s.mu.Lock()
+	s.startGroupLocked(dc.Groups[0])
+	s.mu.Unlock()
+	if !lo.has("127.0.0.9") {
+		t.Fatalf("not held after the gateway started: %+v", s.AnycastStates(1))
+	}
+	s.mu.Lock()
+	s.stopGroupLocked(1)
+	s.mu.Unlock()
+	if lo.has("127.0.0.9") || s.AnycastStates(1) != nil {
+		t.Fatal("still held after the gateway stopped")
+	}
+	// a paused gateway holds nothing
+	g.Paused = true
+	s.mu.Lock()
+	s.startGroupLocked(g)
+	s.mu.Unlock()
+	if lo.has("127.0.0.9") {
+		t.Fatal("a paused gateway holds its anycast address")
+	}
+}
+
+// Editing the list through a reload changes the addresses in place: no restart
+// of the gateway, the new address appears, the removed one goes.
+func TestReloadChangesAnycastInPlace(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	g := defaultGroup()
+	g.Interface = "ntpdirnone0"
+	d := testNTPCfg(up.addr)
+	d.ListenPort = freeUDPPort(t)
+	g.NTP, g.ExtraVIPs = &d, []string{"127.0.0.9"}
+	dc := newDaemonConfig()
+	dc.Groups = []GroupConfig{g}
+	s := NewSupervisor(context.Background(), dc)
+	t.Cleanup(s.StopAll)
+	s.refreshPool(dc, true)
+	s.mu.Lock()
+	s.startGroupLocked(dc.Groups[0])
+	s.mu.Unlock()
+	eng := s.engineList()
+	nu := newDaemonConfig()
+	g2 := g
+	g2.ExtraVIPs = []string{"127.0.0.10"}
+	nu.Groups = []GroupConfig{g2}
+	s.Reload(nu)
+	if lo.has("127.0.0.9") || !lo.has("127.0.0.10") {
+		t.Fatalf("addresses not swapped: %v", lo.on)
+	}
+	now := s.engineList()
+	if len(now) != len(eng) || (len(eng) > 0 && now[0] != eng[0]) {
+		t.Fatal("the gateway was restarted by an anycast change")
+	}
 }
 
 func TestAnycastCanvasAddDel(t *testing.T) {
@@ -149,6 +326,47 @@ func TestAnycastCanvasAddDel(t *testing.T) {
 	if err := ed("del", "203.0.113.53"); err != nil || len(dc.Groups[0].ExtraVIPs) != 1 {
 		t.Fatalf("not removed: %v %v", err, dc.Groups[0].ExtraVIPs)
 	}
+}
+
+// Pausing an anycast address withdraws it (on this node, or on every node) and resuming announces it again.
+func TestAnycastPause(t *testing.T) {
+	lo := hookLo(t)
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
+	_ = freeUDPPort
+	const addr = "127.0.0.9"
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
+	scope := ""
+	a.paused = func() map[string]string {
+		if scope == "" {
+			return nil
+		}
+		return map[string]string{addr: scope}
+	}
+	a.step()
+	if !lo.has(addr) {
+		t.Fatal("not announced")
+	}
+	scope = "node"
+	a.step()
+	if lo.has(addr) || a.state()[0].Up || a.state()[0].Reason != pausedHereWhy {
+		t.Fatalf("paused on this node but announced: %+v", a.state())
+	}
+	scope = "all"
+	a.step()
+	if lo.has(addr) || a.state()[0].Reason != pausedAllWhy {
+		t.Fatalf("paused on all nodes but announced: %+v", a.state())
+	}
+	scope = ""
+	a.step()
+	if !lo.has(addr) || !a.state()[0].Up {
+		t.Fatalf("not announced after resume: %+v", a.state())
+	}
+	a.cancel = func() {}
+	a.done = make(chan struct{})
+	close(a.done)
+	a.stop()
 }
 
 // The canvas edit, the cluster split between "this node" and "all nodes", and what deleting an address does to its pause.
@@ -220,148 +438,62 @@ func TestAnycastPauseConfig(t *testing.T) {
 	}
 }
 
-func hookLo(t *testing.T) *fakeLo {
-	resetAnycast()
-	t.Cleanup(resetAnycast)
-	f := &fakeLo{on: map[string]bool{}}
-	oa, od := anycastAddFn, anycastDelFn
-	anycastAddFn = func(a string) bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.failA {
-			return false
-		}
-		f.on[a] = true
-		f.adds++
-		return true
-	}
-	anycastDelFn = func(a string) { f.mu.Lock(); delete(f.on, a); f.dels++; f.mu.Unlock() }
-	t.Cleanup(func() { anycastAddFn, anycastDelFn = oa, od })
-	og := anycastGateFn // these tests are not about BGP: the gate is open unless a test closes it
-	anycastGateFn = func(*BGPConfig, string) string { return "" }
-	t.Cleanup(func() { anycastGateFn = og })
-	oc := serviceUpFn
-	serviceUpFn = func() bool { return true }
-	t.Cleanup(func() { serviceUpFn = oc })
-	return f
-}
-
-// Pausing an anycast address withdraws it (on this node, or on every node) and resuming announces it again.
-func TestAnycastPause(t *testing.T) {
+// The same anycast address on two gateways: one listener, on lo while ANY of them can answer, answered from the first
+// gateway that can.
+func TestAnycastSharedByTwoGateways(t *testing.T) {
 	lo := hookLo(t)
+	f1, f2 := newFakeNTP(t), newFakeNTP(t)
+	p1, p2 := NewPool(testNTPCfg(f1.addr)), NewPool(testNTPCfg(f2.addr))
+	p1.ProbeNow(context.Background())
+	p2.ProbeNow(context.Background())
+	_ = freeUDPPort
 	const addr = "127.0.0.9"
-	a := newAnycastSet(1, []string{addr})
-	scope := ""
-	a.paused = func() map[string]string {
-		if scope == "" {
-			return nil
-		}
-		return map[string]string{addr: scope}
-	}
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p1 })
+	b := newAnycastSet(2, []string{addr}, func() *Pool { return p2 })
 	a.step()
+	b.step()
+	if !lo.has(addr) || !a.state()[0].Up || !b.state()[0].Up || a.state()[0].Carried != nil {
+		t.Fatalf("both healthy: %+v %+v", a.state(), b.state())
+	}
+	if anycastPool(addr) != p1 {
+		t.Fatal("the lowest healthy gateway answers")
+	}
+	// gateway 1 loses its NTP: the address stays, gateway 2 answers, and gateway 1 says who keeps it up
+	f1.mode.Store(2)
+	p1.ProbeNow(context.Background())
+	a.step()
+	b.step()
+	if !lo.has(addr) || !a.state()[0].Up || len(a.state()[0].Carried) != 1 || a.state()[0].Carried[0] != 2 || a.state()[0].Reason == "" {
+		t.Fatalf("one gateway down, the other up: %+v", a.state())
+	}
+	if anycastPool(addr) != p2 {
+		t.Fatal("the healthy gateway must answer")
+	}
+	// gateway 2 pauses the address too: now nobody can answer and it is withdrawn
+	b.paused = func() map[string]string { return map[string]string{addr: "node"} }
+	b.step()
+	a.step()
+	if lo.has(addr) || a.state()[0].Up || b.state()[0].Up {
+		t.Fatalf("nobody can answer but it is announced: %+v %+v", a.state(), b.state())
+	}
+	// back
+	b.paused = nil
+	b.step()
 	if !lo.has(addr) {
-		t.Fatal("not announced")
+		t.Fatal("not announced again")
 	}
-	scope = "node"
-	a.step()
-	if lo.has(addr) || a.state()[0].Up || a.state()[0].Reason != pausedHereWhy {
-		t.Fatalf("paused on this node but announced: %+v", a.state())
-	}
-	scope = "all"
-	a.step()
-	if lo.has(addr) || a.state()[0].Reason != pausedAllWhy {
-		t.Fatalf("paused on all nodes but announced: %+v", a.state())
-	}
-	scope = ""
-	a.step()
-	if !lo.has(addr) || !a.state()[0].Up {
-		t.Fatalf("not announced after resume: %+v", a.state())
-	}
-	a.cancel = func() {}
-	a.done = make(chan struct{})
+	// the gateway that carries it stops: the address goes with the last one
+	a.cancel, a.done = func() {}, make(chan struct{})
 	close(a.done)
 	a.stop()
-}
-
-// The listener stopping withdraws every address; serving again brings them back.
-func TestAnycastFollowsServiceHealth(t *testing.T) {
-	lo := hookLo(t)
-	const addr = "127.0.0.9"
-	a := newAnycastSet(1, []string{addr})
-	a.step()
 	if !lo.has(addr) {
-		t.Fatal("not announced while the service is up")
+		t.Fatal("gateway 1 stopping must not withdraw what gateway 2 still serves")
 	}
-	serviceUpFn = func() bool { return false }
-	a.step()
-	if lo.has(addr) || a.state()[0].Up || a.state()[0].Reason == "" {
-		t.Fatalf("announced while the service is down: %+v", a.state())
-	}
-	serviceUpFn = func() bool { return true }
-	a.step()
-	if !lo.has(addr) {
-		t.Fatal("not announced again once the service is back")
-	}
-}
-
-// The supervisor holds the addresses with the gateway and drops them when it stops.
-func TestSupervisorHoldsAnycastWithGateway(t *testing.T) {
-	lo := hookLo(t)
-	g := defaultGroup()
-	g.Interface = "netdirnone0"
-	g.ExtraVIPs = []string{"127.0.0.9"}
-	dc := newDaemonConfig()
-	dc.Groups = []GroupConfig{g}
-	s := NewSupervisor(context.Background(), dc)
-	t.Cleanup(s.StopAll)
-	s.mu.Lock()
-	s.startGroupLocked(dc.Groups[0])
-	s.mu.Unlock()
-	if !lo.has("127.0.0.9") {
-		t.Fatalf("not held after the gateway started: %+v", s.AnycastStates(1))
-	}
-	s.mu.Lock()
-	s.stopGroupLocked(1)
-	s.mu.Unlock()
-	if lo.has("127.0.0.9") || s.AnycastStates(1) != nil {
-		t.Fatal("still held after the gateway stopped")
-	}
-	// a paused gateway holds nothing
-	g.Paused = true
-	s.mu.Lock()
-	s.startGroupLocked(g)
-	s.mu.Unlock()
-	if lo.has("127.0.0.9") {
-		t.Fatal("a paused gateway holds its anycast address")
-	}
-}
-
-// Editing the list through a reload changes the addresses in place: no restart
-// of the gateway, the new address appears, the removed one goes.
-func TestReloadChangesAnycastInPlace(t *testing.T) {
-	lo := hookLo(t)
-	g := defaultGroup()
-	g.Interface = "netdirnone0"
-	g.ExtraVIPs = []string{"127.0.0.9"}
-	dc := newDaemonConfig()
-	dc.Groups = []GroupConfig{g}
-	s := NewSupervisor(context.Background(), dc)
-	t.Cleanup(s.StopAll)
-	s.mu.Lock()
-	s.startGroupLocked(dc.Groups[0])
-	s.mu.Unlock()
-	eng := s.engineList()
-	nu := newDaemonConfig()
-	g2 := g
-	g2.ExtraVIPs = []string{"127.0.0.10"}
-	nu.Groups = []GroupConfig{g2}
-	s.Reload(nu)
-	if lo.has("127.0.0.9") || !lo.has("127.0.0.10") {
-		t.Fatalf("addresses not swapped: %v", lo.on)
-	}
-	now := s.engineList()
-	if len(now) != len(eng) || (len(eng) > 0 && now[0] != eng[0]) {
-		t.Fatal("the gateway was restarted by an anycast change")
+	b.cancel, b.done = func() {}, make(chan struct{})
+	close(b.done)
+	b.stop()
+	if lo.has(addr) {
+		t.Fatal("the last gateway stopped but the address is still announced")
 	}
 }
 
@@ -370,6 +502,9 @@ func TestReloadChangesAnycastInPlace(t *testing.T) {
 func TestAnycastDownWithoutEstablishedBGP(t *testing.T) {
 	lo := hookLo(t)
 	anycastGateFn = anycastBGPGate
+	up := newFakeNTP(t)
+	p := NewPool(testNTPCfg(up.addr))
+	p.ProbeNow(context.Background())
 	oldDir, oldBGP := frrDir, vtyshBGP
 	frrDir = t.TempDir()
 	t.Cleanup(func() { frrDir, vtyshBGP = oldDir, oldBGP; bgpLive.at = time.Time{} })
@@ -379,7 +514,7 @@ func TestAnycastDownWithoutEstablishedBGP(t *testing.T) {
 	}
 	const addr = "127.0.0.9"
 	var cfg *BGPConfig
-	a := newAnycastSet(1, []string{addr})
+	a := newAnycastSet(1, []string{addr}, func() *Pool { return p })
 	a.bgp = func() (*BGPConfig, bool) { return cfg, true }
 	step := func() { bgpLive.at = time.Time{}; a.step() }
 	step()

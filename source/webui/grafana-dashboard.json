@@ -1,6 +1,6 @@
 {
- "title": "netdir \u2014 overview",
- "uid": "netdir-overview",
+ "title": "ntpdir \u2014 overview",
+ "uid": "ntpdir-overview",
  "schemaVersion": 39,
  "version": 1,
  "editable": true,
@@ -10,7 +10,7 @@
   "to": "now"
  },
  "tags": [
-  "netdir"
+  "ntpdir"
  ],
  "templating": {
   "list": [
@@ -30,7 +30,7 @@
      "uid": "${datasource}"
     },
     "query": {
-     "query": "label_values(netdir_info, instance)",
+     "query": "label_values(ntpdir_info, instance)",
      "refId": "q"
     },
     "refresh": 2,
@@ -58,7 +58,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(netdir_alerts_active{instance=~\"$instance\"})",
+     "expr": "sum(ntpdir_alerts_active{instance=~\"$instance\"})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -101,7 +101,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (severity) (netdir_alerts_active{instance=~\"$instance\"})",
+     "expr": "sum by (severity) (ntpdir_alerts_active{instance=~\"$instance\"})",
      "legendFormat": "{{severity}}",
      "datasource": {
       "type": "prometheus",
@@ -138,7 +138,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "min(netdir_chrony_synchronised{instance=~\"$instance\"})",
+     "expr": "min(ntpdir_chrony_synchronised{instance=~\"$instance\"})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -196,7 +196,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "max(abs(netdir_chrony_offset_ms{instance=~\"$instance\"}))",
+     "expr": "max(abs(ntpdir_chrony_offset_ms{instance=~\"$instance\"}))",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -239,7 +239,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "max(netdir_chrony_stratum{instance=~\"$instance\"})",
+     "expr": "max(ntpdir_chrony_stratum{instance=~\"$instance\"})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -282,7 +282,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "count(netdir_upstream_healthy{instance=~\"$instance\"} == 0) or vector(0)",
+     "expr": "count(ntpdir_upstream_healthy{instance=~\"$instance\"} == 0) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -325,7 +325,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_chrony_offset_ms{instance=~\"$instance\"}",
+     "expr": "ntpdir_chrony_offset_ms{instance=~\"$instance\"}",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -362,7 +362,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_chrony_stratum{instance=~\"$instance\"}",
+     "expr": "ntpdir_chrony_stratum{instance=~\"$instance\"}",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -399,7 +399,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (instance) (rate(netdir_ntp_requests_total{instance=~\"$instance\"}[5m]))",
+     "expr": "sum by (instance) (rate(ntpdir_ntp_requests_total{instance=~\"$instance\"}[5m]))",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -436,7 +436,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (instance) (rate(netdir_ntp_requests_dropped_total{instance=~\"$instance\"}[5m]))",
+     "expr": "sum by (instance) (rate(ntpdir_ntp_requests_dropped_total{instance=~\"$instance\"}[5m]))",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -473,7 +473,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_chrony_source_reach{instance=~\"$instance\"}",
+     "expr": "ntpdir_chrony_source_reach{instance=~\"$instance\"}",
      "legendFormat": "{{instance}} {{source}}",
      "datasource": {
       "type": "prometheus",
@@ -512,7 +512,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_chrony_source_selected{instance=~\"$instance\"}",
+     "expr": "ntpdir_chrony_source_selected{instance=~\"$instance\"}",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -547,7 +547,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_upstream_offset_ms{instance=~\"$instance\"}",
+     "expr": "ntpdir_upstream_offset_ms{instance=~\"$instance\"}",
      "legendFormat": "{{instance}} {{server}}",
      "datasource": {
       "type": "prometheus",
@@ -584,7 +584,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_upstream_latency_ms{instance=~\"$instance\"}",
+     "expr": "ntpdir_upstream_latency_ms{instance=~\"$instance\"}",
      "legendFormat": "{{instance}} {{server}}",
      "datasource": {
       "type": "prometheus",
@@ -621,7 +621,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_upstream_healthy{instance=~\"$instance\"}",
+     "expr": "ntpdir_upstream_healthy{instance=~\"$instance\"}",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -656,7 +656,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_gateway_active{instance=~\"$instance\"}",
+     "expr": "ntpdir_gateway_active{instance=~\"$instance\"}",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -691,7 +691,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_certificate_expires_in_seconds{instance=~\"$instance\"} / 86400",
+     "expr": "ntpdir_certificate_expires_in_seconds{instance=~\"$instance\"} / 86400",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -726,7 +726,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_host_cpu_percent{instance=~\"$instance\"}",
+     "expr": "ntpdir_host_cpu_percent{instance=~\"$instance\"}",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -765,7 +765,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_host_memory_used_bytes{instance=~\"$instance\"} / netdir_host_memory_total_bytes{instance=~\"$instance\"}",
+     "expr": "ntpdir_host_memory_used_bytes{instance=~\"$instance\"} / ntpdir_host_memory_total_bytes{instance=~\"$instance\"}",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -804,7 +804,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_host_load{minutes=\"1\",instance=~\"$instance\"}",
+     "expr": "ntpdir_host_load{minutes=\"1\",instance=~\"$instance\"}",
      "legendFormat": "{{instance}}",
      "datasource": {
       "type": "prometheus",
@@ -841,7 +841,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "netdir_host_filesystem_used_percent{instance=~\"$instance\"}",
+     "expr": "ntpdir_host_filesystem_used_percent{instance=~\"$instance\"}",
      "legendFormat": "{{instance}} {{mount}}",
      "datasource": {
       "type": "prometheus",
@@ -880,7 +880,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (instance) (netdir_host_interface_receive_bits_per_second{instance=~\"$instance\"})",
+     "expr": "sum by (instance) (ntpdir_host_interface_receive_bits_per_second{instance=~\"$instance\"})",
      "legendFormat": "{{instance}} in",
      "datasource": {
       "type": "prometheus",
@@ -889,7 +889,7 @@
     },
     {
      "refId": "B",
-     "expr": "sum by (instance) (netdir_host_interface_transmit_bits_per_second{instance=~\"$instance\"})",
+     "expr": "sum by (instance) (ntpdir_host_interface_transmit_bits_per_second{instance=~\"$instance\"})",
      "legendFormat": "{{instance}} out",
      "datasource": {
       "type": "prometheus",

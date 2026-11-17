@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net"
 	"reflect"
 	"testing"
@@ -37,18 +38,18 @@ func TestAddrListAndUniqueLocalAddresses(t *testing.T) {
 
 func TestNodeNamesByIP(t *testing.T) {
 	peers := []PeerView{
-		{Addr: "ns1:22162", Hostname: "ns1", Self: true, GwIPs: []string{"192.168.5.5", "fe80::be24:11ff:fe3d:2dd8"}, IPs: []string{"192.168.5.5", "fdf5:168:5::5"}},
-		{Addr: "ns2:22162", Hostname: "ns2", GwIPs: []string{"192.168.5.55", "fe80::be24:11ff:fe3d:2dd9"}, IPs: []string{"192.168.5.55"}},
-		{Addr: "ns3:22162", Hostname: "ns3", IPs: []string{"192.168.5.12", "fdf5:168:5::12"}}, // a node that does not report its gateway addresses yet
-		{Addr: "10.9.9.1:22162", Hostname: "twin", GwIPs: []string{"10.9.9.1"}},
-		{Addr: "10.9.9.2:22162", Hostname: "twin", GwIPs: []string{"10.9.9.2"}},
+		{Addr: "ns1:12381", Hostname: "ns1", Self: true, GwIPs: []string{"192.168.5.5", "fe80::be24:11ff:fe3d:2dd8"}, IPs: []string{"192.168.5.5", "fdf5:168:5::5"}},
+		{Addr: "ns2:12381", Hostname: "ns2", GwIPs: []string{"192.168.5.55", "fe80::be24:11ff:fe3d:2dd9"}, IPs: []string{"192.168.5.55"}},
+		{Addr: "ns3:12381", Hostname: "ns3", IPs: []string{"192.168.5.12", "fdf5:168:5::12"}}, // a node that does not report its gateway addresses yet
+		{Addr: "10.9.9.1:12381", Hostname: "twin", GwIPs: []string{"10.9.9.1"}},
+		{Addr: "10.9.9.2:12381", Hostname: "twin", GwIPs: []string{"10.9.9.2"}},
 	}
 	n := nodeNamesByIP(peers)
 	for ip, want := range map[string]string{
 		"192.168.5.5": "ns1", "fe80::be24:11ff:fe3d:2dd8": "ns1", "fdf5:168:5::5": "ns1",
 		"192.168.5.55": "ns2", "fe80::be24:11ff:fe3d:2dd9": "ns2",
 		"192.168.5.12": "ns3", "fdf5:168:5::12": "ns3", // from its interface addresses
-		"10.9.9.1": "10.9.9.1:22162", "10.9.9.2": "10.9.9.2:22162", // one host name on two nodes: told apart by address
+		"10.9.9.1": "10.9.9.1:12381", "10.9.9.2": "10.9.9.2:12381", // one host name on two nodes: told apart by address
 	} {
 		if n[ip] != want {
 			t.Errorf("%s: %q, want %q", ip, n[ip], want)
@@ -94,5 +95,44 @@ func TestPeersReportTheirAddresses(t *testing.T) {
 	names := nodeNamesByIP(v.Peers)
 	if names["10.1.1.2"] == "" || names["10.1.1.2"] != names["fe80::2"] || names["10.1.1.1"] == names["10.1.1.2"] {
 		t.Fatalf("names %v", names)
+	}
+}
+
+// The NTP page's servers carry the names given on the Topology page, for the shared pool and for a gateway's own.
+func TestNTPStatusServersCarryTheirNames(t *testing.T) {
+	shared, own := newFakeNTP(t), newFakeNTP(t)
+	sc, oc := testNTPCfg(shared.addr), testNTPCfg(own.addr)
+	sc.ServerNames = map[string]string{shared.addr: "shared-ns"}
+	oc.ServerNames = map[string]string{own.addr: "own-ns"}
+	mk := func(id int, vip string, d *NTPConfig) GroupConfig {
+		g := defaultGroup()
+		g.GroupID, g.VIP4, g.NTP = id, vip, d
+		return g
+	}
+	dc := newDaemonConfig()
+	dc.NTP = sc
+	dc.Groups = []GroupConfig{mk(1, "10.1.0.1/24", &oc), mk(2, "10.2.0.1/24", nil)}
+	if err := dc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSupervisor(context.Background(), dc)
+	s.refreshPool(dc, true)
+	t.Cleanup(func() { s.StopAll() })
+	st := NewStatusServer("", s)
+	res := st.ntpStatus()
+	pools := res["data"].(map[string]any)["pools"].([]map[string]any)
+	got := map[int]string{}
+	for _, p := range pools {
+		for _, sv := range p["servers"].([]ServerStat) {
+			got[p["key"].(int)] = sv.Name
+		}
+	}
+	if got[0] != "shared-ns" || got[1] != "own-ns" {
+		t.Fatalf("names by pool: %v", got)
+	}
+	// a server without a name has none
+	sc.ServerNames = nil
+	if n := s.serverNames(0)[shared.addr]; n != "shared-ns" {
+		t.Fatalf("the running configuration still names it: %q", n)
 	}
 }

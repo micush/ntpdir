@@ -72,6 +72,135 @@ func arpPkt(op uint16, sha []byte, spa string, tha []byte, tpa string) []byte {
 	return append(p, net.ParseIP(tpa).To4()...)
 }
 
+// ntpQuery is a client request; ntpReply the answer of a server at the given stratum (0 is a kiss-o'-death).
+func ntpQuery() []byte { return buildNTPRequest(0x1122334455667788) }
+
+func ntpReply(q []byte, stratum byte) []byte {
+	r := append([]byte(nil), q...)
+	r[0] = r[0]&^7 | ntpModeServer
+	r[1] = stratum
+	if stratum == 0 {
+		copy(r[12:16], "RATE")
+	} else {
+		copy(r[12:16], []byte{10, 0, 0, 1})
+	}
+	return r
+}
+
+func TestCapSummaries(t *testing.T) {
+	q := ntpQuery()
+	for name, c := range map[string]struct {
+		frame []byte
+		want  string
+	}{
+		"ntp query":       {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.20.0.205", 17, udp(53124, 123, q))), "UDP 192.0.2.1.53124 > 10.20.0.205.123, length"},
+		"ntp query text":  {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.20.0.205", 17, udp(53124, 123, q))), "NTPv4 client"},
+		"ntp reply":       {eth(macB, macA, 0x0800, ip4("10.20.0.205", "192.0.2.1", 17, udp(123, 53124, ntpReply(q, 2)))), "NTPv4 server stratum 2 ref 10.0.0.1"},
+		"ntp kod":         {eth(macB, macA, 0x0800, ip4("10.20.0.205", "192.0.2.1", 17, udp(123, 53124, ntpReply(q, 0)))), "kiss-o'-death RATE"},
+		"tcp syn":         {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 6, tcp(1234, 443, 0x02, nil))), "TCP 192.0.2.1.1234 > 10.0.0.2.443 [S]"},
+		"tcp synack":      {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 6, tcp(1234, 443, 0x12, nil))), "[S.]"},
+		"icmp echo":       {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 1, []byte{8, 0, 0, 0})), "ICMP 192.0.2.1 > 10.0.0.2: echo request"},
+		"arp request":     {eth([]byte{255, 255, 255, 255, 255, 255}, macB, 0x0806, arpPkt(1, macB, "10.20.0.1", make([]byte, 6), "10.20.0.205")), "ARP, who-has 10.20.0.205 tell 10.20.0.1 (eth 02:00:00:aa:bb:cc > ff:ff:ff:ff:ff:ff)"},
+		"arp reply":       {eth(macB, []byte{0x02, 9, 9, 9, 9, 9}, 0x0806, arpPkt(2, macA, "10.20.0.205", macB, "10.20.0.1")), "ARP, 10.20.0.205 is-at 00:1a:7c:01:02:00 (eth 02:09:09:09:09:09 > 02:00:00:aa:bb:cc)"},
+		"ipv6 udp":        {eth(macA, macB, 0x86dd, ip6("2001:db8::1", "2001:db8::2", 17, udp(1000, 123, q))), "UDP 2001:db8::1.1000 > 2001:db8::2.123"},
+		"vlan":            {eth(macA, macB, 0x8100, append([]byte{0, 5, 8, 0}, ip4("192.0.2.1", "10.0.0.2", 17, udp(1, 2, nil))...)), "UDP 192.0.2.1.1 > 10.0.0.2.2"},
+		"other ethertype": {eth(macA, macB, 0x88cc, []byte{1, 2, 3}), "ethertype 0x88cc"},
+		"short":           {[]byte{1, 2, 3}, "short frame (3 bytes)"},
+	} {
+		if got := summarizePacket(linktypeEthernet, c.frame); !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q does not contain %q", name, got, c.want)
+		}
+	}
+	// neighbour discovery, with the target's MAC
+	ns := append([]byte{135, 0, 0, 0, 0, 0, 0, 0}, net.ParseIP("2001:db8::205").To16()...)
+	if got := summarizePacket(linktypeEthernet, eth(macA, macB, 0x86dd, ip6("fe80::1", "ff02::1:ff00:205", 58, ns))); !strings.Contains(got, "neighbor solicitation, who has 2001:db8::205 (eth 02:00:00:aa:bb:cc > 00:1a:7c:01:02:00)") {
+		t.Errorf("NS: %q", got)
+	}
+	na := append(append([]byte{136, 0, 0, 0, 0x60, 0, 0, 0}, net.ParseIP("2001:db8::205").To16()...), 2, 1, 0x00, 0x1a, 0x7c, 0x01, 0x02, 0x00)
+	if got := summarizePacket(linktypeEthernet, eth(macB, macA, 0x86dd, ip6("2001:db8::205", "fe80::1", 58, na))); !strings.Contains(got, "neighbor advertisement, 2001:db8::205 is at 00:1a:7c:01:02:00") {
+		t.Errorf("NA: %q", got)
+	}
+	// a bare IP packet (an interface without a hardware address)
+	if got := summarizePacket(linktypeRaw, ip4("192.0.2.1", "10.0.0.2", 17, udp(5, 6, nil))); !strings.Contains(got, "UDP 192.0.2.1.5 > 10.0.0.2.6") {
+		t.Errorf("raw: %q", got)
+	}
+}
+
+func TestCapFilter(t *testing.T) {
+	q := ntpQuery()
+	dq := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.20.0.205", 17, udp(53124, 123, q))) // client > VIP, DNS
+	dr := eth(macB, macA, 0x0800, ip4("10.20.0.205", "192.0.2.1", 17, udp(123, 53124, q))) // VIP > client
+	web := eth(macA, macB, 0x0800, ip4("192.0.2.9", "10.0.0.2", 6, tcp(40000, 443, 0x02, nil)))
+	v6 := eth(macA, macB, 0x86dd, ip6("2001:db8::1", "2001:db8::2", 6, tcp(40000, 123, 0x02, nil)))
+	arpq := eth([]byte{255, 255, 255, 255, 255, 255}, macB, 0x0806, arpPkt(1, macB, "10.20.0.1", make([]byte, 6), "10.20.0.205"))
+	ping := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 1, []byte{8, 0, 0, 0}))
+	frames := map[string][]byte{"dq": dq, "dr": dr, "web": web, "v6": v6, "arp": arpq, "ping": ping}
+	for filter, want := range map[string]string{
+		"":                                      "dq dr web v6 arp ping",
+		"host 10.20.0.205":                      "dq dr arp", // the ARP's target address counts, as in tcpdump
+		"src host 10.20.0.205":                  "dr",
+		"dst host 10.20.0.205":                  "dq arp",
+		"net 192.0.2.0/24":                      "dq dr web ping",
+		"src net 192.0.2.0/24 and not port 123": "web ping",
+		"port 123":                              "dq dr v6",
+		"dst port 123":                          "dq v6",
+		"src port 123":                          "dr",
+		"portrange 100-130":                     "dq dr v6",
+		"ntp":                                   "dq dr v6",
+		"udp":                                   "dq dr",
+		"tcp":                                   "web v6",
+		"tcp port 123":                          "v6",
+		"udp port 123 and host 192.0.2.1":       "dq dr",
+		"ip6":                                   "v6",
+		"ip6 host 2001:db8::1":                  "v6",
+		"ip host 2001:db8::1":                   "",
+		"arp":                                   "arp",
+		"icmp":                                  "ping",
+		"host 10.20.0.205 and not arp":          "dq dr",
+		"(tcp or icmp) and host 192.0.2.9":      "web",
+		"tcp || icmp":                           "web v6 ping",
+		"! udp && ! arp":                        "web v6 ping",
+		"ether host 00:1a:7c:01:02:00":          "dq dr web v6 ping",
+		"ether src 00:1a:7c:01:02:00":           "dr",
+		"ether dst 02:00:00:aa:bb:cc":           "dr",
+		"UDP PORT NTP":                          "dq dr",
+		"port https":                            "web",
+	} {
+		f, err := compileCapFilter(filter)
+		if err != nil {
+			t.Errorf("%q: %v", filter, err)
+			continue
+		}
+		var got []string
+		for _, n := range []string{"dq", "dr", "web", "v6", "arp", "ping"} {
+			if f.match(linktypeEthernet, frames[n]) {
+				got = append(got, n)
+			}
+		}
+		if strings.Join(got, " ") != want {
+			t.Errorf("%q matches %q, want %q", filter, strings.Join(got, " "), want)
+		}
+	}
+	for _, bad := range []string{"host", "host notanip", "port abc", "port 70000", "net 10.0.0.0", "foo", "(tcp", "tcp)", "tcp and", "not", "ether host zz", "src", "portrange 5", "tcp udp"} {
+		if _, err := compileCapFilter(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	// a fragment other than the first carries no ports
+	frag := ip4("192.0.2.1", "10.0.0.2", 17, udp(1000, 123, nil))
+	binary.BigEndian.PutUint16(frag[6:], 0x00b9) // fragment offset 185
+	if f, _ := compileCapFilter("port 123"); f.match(linktypeEthernet, eth(macA, macB, 0x0800, frag)) {
+		t.Error("a later fragment matched on a port")
+	}
+	// a truncated frame never panics
+	f, _ := compileCapFilter("tcp port 123 or host 1.2.3.4 or ether host 00:00:00:00:00:00")
+	for n := 0; n <= len(v6); n++ {
+		f.match(linktypeEthernet, v6[:n])
+		summarizePacket(linktypeEthernet, v6[:n])
+		summarizePacket(linktypeEthernet, dq[:min(n, len(dq))])
+	}
+}
+
 func TestCaptureStateRingAndEpoch(t *testing.T) {
 	cs := &captureState{maxPkts: 5}
 	ep := cs.begin("eth0", "", linktypeEthernet)
@@ -120,6 +249,54 @@ func TestCaptureStateRingAndEpoch(t *testing.T) {
 	}
 }
 
+func TestPcapRoundTripAndLimit(t *testing.T) {
+	cs := &captureState{}
+	ep := cs.begin("eth0", "", linktypeEthernet)
+	t0 := time.Unix(1700000000, 123456000)
+	var frames [][]byte
+	for i := 0; i < 20; i++ {
+		f := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 17, udp(uint16(1000+i), 123, ntpQuery())))
+		frames = append(frames, f)
+		cs.add(ep, nil, t0.Add(time.Duration(i)*time.Millisecond), f)
+	}
+	var buf bytes.Buffer
+	cs.writePcap(&buf, 0)
+	lt, pkts, err := readPcap(buf.Bytes())
+	if err != nil || lt != linktypeEthernet || len(pkts) != 20 {
+		t.Fatalf("round trip: %v %d %d", err, lt, len(pkts))
+	}
+	for i, p := range pkts {
+		if !bytes.Equal(p.data, frames[i]) || !p.t.Equal(t0.Add(time.Duration(i)*time.Millisecond)) || p.origlen != len(frames[i]) {
+			t.Fatalf("packet %d differs", i)
+		}
+	}
+	// a limit keeps the newest that fit, and the file is still a whole .pcap
+	per := 16 + len(frames[0])
+	buf.Reset()
+	cs.writePcap(&buf, 24+3*per+5)
+	_, pkts, err = readPcap(buf.Bytes())
+	if err != nil || len(pkts) != 3 || !bytes.Equal(pkts[2].data, frames[19]) || !bytes.Equal(pkts[0].data, frames[17]) {
+		t.Fatalf("limit: %v %d", err, len(pkts))
+	}
+	if buf.Len() > 24+3*per+5 {
+		t.Fatalf("the limit was passed: %d", buf.Len())
+	}
+	// a file that is not a .pcap, and one cut in the middle of a record
+	if _, _, err := readPcap([]byte("nope")); err == nil {
+		t.Error("garbage read as a .pcap")
+	}
+	var full bytes.Buffer
+	cs.writePcap(&full, 0)
+	if _, p, err := readPcap(full.Bytes()[:full.Len()-10]); err != nil || len(p) != 19 {
+		t.Errorf("cut file: %v %d", err, len(p))
+	}
+	// the header is what tcpdump expects
+	h := pcapGlobalHeader(capSnaplen, linktypeEthernet)
+	if binary.LittleEndian.Uint32(h[0:]) != 0xa1b2c3d4 || binary.LittleEndian.Uint16(h[4:]) != 2 || binary.LittleEndian.Uint16(h[6:]) != 4 || binary.LittleEndian.Uint32(h[20:]) != 1 {
+		t.Errorf("header %x", h)
+	}
+}
+
 // ── a real capture (needs the socket; skipped where the sandbox does not allow it) ──
 
 func canCapture(t *testing.T) {
@@ -139,7 +316,7 @@ func sendUDP(t *testing.T, port int, n int) {
 	}
 	defer c.Close()
 	for i := 0; i < n; i++ {
-		c.Write([]byte("netdir capture test"))
+		c.Write([]byte("ntpdir capture test"))
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -542,11 +719,11 @@ func TestNodeAddrCandidatesLeaveOutSharedAddresses(t *testing.T) {
 	ifs := []ifaceAddrs{
 		{Name: "lo", Loopback: true, Addrs: []net.Addr{ipn("127.0.0.1/8"), ipn("192.168.168.168/32")}}, // the anycast address is on lo
 		{Name: "eth0", Addrs: []net.Addr{ipn("192.0.2.5/24"), ipn("2001:db8::5/64"), ipn("fe80::1/64"), ipn("192.0.2.9/24")}},
-		{Name: "netdir1.2", Addrs: []net.Addr{ipn("192.0.2.9/24"), ipn("2001:db8::9/64")}}, // the VIPs, on the virtual-MAC interface
+		{Name: "ntpdir1.2", Addrs: []net.Addr{ipn("192.0.2.9/24"), ipn("2001:db8::9/64")}}, // the VIPs, on the virtual-MAC interface
 		{Name: "eth1", Addrs: []net.Addr{ipn("198.51.100.7/24")}},
 	}
-	got := nodeAddrCandidates("192.0.2.5:22162", "ns1", ifs, map[string]bool{"192.0.2.9": true, "2001:db8::9": true, "192.168.168.168": true})
-	want := []string{"192.0.2.5:22162", "ns1:22162", "[2001:db8::5]:22162", "198.51.100.7:22162"}
+	got := nodeAddrCandidates("192.0.2.5:12381", "ns1", ifs, map[string]bool{"192.0.2.9": true, "2001:db8::9": true, "192.168.168.168": true})
+	want := []string{"192.0.2.5:12381", "ns1:12381", "[2001:db8::5]:12381", "198.51.100.7:12381"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -631,172 +808,4 @@ func TestClusterCaptureOfAGateway(t *testing.T) {
 	if _, err := e.mg.CaptureClusterStart("", "udp"+strings.Repeat(" ", capFilterMax-3), 1, 7, "t"); err == nil {
 		t.Fatal("a filter pushed over the limit by the gateway's addresses was accepted")
 	}
-}
-
-func TestCapFilter(t *testing.T) {
-	q := udpPayload()
-	dq := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.20.0.205", 17, udp(53124, 123, q))) // client > VIP, DNS
-	dr := eth(macB, macA, 0x0800, ip4("10.20.0.205", "192.0.2.1", 17, udp(123, 53124, q))) // VIP > client
-	web := eth(macA, macB, 0x0800, ip4("192.0.2.9", "10.0.0.2", 6, tcp(40000, 443, 0x02, nil)))
-	v6 := eth(macA, macB, 0x86dd, ip6("2001:db8::1", "2001:db8::2", 6, tcp(40000, 123, 0x02, nil)))
-	arpq := eth([]byte{255, 255, 255, 255, 255, 255}, macB, 0x0806, arpPkt(1, macB, "10.20.0.1", make([]byte, 6), "10.20.0.205"))
-	ping := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 1, []byte{8, 0, 0, 0}))
-	frames := map[string][]byte{"dq": dq, "dr": dr, "web": web, "v6": v6, "arp": arpq, "ping": ping}
-	for filter, want := range map[string]string{
-		"":                                      "dq dr web v6 arp ping",
-		"host 10.20.0.205":                      "dq dr arp", // the ARP's target address counts, as in tcpdump
-		"src host 10.20.0.205":                  "dr",
-		"dst host 10.20.0.205":                  "dq arp",
-		"net 192.0.2.0/24":                      "dq dr web ping",
-		"src net 192.0.2.0/24 and not port 123": "web ping",
-		"port 123":                              "dq dr v6",
-		"dst port 123":                          "dq v6",
-		"src port 123":                          "dr",
-		"portrange 100-130":                     "dq dr v6",
-		"ntp":                                   "dq dr v6",
-		"udp":                                   "dq dr",
-		"tcp":                                   "web v6",
-		"tcp port 123":                          "v6",
-		"udp port 123 and host 192.0.2.1":       "dq dr",
-		"ip6":                                   "v6",
-		"ip6 host 2001:db8::1":                  "v6",
-		"ip host 2001:db8::1":                   "",
-		"arp":                                   "arp",
-		"icmp":                                  "ping",
-		"host 10.20.0.205 and not arp":          "dq dr",
-		"(tcp or icmp) and host 192.0.2.9":      "web",
-		"tcp || icmp":                           "web v6 ping",
-		"! udp && ! arp":                        "web v6 ping",
-		"ether host 00:1a:7c:01:02:00":          "dq dr web v6 ping",
-		"ether src 00:1a:7c:01:02:00":           "dr",
-		"ether dst 02:00:00:aa:bb:cc":           "dr",
-		"UDP PORT NTP":                          "dq dr",
-		"port https":                            "web",
-	} {
-		f, err := compileCapFilter(filter)
-		if err != nil {
-			t.Errorf("%q: %v", filter, err)
-			continue
-		}
-		var got []string
-		for _, n := range []string{"dq", "dr", "web", "v6", "arp", "ping"} {
-			if f.match(linktypeEthernet, frames[n]) {
-				got = append(got, n)
-			}
-		}
-		if strings.Join(got, " ") != want {
-			t.Errorf("%q matches %q, want %q", filter, strings.Join(got, " "), want)
-		}
-	}
-	for _, bad := range []string{"host", "host notanip", "port abc", "port 70000", "net 10.0.0.0", "foo", "(tcp", "tcp)", "tcp and", "not", "ether host zz", "src", "portrange 5", "tcp udp"} {
-		if _, err := compileCapFilter(bad); err == nil {
-			t.Errorf("%q was accepted", bad)
-		}
-	}
-	// a fragment other than the first carries no ports
-	frag := ip4("192.0.2.1", "10.0.0.2", 17, udp(1000, 123, nil))
-	binary.BigEndian.PutUint16(frag[6:], 0x00b9) // fragment offset 185
-	if f, _ := compileCapFilter("port 123"); f.match(linktypeEthernet, eth(macA, macB, 0x0800, frag)) {
-		t.Error("a later fragment matched on a port")
-	}
-	// a truncated frame never panics
-	f, _ := compileCapFilter("tcp port 123 or host 1.2.3.4 or ether host 00:00:00:00:00:00")
-	for n := 0; n <= len(v6); n++ {
-		f.match(linktypeEthernet, v6[:n])
-		summarizePacket(linktypeEthernet, v6[:n])
-		summarizePacket(linktypeEthernet, dq[:min(n, len(dq))])
-	}
-}
-
-func TestCapSummaries(t *testing.T) {
-	q := udpPayload()
-	for name, c := range map[string]struct {
-		frame []byte
-		want  string
-	}{
-		"udp datagram":    {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.20.0.205", 17, udp(53124, 123, q))), "UDP 192.0.2.1.53124 > 10.20.0.205.123, length"},
-		"tcp syn":         {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 6, tcp(1234, 443, 0x02, nil))), "TCP 192.0.2.1.1234 > 10.0.0.2.443 [S]"},
-		"tcp synack":      {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 6, tcp(1234, 443, 0x12, nil))), "[S.]"},
-		"icmp echo":       {eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 1, []byte{8, 0, 0, 0})), "ICMP 192.0.2.1 > 10.0.0.2: echo request"},
-		"arp request":     {eth([]byte{255, 255, 255, 255, 255, 255}, macB, 0x0806, arpPkt(1, macB, "10.20.0.1", make([]byte, 6), "10.20.0.205")), "ARP, who-has 10.20.0.205 tell 10.20.0.1 (eth 02:00:00:aa:bb:cc > ff:ff:ff:ff:ff:ff)"},
-		"arp reply":       {eth(macB, []byte{0x02, 9, 9, 9, 9, 9}, 0x0806, arpPkt(2, macA, "10.20.0.205", macB, "10.20.0.1")), "ARP, 10.20.0.205 is-at 00:1a:7c:01:02:00 (eth 02:09:09:09:09:09 > 02:00:00:aa:bb:cc)"},
-		"ipv6 udp":        {eth(macA, macB, 0x86dd, ip6("2001:db8::1", "2001:db8::2", 17, udp(1000, 123, q))), "UDP 2001:db8::1.1000 > 2001:db8::2.123"},
-		"vlan":            {eth(macA, macB, 0x8100, append([]byte{0, 5, 8, 0}, ip4("192.0.2.1", "10.0.0.2", 17, udp(1, 2, nil))...)), "UDP 192.0.2.1.1 > 10.0.0.2.2"},
-		"other ethertype": {eth(macA, macB, 0x88cc, []byte{1, 2, 3}), "ethertype 0x88cc"},
-		"short":           {[]byte{1, 2, 3}, "short frame (3 bytes)"},
-	} {
-		if got := summarizePacket(linktypeEthernet, c.frame); !strings.Contains(got, c.want) {
-			t.Errorf("%s: %q does not contain %q", name, got, c.want)
-		}
-	}
-	// neighbour discovery, with the target's MAC
-	ns := append([]byte{135, 0, 0, 0, 0, 0, 0, 0}, net.ParseIP("2001:db8::205").To16()...)
-	if got := summarizePacket(linktypeEthernet, eth(macA, macB, 0x86dd, ip6("fe80::1", "ff02::1:ff00:205", 58, ns))); !strings.Contains(got, "neighbor solicitation, who has 2001:db8::205 (eth 02:00:00:aa:bb:cc > 00:1a:7c:01:02:00)") {
-		t.Errorf("NS: %q", got)
-	}
-	na := append(append([]byte{136, 0, 0, 0, 0x60, 0, 0, 0}, net.ParseIP("2001:db8::205").To16()...), 2, 1, 0x00, 0x1a, 0x7c, 0x01, 0x02, 0x00)
-	if got := summarizePacket(linktypeEthernet, eth(macB, macA, 0x86dd, ip6("2001:db8::205", "fe80::1", 58, na))); !strings.Contains(got, "neighbor advertisement, 2001:db8::205 is at 00:1a:7c:01:02:00") {
-		t.Errorf("NA: %q", got)
-	}
-	// a bare IP packet (an interface without a hardware address)
-	if got := summarizePacket(linktypeRaw, ip4("192.0.2.1", "10.0.0.2", 17, udp(5, 6, nil))); !strings.Contains(got, "UDP 192.0.2.1.5 > 10.0.0.2.6") {
-		t.Errorf("raw: %q", got)
-	}
-}
-
-func TestPcapRoundTripAndLimit(t *testing.T) {
-	cs := &captureState{}
-	ep := cs.begin("eth0", "", linktypeEthernet)
-	t0 := time.Unix(1700000000, 123456000)
-	var frames [][]byte
-	for i := 0; i < 20; i++ {
-		f := eth(macA, macB, 0x0800, ip4("192.0.2.1", "10.0.0.2", 17, udp(uint16(1000+i), 123, udpPayload())))
-		frames = append(frames, f)
-		cs.add(ep, nil, t0.Add(time.Duration(i)*time.Millisecond), f)
-	}
-	var buf bytes.Buffer
-	cs.writePcap(&buf, 0)
-	lt, pkts, err := readPcap(buf.Bytes())
-	if err != nil || lt != linktypeEthernet || len(pkts) != 20 {
-		t.Fatalf("round trip: %v %d %d", err, lt, len(pkts))
-	}
-	for i, p := range pkts {
-		if !bytes.Equal(p.data, frames[i]) || !p.t.Equal(t0.Add(time.Duration(i)*time.Millisecond)) || p.origlen != len(frames[i]) {
-			t.Fatalf("packet %d differs", i)
-		}
-	}
-	// a limit keeps the newest that fit, and the file is still a whole .pcap
-	per := 16 + len(frames[0])
-	buf.Reset()
-	cs.writePcap(&buf, 24+3*per+5)
-	_, pkts, err = readPcap(buf.Bytes())
-	if err != nil || len(pkts) != 3 || !bytes.Equal(pkts[2].data, frames[19]) || !bytes.Equal(pkts[0].data, frames[17]) {
-		t.Fatalf("limit: %v %d", err, len(pkts))
-	}
-	if buf.Len() > 24+3*per+5 {
-		t.Fatalf("the limit was passed: %d", buf.Len())
-	}
-	// a file that is not a .pcap, and one cut in the middle of a record
-	if _, _, err := readPcap([]byte("nope")); err == nil {
-		t.Error("garbage read as a .pcap")
-	}
-	var full bytes.Buffer
-	cs.writePcap(&full, 0)
-	if _, p, err := readPcap(full.Bytes()[:full.Len()-10]); err != nil || len(p) != 19 {
-		t.Errorf("cut file: %v %d", err, len(p))
-	}
-	// the header is what tcpdump expects
-	h := pcapGlobalHeader(capSnaplen, linktypeEthernet)
-	if binary.LittleEndian.Uint32(h[0:]) != 0xa1b2c3d4 || binary.LittleEndian.Uint16(h[4:]) != 2 || binary.LittleEndian.Uint16(h[6:]) != 4 || binary.LittleEndian.Uint32(h[20:]) != 1 {
-		t.Errorf("header %x", h)
-	}
-}
-
-// udpPayload is 48 bytes of UDP payload for the packet tests.
-func udpPayload() []byte {
-	b := make([]byte, 48)
-	for i := range b {
-		b[i] = byte(i)
-	}
-	return b
 }

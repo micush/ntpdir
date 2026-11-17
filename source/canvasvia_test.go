@@ -1,10 +1,8 @@
 package main
 
 import (
-	"context"
-	"sync"
+	"encoding/json"
 	"testing"
-	"time"
 )
 
 func viaNodes(self string, others ...CanvasNode) []CanvasNode {
@@ -38,6 +36,18 @@ func TestServingPeersAreAskedOnlyWhenThisNodeDoesNotServe(t *testing.T) {
 	}
 }
 
+func TestTakeFromKeepsThisNodesOwnEntry(t *testing.T) {
+	mine := CanvasGateway{GroupID: 1, Name: "x", Status: "idle", Detail: "not running here", Nodes: viaNodes("notserving"), Servers: []CanvasServer{}, Paused: true, NodePaused: true}
+	theirs := CanvasGateway{GroupID: 1, Status: "ok", Detail: "running and answering", Servers: []CanvasServer{{Addr: "192.0.2.1:123", Status: "ok"}}, Families: []CanvasFamily{{AF: "v4", Status: "ok"}}}
+	mine.takeFrom(theirs, peer("2", "ok"))
+	if mine.Status != "ok" || mine.Detail != "running and answering" || len(mine.Servers) != 1 || len(mine.Families) != 1 {
+		t.Fatalf("not taken: %+v", mine)
+	}
+	if mine.Via != "2" || mine.ViaAddr != "10.0.0.2:1" || len(mine.Nodes) != 1 || mine.Name != "x" || !mine.Paused {
+		t.Fatalf("this node's own part changed: %+v", mine)
+	}
+}
+
 // A gateway this node does not run is added from a serving node's answer, nobody starred, in group order.
 func TestTakeGatewayRowsAddsTheOtherGroupsWithoutStars(t *testing.T) {
 	mine := []GatewayGroup{{GroupID: 2, AF: "v4", Members: []GatewayMember{{IP: "10.2.0.1", Local: true}}}}
@@ -65,6 +75,40 @@ func TestTakeGatewayRowsAddsTheOtherGroupsWithoutStars(t *testing.T) {
 	}
 }
 
+func TestAddNTPPoolsTakesTheOtherGatewaysPool(t *testing.T) {
+	resp := map[string]any{"ok": true, "data": map[string]any{
+		"pools":     []map[string]any{{"key": 2, "groups": []int{2}}},
+		"listeners": []string{"group 2 10.2.0.1:123"},
+		"servers":   "x",
+	}}
+	var from ntpAnswer
+	if err := json.Unmarshal([]byte(`{"data":{"pools":[{"key":1,"groups":[1],"servers":[]},{"key":2,"groups":[2]}],"listeners":["group 1 10.1.0.1:123","group 2 10.2.0.9:123"]}}`), &from); err != nil {
+		t.Fatal(err)
+	}
+	if addNTPPools(resp, from, 3) {
+		t.Fatal("a group nobody has was found")
+	}
+	if !addNTPPools(resp, from, 1) {
+		t.Fatal("group 1 not found")
+	}
+	d := resp["data"].(map[string]any)
+	pools := d["pools"].([]map[string]any)
+	if len(pools) != 2 || pools[0]["key"].(float64) != 1 || pools[1]["key"].(int) != 2 {
+		t.Fatalf("wrong pools or order: %+v", pools)
+	}
+	if ls := d["listeners"].([]string); len(ls) != 2 || ls[1] != "group 1 10.1.0.1:123" {
+		t.Fatalf("listeners: %v", ls)
+	}
+	if !addNTPPools(resp, from, 2) || len(d["pools"].([]map[string]any)) != 2 {
+		t.Fatal("a pool this node has was added again")
+	}
+	// a node with no pool at all gets a whole answer
+	none := map[string]any{"ok": false, "error": "no gateway"}
+	if !addNTPPools(none, from, 1) || none["ok"] != true || none["error"] != nil || len(none["data"].(map[string]any)["pools"].([]map[string]any)) != 1 {
+		t.Fatalf("empty node: %+v", none)
+	}
+}
+
 // The serving node's own member is "local" to it; borrowed by a paused node it must not read as this node,
 // or the controller mark lands on the node the page is open on.
 func TestTakeFromClearsLocalOnMembers(t *testing.T) {
@@ -78,68 +122,5 @@ func TestTakeFromClearsLocalOnMembers(t *testing.T) {
 	}
 	if !mine.Members[0].AGC || !theirs.Members[0].Local || !mine.Members[0].ViaLocal || mine.Members[1].ViaLocal {
 		t.Errorf("the controller flag must stay, and the serving node's own copy must not change: %+v %+v", mine.Members, theirs.Members)
-	}
-}
-
-func TestTakeFromKeepsThisNodesOwnEntry(t *testing.T) {
-	mine := CanvasGateway{GroupID: 1, Name: "x", Status: "idle", Detail: "not running here", Nodes: viaNodes("notserving"), Paused: true, NodePaused: true}
-	theirs := CanvasGateway{GroupID: 1, Status: "ok", Detail: "running and answering", Anycast: []AnycastState{{Addr: "192.0.2.1", Up: true}}, Families: []CanvasFamily{{AF: "v4", Status: "ok"}}}
-	mine.takeFrom(theirs, peer("2", "ok"))
-	if mine.Status != "ok" || mine.Detail != "running and answering" || len(mine.Anycast) != 1 || len(mine.Families) != 1 {
-		t.Fatalf("not taken: %+v", mine)
-	}
-	if mine.Via != "2" || mine.ViaAddr != "10.0.0.2:1" || len(mine.Nodes) != 1 || mine.Name != "x" || !mine.Paused {
-		t.Fatalf("this node's own part changed: %+v", mine)
-	}
-}
-
-// A node that does not answer is waited for once (the first look), then never again: it used to cost the page 2 s on every poll.
-func TestPeerCanvasOfDoesNotWaitForADeadNodeTwice(t *testing.T) {
-	peerCanvasMu.Lock()
-	peerCanvases = map[string]*peerCanvas{}
-	peerCanvasMu.Unlock()
-	oldAsk, oldWait := askPeerCanvas, viaColdWait
-	viaColdWait = 300 * time.Millisecond
-	asks := 0
-	var mu sync.Mutex
-	askPeerCanvas = func(*StatusServer, context.Context, string) ([]CanvasGateway, bool) {
-		mu.Lock()
-		asks++
-		mu.Unlock()
-		time.Sleep(600 * time.Millisecond) // slower than anyone waits
-		return nil, false
-	}
-	t.Cleanup(func() { askPeerCanvas, viaColdWait = oldAsk, oldWait })
-	s := &StatusServer{}
-	n := CanvasNode{Addr: "10.9.9.9:1"}
-	t0 := time.Now()
-	if d := s.peerCanvasOf(n); d != nil {
-		t.Fatalf("got %v from a node that did not answer", d)
-	}
-	if took := time.Since(t0); took < 250*time.Millisecond || took > 550*time.Millisecond {
-		t.Fatalf("the first ask waited %s, want about the cold wait", took)
-	}
-	time.Sleep(450 * time.Millisecond) // the background ask has ended (failed)
-	for i := 0; i < 5; i++ {
-		t0 = time.Now()
-		s.peerCanvasOf(n)
-		if took := time.Since(t0); took > 100*time.Millisecond {
-			t.Fatalf("ask %d waited %s for a node already known not to answer", i+2, took)
-		}
-	}
-	time.Sleep(peerCanvasFor) // the retry window has passed: the next ask starts a new background fetch, and still does not wait for it
-	t0 = time.Now()
-	s.peerCanvasOf(n)
-	if took := time.Since(t0); took > 100*time.Millisecond {
-		t.Fatalf("a retry of a dead node held the request %s", took)
-	}
-	for i := 0; i < 100; i++ { // the retry's background ask has started (it reads the stubs): only then are they put back
-		mu.Lock()
-		n := asks
-		mu.Unlock()
-		if n >= 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

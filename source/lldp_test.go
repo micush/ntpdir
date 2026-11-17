@@ -58,7 +58,7 @@ func TestApplyLLDPFollowsTheSetting(t *testing.T) {
 	if d := f.did(); d != "enable --now lldpd" || !fileExists(lldpOwnPath()) {
 		t.Fatalf("on: %q, file %v", d, fileExists(lldpOwnPath()))
 	}
-	if b, _ := os.ReadFile(lldpOwnPath()); !strings.HasPrefix(string(b), "# Managed by netdir (Configure") {
+	if b, _ := os.ReadFile(lldpOwnPath()); !strings.HasPrefix(string(b), "# Managed by ntpdir (Configure") {
 		t.Fatalf("file: %q", b)
 	}
 	applyLLDP(true)
@@ -76,7 +76,7 @@ func TestApplyLLDPFollowsTheSetting(t *testing.T) {
 	if d := f.did(); d != "disable --now lldpd" || fileExists(lldpOwnPath()) {
 		t.Fatalf("off: %q", d)
 	}
-	// started behind netdir's back (a package that starts it on install, or by hand): stopped again
+	// started behind ntpdir's back (a package that starts it on install, or by hand): stopped again
 	f.active = true
 	applyLLDP(false)
 	if d := f.did(); d != "disable --now lldpd" || f.active {
@@ -101,7 +101,7 @@ func TestApplyLLDPDefersToDnsdir(t *testing.T) {
 	f := newLLDPFake(t)
 	applyLLDP(true)
 	f.did()
-	// dnsdir installed: netdir drops its file and touches lldpd no more, whatever either setting says
+	// dnsdir installed: ntpdir drops its file and touches lldpd no more, whatever either setting says
 	f.deferred = true
 	applyLLDP(true)
 	if d := f.did(); d != "" || fileExists(lldpOwnPath()) || !f.active {
@@ -114,7 +114,7 @@ func TestApplyLLDPDefersToDnsdir(t *testing.T) {
 	if d := f.did(); d != "" || !f.active {
 		t.Fatalf("deferred: %q", d)
 	}
-	// dnsdir removed: netdir decides again
+	// dnsdir removed: ntpdir decides again
 	f.deferred = false
 	applyLLDP(false)
 	if d := f.did(); d != "disable --now lldpd" {
@@ -159,12 +159,12 @@ func TestParseLLDPJSON0(t *testing.T) {
 func TestLLDPStatusAndText(t *testing.T) {
 	f := newLLDPFake(t)
 	f.cli, _ = os.ReadFile("testdata/lldp_neighbors_json0.json")
-	if st := lldpStatus(false); st.Running || st.ManagedBy != "netdir" || len(st.Neighbors) != 0 || st.Neighbors == nil {
+	if st := lldpStatus(false); st.Running || st.ManagedBy != "ntpdir" || len(st.Neighbors) != 0 || st.Neighbors == nil {
 		t.Fatalf("stopped: %+v", st)
 	}
 	applyLLDP(true)
 	st := lldpStatus(true)
-	if st.ManagedBy != "netdir" || !st.Running || len(st.Neighbors) != 2 {
+	if st.ManagedBy != "ntpdir" || !st.Running || len(st.Neighbors) != 2 {
 		t.Fatalf("on: %+v", st)
 	}
 	if txt := lldpStatusText(st); !strings.Contains(txt, "lldpd on this node: running") || !strings.Contains(txt, "GigabitEthernet1/0/7 (") || !strings.Contains(txt, "5 (untagged), 20") {
@@ -188,7 +188,7 @@ func TestLLDPSettingSharedAndOmittedWhenOff(t *testing.T) {
 		t.Fatalf("off is written: %s", b)
 	}
 	dc := newDaemonConfig()
-	dc.Settings.LLDP = true
+	dc.NTP.LLDP = true
 	b, _ = json.Marshal(sharedOf(dc))
 	if !strings.Contains(string(b), `"lldp":true`) {
 		t.Fatalf("on is not shared: %s", b)
@@ -199,22 +199,32 @@ func TestLLDPOverTheAPIAndMCP(t *testing.T) {
 	f := newLLDPFake(t)
 	f.cli, _ = os.ReadFile("testdata/lldp_neighbors_json0.json")
 	e, post := mcpEnv(t, "127.0.0.1 rw")
-	if _, m := post(mcpCall("get_lldp", `{}`)); m["error"] == nil {
-		t.Fatalf("get_lldp is not an MCP tool any more: %v", m)
+	call := func(name, args string) (string, bool) {
+		t.Helper()
+		_, m := post(mcpCall(name, args))
+		return toolResult(t, m)
+	}
+	if txt, isErr := call("get_lldp", `{}`); isErr || !strings.Contains(txt, `"enabled":false`) || !strings.Contains(txt, `"neighbors":[]`) {
+		t.Fatalf("off: %s", txt)
 	}
 	if err := e.mg.LLDPSet(true, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if dc, err := loadConfig(e.conf); err != nil || !dc.Settings.LLDP {
+	if dc, err := loadConfig(e.conf); err != nil || !dc.NTP.LLDP {
 		t.Fatalf("not saved: %v", err)
 	}
 	f.active = true
-	if _, m := post(mcpCall("api_get", `{"path":"/api/lldp"}`)); m["error"] == nil {
-		t.Fatalf("api_get is not an MCP tool any more: %v", m)
+	if txt, isErr := call("get_lldp", `{}`); isErr || !strings.Contains(txt, `"enabled":true`) || !strings.Contains(txt, `"system_name":"core-a"`) {
+		t.Fatalf("on: %s", txt)
+	}
+	if txt, isErr := call("api_get", `{"path":"/api/lldp"}`); isErr || !strings.Contains(txt, `"port_descr":"GigabitEthernet1/0/7"`) {
+		t.Fatalf("api_get: %s", txt)
 	}
 	// the Settings page saves it with the rest of the ntp block
-	guiEditConfig(t, e, `{"settings":{"lldp":false}}`)
-	if dc, _ := loadConfig(e.conf); dc.Settings.LLDP {
+	if txt, isErr := call("edit_config", `{"set":{"ntp":{"lldp":false}}}`); isErr {
+		t.Fatalf("edit_config: %s", txt)
+	}
+	if dc, _ := loadConfig(e.conf); dc.NTP.LLDP {
 		t.Fatal("not switched off")
 	}
 	found := false

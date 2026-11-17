@@ -17,8 +17,8 @@ func TestEnsureReadGroupMakesOnlyTheDefaultGroup(t *testing.T) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
 		return "", nil
 	}
-	ensureReadGroup(WebConfig{ReadGroup: "netdir-ro"})
-	if len(calls) != 1 || calls[0] != "groupadd --system netdir-ro" {
+	ensureReadGroup(WebConfig{ReadGroup: "ntpdir-ro"})
+	if len(calls) != 1 || calls[0] != "groupadd --system ntpdir-ro" {
 		t.Fatalf("default group: %v", calls)
 	}
 	calls = nil

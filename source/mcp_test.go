@@ -7,9 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
-
-	"netdir/device"
 )
 
 func TestMCPACLNormalised(t *testing.T) {
@@ -34,7 +31,7 @@ func mcpEnv(t *testing.T, acl ...string) (*webEnv, func(msg string, hdr ...strin
 	e.mg.webH = e.ws.Handler()
 	sup := e.ws.status.sup
 	sup.mu.Lock()
-	sup.dc.Settings.MCPACL = acl
+	sup.dc.NTP.MCPACL = acl
 	sup.mu.Unlock()
 	return e, func(msg string, hdr ...string) (int, map[string]any) {
 		req, _ := http.NewRequest("POST", e.ts.URL+"/mcp", strings.NewReader(msg))
@@ -99,21 +96,93 @@ func TestMCPReadOnly(t *testing.T) {
 	}
 	_, m = post(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	names := strings.Join(toolNames(t, m), " ")
-	if !strings.Contains(names, "list_devices") || strings.Contains(names, "set_node_paused") || strings.Contains(names, "schedule_set") || strings.Contains(names, "api_request") || strings.Contains(names, "edit_config") {
+	if !strings.Contains(names, "get_log") || !strings.Contains(names, "api_get") || strings.Contains(names, "set_node_paused") || strings.Contains(names, "schedule_set") || strings.Contains(names, "api_request") || strings.Contains(names, "edit_config") {
 		t.Fatalf("read-only tools: %s", names)
 	}
 	if txt, isErr := toolResult(t, func() map[string]any { _, m := post(mcpCall("list_nodes", `{}`)); return m }()); isErr || !strings.Contains(txt, `"this_node":true`) {
 		t.Fatalf("list_nodes: %s", txt)
 	}
-	requireGateTools(t, post)
+	if txt, isErr := toolResult(t, func() map[string]any { _, m := post(mcpCall("get_alerts", `{"node":"all"}`)); return m }()); isErr || !strings.Contains(txt, `"alerts"`) {
+		t.Fatalf("get_alerts: %s", txt)
+	}
 	// a write is refused, whatever the client sends
 	_, m = post(mcpCall("set_node_paused", `{"node":"this","paused":true}`))
-	if m["error"] == nil {
-		t.Fatalf("a tool that changes netdir is gone, yet it answered: %v", m)
+	if txt, isErr := toolResult(t, m); !isErr || !strings.Contains(txt, "read-only") {
+		t.Fatalf("write as read-only: %s", txt)
 	}
 	_, m = post(mcpCall("no_such_tool", `{}`))
 	if m["error"] == nil {
 		t.Fatalf("unknown tool: %v", m)
+	}
+}
+
+func TestMCPReadWriteGoesThroughTheGUIRules(t *testing.T) {
+	e, post := mcpEnv(t, "127.0.0.1 rw")
+	_, m := post(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	if names := strings.Join(toolNames(t, m), " "); !strings.Contains(names, "set_node_paused") || !strings.Contains(names, "update_push") || !strings.Contains(names, "clear_left_nodes") || !strings.Contains(names, "set_gateway_node") || strings.Contains(names, "edit_domain") || strings.Contains(names, "clear_cache") {
+		t.Fatalf("read-write tools: %s", names)
+	}
+	// rw is everything the GUI can do: a shell task too
+	_, m = post(mcpCall("schedule_set", `{"task":{"name":"x","action":"shell","command":"true","freq":"daily","at":"03:00"}}`))
+	if txt, isErr := toolResult(t, m); isErr {
+		t.Fatalf("shell task: %s", txt)
+	}
+	// any setting, merged into the configuration; a dry run saves nothing
+	_, m = post(mcpCall("edit_config", `{"set":{"log_level":"debug"},"dry_run":true}`))
+	if txt, isErr := toolResult(t, m); isErr || !strings.Contains(txt, `"log_level":"debug"`) {
+		t.Fatalf("dry run: %s", txt)
+	}
+	_, m = post(mcpCall("edit_config", `{"set":{"log_level":"warning"},"note":"quieter"}`))
+	if txt, isErr := toolResult(t, m); isErr {
+		t.Fatalf("edit_config: %s", txt)
+	}
+	if dc, err := loadConfig(e.conf); err != nil || dc.LogLevel != "warning" {
+		t.Fatalf("not saved: %v %v", err, dc)
+	}
+	_, m = post(mcpCall("edit_config", `{"set":{"log_level":"shouting"}}`))
+	if _, isErr := toolResult(t, m); !isErr {
+		t.Fatal("an invalid setting was saved")
+	}
+	// any route
+	_, m = post(mcpCall("api_get", `{"path":"/api/versions"}`))
+	if txt, isErr := toolResult(t, m); isErr || !strings.Contains(txt, "mcp@127.0.0.1") {
+		t.Fatalf("api_get: %s", txt)
+	}
+	_, m = post(mcpCall("api_request", `{"method":"POST","path":"/api/login","body":{}}`))
+	if txt, isErr := toolResult(t, m); !isErr || !strings.Contains(txt, "list_api") {
+		t.Fatalf("login route: %s", txt)
+	}
+	_, m = post(mcpCall("list_api", `{}`))
+	if txt, _ := toolResult(t, m); !strings.Contains(txt, `"/api/config"`) || strings.Contains(txt, "/api/login") {
+		t.Fatalf("list_api: %.300s", txt)
+	}
+	// a built-in one is made, under the caller's name
+	_, m = post(mcpCall("schedule_set", `{"task":{"name":"Nightly backup","action":"backup","freq":"daily","at":"02:30"}}`))
+	if txt, isErr := toolResult(t, m); isErr {
+		t.Fatalf("backup task: %s", txt)
+	}
+	_, m = post(mcpCall("get_schedule", `{}`))
+	if txt, _ := toolResult(t, m); !strings.Contains(txt, "Nightly backup") {
+		t.Fatalf("not in the schedule: %s", txt)
+	}
+	found := false
+	for _, v := range e.mg.VersionsList() {
+		if v.Actor == "mcp@127.0.0.1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the change is not in the history under mcp@127.0.0.1: %+v", e.mg.VersionsList())
+	}
+	// the GUI's own guard answers: the only node cannot be paused
+	_, m = post(mcpCall("set_node_paused", `{"node":"this","paused":true}`))
+	if txt, isErr := toolResult(t, m); !isErr || strings.Contains(txt, "read-only") {
+		t.Fatalf("pausing the only node: %v %s", isErr, txt)
+	}
+	// a node that does not exist
+	_, m = post(mcpCall("get_ntp", `{"node":"nonesuch"}`))
+	if txt, isErr := toolResult(t, m); !isErr || !strings.Contains(txt, "no node") {
+		t.Fatalf("unknown node: %s", txt)
 	}
 }
 
@@ -139,115 +208,5 @@ func TestMCPRefusesBrowsersAndGET(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 200 || !strings.HasPrefix(string(b), "[") || strings.Count(string(b), `"id"`) != 1 {
 		t.Fatalf("batch: %d %s", res.StatusCode, b)
-	}
-}
-
-func TestMCPResultLimitSetting(t *testing.T) {
-	e, _ := mcpEnv(t, "127.0.0.1")
-	sup := e.ws.status.sup
-	if sup.mcpResultLimit() != 1<<20 {
-		t.Fatalf("default %d", sup.mcpResultLimit())
-	}
-	sup.mu.Lock()
-	sup.dc.Settings.MCPMaxResultMB = 4
-	sup.mu.Unlock()
-	if sup.mcpResultLimit() != 4<<20 {
-		t.Fatalf("4 MB: %d", sup.mcpResultLimit())
-	}
-	for _, n := range []int{-1, 9} {
-		dc := newDaemonConfig()
-		dc.Settings.MCPMaxResultMB = n
-		if err := dc.Validate(); err == nil {
-			t.Errorf("accepted %d MB", n)
-		}
-	}
-	dc := newDaemonConfig()
-	dc.Settings.MCPMaxResultMB = 1
-	if err := dc.Validate(); err != nil || dc.Settings.MCPMaxResultMB != 0 {
-		t.Errorf("1 MB is the default and is not written: %v %d", err, dc.Settings.MCPMaxResultMB)
-	}
-}
-
-func TestDeviceCheckSettings(t *testing.T) {
-	e, _ := mcpEnv(t, "127.0.0.1")
-	sup := e.ws.status.sup
-	if tu := sup.deviceTuning(); tu != (device.Tuning{}) {
-		t.Fatalf("default tuning %+v", tu)
-	}
-	sup.mu.Lock()
-	st := &sup.dc.Settings
-	st.DeviceCheckSec, st.DeviceFactsMin, st.DeviceLiveCheckSec, st.DeviceLiveFactsMin = 600, 120, 20, 2
-	sup.mu.Unlock()
-	if tu := sup.deviceTuning(); tu != (device.Tuning{Reach: 10 * time.Minute, Facts: 2 * time.Hour, LiveReach: 20 * time.Second, LiveFacts: 2 * time.Minute}) {
-		t.Errorf("tuning %+v", tu)
-	}
-	for _, c := range []struct{ sec, min, lsec, lmin int }{{29, 0, 0, 0}, {3601, 0, 0, 0}, {-1, 0, 0, 0}, {0, 4, 0, 0}, {0, 1441, 0, 0}, {0, -5, 0, 0},
-		{0, 0, 9, 0}, {0, 0, 601, 0}, {0, 0, 0, 61}, {0, 0, 0, -1}} {
-		dc := newDaemonConfig()
-		dc.Settings.DeviceCheckSec, dc.Settings.DeviceFactsMin, dc.Settings.DeviceLiveCheckSec, dc.Settings.DeviceLiveFactsMin = c.sec, c.min, c.lsec, c.lmin
-		if err := dc.Validate(); err == nil {
-			t.Errorf("accepted %+v", c)
-		}
-	}
-	dc := newDaemonConfig()
-	dc.Settings.DeviceCheckSec, dc.Settings.DeviceFactsMin, dc.Settings.DeviceLiveCheckSec, dc.Settings.DeviceLiveFactsMin = 30, 1440, 10, 60
-	if err := dc.Validate(); err != nil {
-		t.Errorf("the limits themselves: %v", err)
-	}
-}
-
-// The Topology drawing's small-squares threshold: empty (the default, 36) or 1 to 5000.
-func TestTopologySquaresAboveSetting(t *testing.T) {
-	for _, n := range []int{-1, 5001} {
-		dc := newDaemonConfig()
-		dc.Settings.TopologySquaresAbove = n
-		if err := dc.Validate(); err == nil {
-			t.Errorf("accepted %d", n)
-		}
-	}
-	for _, n := range []int{0, 1, 36, 5000} {
-		dc := newDaemonConfig()
-		dc.Settings.TopologySquaresAbove = n
-		if err := dc.Validate(); err != nil {
-			t.Errorf("%d: %v", n, err)
-		}
-	}
-}
-
-// mcpClusterGone are the tools an MCP caller no longer has: anything about netdir's own cluster, configuration, alerts, schedules,
-// updates or host, and the raw route of the GUI's API.  What is left is the devices, the device list and status, the cluster
-// status (list_nodes, get_topology) and the network tools.
-var mcpClusterGone = []string{"get_gateways", "get_alerts", "get_lldp", "get_host_stats", "get_schedule", "get_updates", "get_node_status", "get_config", "list_api", "api_get", "get_log"}
-
-// requireGateTools checks that the tool list has the device and status tools and none of mcpClusterGone, that each of those
-// answers "unknown tool", and that a node cannot be picked.
-func requireGateTools(t *testing.T, post func(string, ...string) (int, map[string]any), hdr ...string) {
-	t.Helper()
-	_, m := post(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, hdr...)
-	have := toolNames(t, m)
-	for _, want := range []string{"list_nodes", "get_topology", "list_devices", "device_facts", "device_show"} {
-		if !containsStr(have, want) {
-			t.Errorf("%s is not offered: %v", want, have)
-		}
-	}
-	for _, gone := range mcpClusterGone {
-		if containsStr(have, gone) {
-			t.Errorf("%s is offered", gone)
-		}
-		if _, m := post(mcpCall(gone, `{}`), hdr...); m["error"] == nil {
-			t.Errorf("%s answered: %v", gone, m)
-		}
-	}
-	for _, name := range have {
-		if strings.HasPrefix(name, "device_") || strings.HasPrefix(name, "net_") || name == "list_nodes" || name == "get_topology" || name == "list_devices" {
-			continue
-		}
-		t.Errorf("unexpected tool %s", name)
-	}
-	for _, name := range []string{"list_nodes", "get_topology", "device_facts"} {
-		_, m := post(mcpCall(name, `{"node":"other","target":"all"}`), hdr...)
-		if txt, isErr := toolResult(t, m); !isErr || !strings.Contains(txt, "no node argument") {
-			t.Errorf("%s with a node: %v %s", name, isErr, txt)
-		}
 	}
 }

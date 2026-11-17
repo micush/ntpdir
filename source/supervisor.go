@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"netdir/device"
 )
 
 type engineKey struct {
@@ -18,11 +17,12 @@ type engineKey struct {
 	af    AF
 }
 
-// Supervisor owns the running engines, the anycast addresses, and hot reload.
+// Supervisor owns the running engines, the shared NTP pool, and hot reload.
 //
 // Live fields (no engine restart): priority, lb_method, weight, hello_ms,
 // hold_ms, preempt, max_afns.  Restart fields: interface, vip4, vip6,
-// group_id, key, neighbors.
+// group_id, key, neighbors.  The "ntp" block is applied live by
+// swapping in a freshly probed pool.
 type Supervisor struct {
 	ctx context.Context
 
@@ -40,23 +40,58 @@ type Supervisor struct {
 	metricsCache []netip.Prefix
 	engines      map[engineKey]*Engine
 
+	// Upstream pools.  Key 0 is the shared pool built from the top-level "ntp"
+	// block; any other key is a group id whose group has its own "ntp" block.
+	poolMu sync.RWMutex
+	pools  map[int]*Pool
+	ntps   map[int]NTPConfig
+	keyOf  map[int]int // group id -> pool key
+
+	// Groups waiting for their NTP servers to answer before the node starts
+	// serving them (guarded by mu).  The value identifies one wait so a later
+	// reload can cancel it.
+	warming map[int]*warmup
+
 	// Groups held back because this node has no address in the gateway's subnet
 	// (guarded by mu); the value identifies one wait so a reload can cancel it.
 	offnet map[int]*offnetWait
 
 	// Anycast address sets of the running groups (guarded by mu).
 	anycast map[int]*anycastSet
+
+	// Groups that do not run on this node because of dnsdir: the reason (guarded by mu).  dnsdirSeen is what the last check
+	// of whether dnsdir is installed found (see piggyback.go).
+	inactive   map[int]string
+	dnsdirSeen bool
+
+	// The loop that keeps chrony's sources in line with the pools' health (chronyloop.go).
+	chronyCancel context.CancelFunc
+	chronyDone   chan struct{}
 }
 
 type offnetWait struct {
 	why string
 }
 
+type warmup struct {
+	since               time.Time
+	every, floor, limit time.Duration // the settings in force when the wait began
+}
+
+// How long a node holds back from serving a gateway while its NTP servers are
+// not all answering yet.  After warmFloor one answering server is enough; after
+// warmMax it starts regardless (and shows red if nothing answers).
+var (
+	warmFloor = 10 * time.Second
+	warmMax   = 60 * time.Second
+	warmEvery = time.Second
+)
+
 func NewSupervisor(ctx context.Context, dc *DaemonConfig) *Supervisor {
 	s := &Supervisor{ctx: ctx, dc: dc.effective(), engines: map[engineKey]*Engine{},
-		offnet: map[int]*offnetWait{}, anycast: map[int]*anycastSet{}}
+		pools: map[int]*Pool{}, ntps: map[int]NTPConfig{}, keyOf: map[int]int{},
+		warming: map[int]*warmup{}, offnet: map[int]*offnetWait{}, anycast: map[int]*anycastSet{}, inactive: map[int]string{}}
 	s.notePausedAnycast(s.dc)
-	device.SetSecretWords(secretWordsOf(s.dc))
 	return s
 }
 
@@ -75,6 +110,17 @@ func (s *Supervisor) notePausedAnycast(dc *DaemonConfig) {
 	s.pausedMu.Unlock()
 }
 
+// poolFor returns the pool serving a group (nil if it has none).
+func (s *Supervisor) poolFor(gid int) *Pool {
+	s.poolMu.RLock()
+	defer s.poolMu.RUnlock()
+	k, ok := s.keyOf[gid]
+	if !ok {
+		return nil
+	}
+	return s.pools[k]
+}
+
 // groupName is the name given to a gateway ("" when it has none).
 func (s *Supervisor) groupName(gid int) string {
 	s.mu.Lock()
@@ -89,15 +135,84 @@ func (s *Supervisor) groupName(gid int) string {
 	return ""
 }
 
+// ntpFor returns the NTP settings in force for a group.
+func (s *Supervisor) ntpFor(gid int) NTPConfig {
+	s.poolMu.RLock()
+	defer s.poolMu.RUnlock()
+	if k, ok := s.keyOf[gid]; ok {
+		return s.ntps[k]
+	}
+	return defaultNTP()
+}
+
+// sharedNTP is the top-level NTP block (client settings and the port chrony serves on are shared by every pool).
+func (s *Supervisor) sharedNTP() NTPConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dc == nil {
+		return defaultNTP()
+	}
+	return s.dc.NTP
+}
+
+func (s *Supervisor) ntpPort() int { return s.sharedNTP().ListenPort }
+
+// serverNames is the names given to the NTP servers of the pool key (0 is the shared pool, otherwise a gateway's own).
+func (s *Supervisor) serverNames(key int) map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dc == nil {
+		return nil
+	}
+	if key != 0 {
+		for i := range s.dc.Groups {
+			if s.dc.Groups[i].GroupID == key {
+				_, c := s.dc.poolFor(&s.dc.Groups[i])
+				return c.ServerNames
+			}
+		}
+	}
+	return s.dc.NTP.ServerNames
+}
+
+type poolInfo struct {
+	Key    int
+	Groups []int
+	Pool   *Pool
+	Cfg    NTPConfig
+}
+
+// poolList returns the running pools, shared pool first.
+func (s *Supervisor) poolList() []poolInfo {
+	s.poolMu.RLock()
+	defer s.poolMu.RUnlock()
+	var out []poolInfo
+	for k, p := range s.pools {
+		pi := poolInfo{Key: k, Pool: p, Cfg: s.ntps[k]}
+		for gid, kk := range s.keyOf {
+			if kk == k {
+				pi.Groups = append(pi.Groups, gid)
+			}
+		}
+		sort.Ints(pi.Groups)
+		out = append(out, pi)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
 func (s *Supervisor) newEngine(gc GroupConfig, af AF) *Engine {
 	gid := gc.GroupID
-	_ = gid
-	return NewEngine(gc, af)
+	return NewEngine(gc, af,
+		func() NTPConfig { return s.ntpFor(gid) },
+		func() *Pool { return s.poolFor(gid) })
 }
 
 func (s *Supervisor) StartAll() {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
+	s.refreshPool(s.dc, false)
+	s.startChronyLoop()
 	s.mu.Lock()
 	for _, gc := range s.dc.Groups {
 		s.startGroupWhenReadyLocked(gc)
@@ -114,6 +229,7 @@ func (s *Supervisor) StopAll() {
 		engines = append(engines, e)
 	}
 	s.engines = map[engineKey]*Engine{}
+	s.warming = map[int]*warmup{}
 	s.offnet = map[int]*offnetWait{}
 	for gid := range s.anycast {
 		s.stopAnycastLocked(gid)
@@ -125,6 +241,14 @@ func (s *Supervisor) StopAll() {
 		go func() { defer wg.Done(); e.Stop() }()
 	}
 	wg.Wait()
+	s.stopChronyLoop()
+	s.poolMu.Lock()
+	old := s.pools
+	s.pools, s.ntps, s.keyOf = map[int]*Pool{}, map[int]NTPConfig{}, map[int]int{}
+	s.poolMu.Unlock()
+	for _, p := range old {
+		p.Stop()
+	}
 }
 
 func (s *Supervisor) startGroupLocked(gc GroupConfig) {
@@ -144,11 +268,12 @@ func (s *Supervisor) startGroupLocked(gc GroupConfig) {
 
 // startAnycastLocked holds and serves the gateway's anycast addresses (see anycast.go).
 func (s *Supervisor) startAnycastLocked(gc GroupConfig) {
-	if len(gc.ExtraVIPs) == 0 || s.anycast[gc.GroupID] != nil {
+	if len(gc.ExtraVIPs)+len(gc.DNSDirVIPs) == 0 || s.anycast[gc.GroupID] != nil {
 		return
 	}
 	gid := gc.GroupID
-	a := newAnycastSet(gid, gc.ExtraVIPs)
+	a := newAnycastSet(gid, gc.ExtraVIPs, func() *Pool { return s.poolFor(gid) })
+	a.addExternal(gc.DNSDirVIPs)
 	a.paused = func() map[string]string { return s.pausedAnycast(gid) }
 	a.bgp = func() (*BGPConfig, bool) { s.pausedMu.RLock(); defer s.pausedMu.RUnlock(); return s.bgpAC, true }
 	a.ospf = func() *OSPFConfig { s.pausedMu.RLock(); defer s.pausedMu.RUnlock(); return s.ospfAC }
@@ -241,9 +366,22 @@ func (s *Supervisor) AllAnycastStates() []AnycastState {
 	return out
 }
 
-// startGroupWhenReadyLocked starts a gateway on this node once this node has an address in the gateway's subnet (the
-// wait runs in the background; a reload that pauses, restarts or removes the group cancels it).
+// startGroupWhenReadyLocked starts a gateway on this node, but a gateway that
+// serves NTP only once its NTP servers are answering.  Starting at once joins
+// the election and takes traffic (the AGC steers clients here) while the servers
+// are still unprobed, so clients got SERVFAIL until the next probe round — an
+// outage right after a resume or a restart even though other nodes were serving
+// fine.  The wait runs in the background; a reload that pauses, restarts or
+// removes the group cancels it.
 func (s *Supervisor) startGroupWhenReadyLocked(gc GroupConfig) {
+	if why := inactiveReason(gc); why != "" {
+		if s.inactive[gc.GroupID] != why {
+			infof("Group %d: not running here — %s", gc.GroupID, why)
+		}
+		s.inactive[gc.GroupID] = why
+		return
+	}
+	delete(s.inactive, gc.GroupID)
 	if !gc.Paused {
 		if ok, why := onGatewaySubnet(gc); !ok {
 			w := &offnetWait{why: why}
@@ -256,14 +394,79 @@ func (s *Supervisor) startGroupWhenReadyLocked(gc GroupConfig) {
 	s.startAfterSubnetLocked(gc)
 }
 
-// startAfterSubnetLocked is the rest of the start.
+// startAfterSubnetLocked is the rest of the start: wait for the NTP servers, then go.
 func (s *Supervisor) startAfterSubnetLocked(gc GroupConfig) {
-	vmacAtStart(gc) // a background check that clients' replies can reach this node; no-op in tests
-	s.startGroupLocked(gc)
+	if !gc.Piggyback {
+		vmacAtStart(gc) // a background check that clients' replies can reach this node; no-op in tests
+	}
+	if gc.Paused || s.ntpReady(gc.GroupID, 0, warmFloor) {
+		s.startGroupLocked(gc)
+		return
+	}
+	w := &warmup{since: time.Now(), every: warmEvery, floor: warmFloor, limit: warmMax}
+	s.warming[gc.GroupID] = w
+	infof("Group %d: waiting for its NTP servers to answer before serving", gc.GroupID)
+	go s.warmThenStart(gc.GroupID, w)
+}
+
+// ntpReady reports whether the group's NTP pool can answer clients: every
+// server answering, or — once waited is past warmFloor — at least one.
+func (s *Supervisor) ntpReady(gid int, waited, floor time.Duration) bool {
+	p := s.poolFor(gid)
+	if p == nil || len(p.servers) == 0 {
+		return true // nothing to wait for
+	}
+	healthy := len(p.Ranked())
+	// every server that is meant to be used answering (the fallbacks count only when there is nothing else),
+	// or — once waited is past the floor — anything that can answer, fallbacks included
+	want := p.nNormal()
+	if want == 0 {
+		want = len(p.servers)
+	}
+	return (healthy == want && !p.UsingFallback()) || (healthy > 0 && waited >= floor) || (p.nNormal() == 0 && healthy == want)
+}
+
+func (s *Supervisor) warmThenStart(gid int, w *warmup) {
+	t := time.NewTicker(w.every)
+	defer t.Stop()
+	for {
+		if p := s.poolFor(gid); p != nil {
+			ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+			p.ProbeNow(ctx) // do not wait for the pool's own schedule
+			cancel()
+		}
+		s.mu.Lock()
+		if s.warming[gid] != w || s.ctx.Err() != nil {
+			s.mu.Unlock() // cancelled: paused, restarted, removed or stopping
+			return
+		}
+		waited := time.Since(w.since)
+		if s.ntpReady(gid, waited, w.floor) || waited >= w.limit {
+			delete(s.warming, gid)
+			if waited >= w.limit && !s.ntpReady(gid, waited, w.floor) {
+				warnf("Group %d: its NTP servers still do not answer after %s — starting anyway", gid, waited.Round(time.Second))
+			} else {
+				infof("Group %d: NTP servers answer (%s) — starting", gid, waited.Round(100*time.Millisecond))
+			}
+			for i := range s.dc.Groups {
+				if s.dc.Groups[i].GroupID == gid {
+					s.startGroupLocked(s.dc.Groups[i])
+				}
+			}
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // waitForSubnet holds a gateway back while this node has no address in the
-// gateway's subnet, and carries on when it gets one.
+// gateway's subnet, and carries on (through the NTP warm-up) when it gets one.
 // A node on another subnet is still a full cluster member; it just does not
 // join an election it cannot hear, nor claim an address it cannot serve.
 func (s *Supervisor) waitForSubnet(gid int, w *offnetWait) {
@@ -298,6 +501,17 @@ func (s *Supervisor) waitForSubnet(gid int, w *offnetWait) {
 }
 
 // offnetGroups maps the groups held back for being on the wrong subnet to the reason.
+// inactiveGroups lists the groups that do not run here because of dnsdir, with the reason.
+func (s *Supervisor) inactiveGroups() map[int]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[int]string{}
+	for gid, why := range s.inactive {
+		out[gid] = why
+	}
+	return out
+}
+
 func (s *Supervisor) offnetGroups() map[int]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,8 +522,21 @@ func (s *Supervisor) offnetGroups() map[int]string {
 	return out
 }
 
+// warmingGroups lists the groups held back while their NTP servers warm up.
+func (s *Supervisor) warmingGroups() map[int]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[int]bool{}
+	for gid := range s.warming {
+		out[gid] = true
+	}
+	return out
+}
+
 func (s *Supervisor) stopGroupLocked(gid int) []*Engine {
-	delete(s.offnet, gid) // a pending wait for the subnet must not start a group that was stopped
+	delete(s.warming, gid) // a pending warm-up must not start a group that was stopped
+	delete(s.offnet, gid)
+	delete(s.inactive, gid)
 	s.stopAnycastLocked(gid)
 	var out []*Engine
 	for _, af := range []AF{afIPv4, afIPv6} {
@@ -320,6 +547,66 @@ func (s *Supervisor) stopGroupLocked(gid int) []*Engine {
 		}
 	}
 	return out
+}
+
+// refreshPool makes the running pools match the new config.  A changed pool
+// is probed once (when preprobe is set) before it replaces the old one so chrony
+// is not left without a verdict on the servers.
+func (s *Supervisor) refreshPool(nu *DaemonConfig, preprobe bool) {
+	want := map[int]NTPConfig{}
+	keyOf := map[int]int{}
+	// a gateway this node has been removed from (ExcludedNodes) is none of its business: its servers are not probed here and
+	// do not feed this node's chrony.  A node removed from every gateway therefore has no pool at all.
+	id := localNodeID()
+	for i := range nu.Groups {
+		g := &nu.Groups[i]
+		if id != "" && containsStr(g.ExcludedNodes, id) {
+			continue
+		}
+		if inactiveReason(*g) != "" { // a gateway dnsdir takes over (or a piggyback one with no dnsdir) has no pool here
+			continue
+		}
+		// a paused gateway (or node) keeps its pool: the servers are still this node's time sources
+		k, c := nu.poolFor(g)
+		keyOf[g.GroupID] = k
+		want[k] = c.live()
+	}
+	// only the servers of the topology feed chrony: a gateway's own servers, or the shared list for a gateway without its own
+
+	s.poolMu.RLock()
+	oldPools, oldCfg := s.pools, s.ntps
+	s.poolMu.RUnlock()
+
+	next := map[int]*Pool{}
+	for k, c := range want {
+		if cur := oldPools[k]; cur != nil && reflect.DeepEqual(oldCfg[k], c) {
+			next[k] = cur
+			continue
+		}
+		p := NewPool(c)
+		if preprobe {
+			ctx, cancel := context.WithTimeout(s.ctx, 2*c.probeTimeout())
+			p.ProbeNow(ctx)
+			cancel()
+		}
+		p.Start()
+		next[k] = p
+		name := "shared"
+		if k != 0 {
+			name = "group " + itoa(k)
+		}
+		infof("ntp: %s pool started — %d server(s), up to stratum %d", name, len(c.Servers), c.MaxStratum)
+	}
+
+	s.poolMu.Lock()
+	s.pools, s.ntps, s.keyOf = next, want, keyOf
+	s.poolMu.Unlock()
+
+	for k, p := range oldPools {
+		if next[k] != p {
+			p.Stop()
+		}
+	}
 }
 
 func (s *Supervisor) Reload(nu *DaemonConfig) {
@@ -337,6 +624,7 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 	}
 
 	s.notePausedAnycast(nu)
+	s.refreshPool(nu, true)
 
 	oldGroups := map[int]*GroupConfig{}
 	for i := range cur.Groups {
@@ -379,13 +667,14 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 			// s.mu, so a slow or stuck stop used to make the whole node stop answering the cluster.
 			restarts = append(restarts, restartJob{*gc, s.stopGroupLocked(gid)})
 		default:
-			if !sameList(oldGC.ExtraVIPs, gc.ExtraVIPs) {
+			if !sameList(oldGC.ExtraVIPs, gc.ExtraVIPs) || !sameList(oldGC.DNSDirVIPs, gc.DNSDirVIPs) {
 				// anycast addresses are independent of the election: change them
 				// in place, without restarting the gateway
 				running := s.anycast[gid] != nil
 				for _, af := range []AF{afIPv4, afIPv6} {
 					running = running || s.engines[engineKey{gid, af}] != nil
 				}
+				running = running || (gc.Piggyback && !gc.Paused && inactiveReason(*gc) == "") // its addresses come and go with dnsdir's
 				if running {
 					infof("Group %d anycast addresses changed", gid)
 					s.stopAnycastLocked(gid)
@@ -404,7 +693,7 @@ func (s *Supervisor) Reload(nu *DaemonConfig) {
 	}
 	s.dc = nu
 	s.mu.Unlock()
-	device.SetSecretWords(secretWordsOf(nu))
+	s.applyChronyClients()
 
 	// Stop outside the lock; Stop tears down interfaces and can be slow.  Gateways that restart are stopped with the
 	// removed ones, all at once, and started again when every stop is done.

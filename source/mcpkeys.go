@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +20,10 @@ import (
 //
 // The key is kept in the configuration beside its SHA-256 hash, as the gateway keys and the device logins are (so it
 // is in the cluster and the configuration history too, is never shown to an MCP caller or a read-only account, and
-// can be shown again from Configure ▸ MCP ▸ Show key).  The hash is what a request is checked against.  A
-// key made before the key was kept has only a hash and cannot be shown: Replace key makes it a new one.  A new key may
-// be given in "key" (the GUI does this, as may a hand-edited file); the check works out "hash" from it.
+// can be shown again from Configure ▸ Monitoring ▸ MCP ▸ Keys, where the Key box has an eye).  The hash is what a
+// request is checked against.  A key made before the key was kept has only a hash and cannot be shown: Replace key
+// makes it a new one.  A new key may be given in "key" (the GUI does this, as may edit_config or a hand-edited file);
+// the check works out "hash" from it.
 
 const (
 	mcpKeysMax    = 32
@@ -35,35 +35,9 @@ const (
 type MCPKey struct {
 	Name    string `json:"name"`              // who or what holds it ("laptop", "claude-ops"); the caller is logged as mcp:NAME@ADDRESS
 	Access  string `json:"access"`            // "ro" or "rw"
-	Privacy string `json:"privacy,omitempty"` // "none", "standard" or "strict"; empty: the default level (Configure ▸ Privacy)
 	Hash    string `json:"hash,omitempty"`    // "sha256:" and the hex hash of the key (worked out from Key when there is one)
 	Key     string `json:"key,omitempty"`     // the key itself; empty for a key made before it was kept
 	Created int64  `json:"created,omitempty"` // unix time the key was added
-	// Devices is what the key may reach: device names and tag:TAG, or "none"; empty is all (devscope.go).
-	Devices []string `json:"devices,omitempty"`
-	// Disabled keeps the key in the list and lets it do nothing: the caller is refused like one with an unknown key (right-click ▸ Disable).
-	Disabled bool `json:"disabled,omitempty"`
-	// Expires is the unix time from which the key does nothing (0: never).  It stays in the list, shown as expired, until it is deleted.
-	Expires int64 `json:"expires,omitempty"`
-	// Notes says what the key is for ("claude on Mike's laptop, for the Axway audit"): up to mcpNoteMax characters, one line.  It changes nothing.
-	Notes string `json:"notes,omitempty"`
-}
-
-// mcpNow is the clock of the expiry checks (a variable for the tests).
-var mcpNow = time.Now
-
-// Expired says whether the key's time has passed.
-func (k MCPKey) Expired() bool { return k.Expires > 0 && mcpNow().Unix() >= k.Expires }
-
-// mcpKeyExpired says that the key presented is one of the list but its time has passed.
-func mcpKeyExpired(keys []MCPKey, presented string) bool {
-	got := mcpKeyHash(presented)
-	for _, k := range keys {
-		if subtle.ConstantTimeCompare([]byte(got), []byte(k.Hash)) == 1 && k.Expired() {
-			return true
-		}
-	}
-	return false
 }
 
 func mcpKeyHash(key string) string {
@@ -103,21 +77,6 @@ func normMCPKeys(list []MCPKey) ([]MCPKey, error) {
 		default:
 			return nil, fmt.Errorf("mcp: key %q: the access is ro or rw", k.Name)
 		}
-		k.Notes = strings.Join(strings.Fields(k.Notes), " ")
-		if err := checkNote(k.Notes); err != nil {
-			return nil, fmt.Errorf("mcp: key %q: %w", k.Name, err)
-		}
-		var derr error
-		if k.Devices, derr = normDevices(k.Devices); derr != nil {
-			return nil, fmt.Errorf("mcp: key %q: %w", k.Name, derr)
-		}
-		if k.Expires < 0 || k.Expires > 253402300799 {
-			return nil, fmt.Errorf("mcp: key %q: the expiry is a time (unix seconds) or empty for never", k.Name)
-		}
-		var okLevel bool
-		if k.Privacy, okLevel = normLevel(k.Privacy); !okLevel {
-			return nil, fmt.Errorf("mcp: key %q: the privacy level is none, standard or strict", k.Name)
-		}
 		if k.Key != "" {
 			if strings.TrimSpace(k.Key) != k.Key || len(k.Key) < mcpKeyMinLen {
 				return nil, fmt.Errorf("mcp: key %q: a key is at least %d characters, without spaces (Add key makes one)", k.Name, mcpKeyMinLen)
@@ -146,31 +105,11 @@ func normMCPKeys(list []MCPKey) ([]MCPKey, error) {
 func mcpKeyAccess(keys []MCPKey, presented string) (name, access string) {
 	got := mcpKeyHash(presented)
 	for _, k := range keys {
-		if subtle.ConstantTimeCompare([]byte(got), []byte(k.Hash)) == 1 && name == "" && !k.Disabled && !k.Expired() {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(k.Hash)) == 1 && name == "" {
 			name, access = k.Name, k.Access
 		}
 	}
 	return name, access
-}
-
-// mcpKeyDevices is the devices of the key with this name (nil: all of them).
-func mcpKeyDevices(keys []MCPKey, name string) []string {
-	for _, k := range keys {
-		if k.Name == name {
-			return k.Devices
-		}
-	}
-	return nil
-}
-
-// mcpKeyPrivacy is the privacy level of the key with this name ("" when it has none of its own).
-func mcpKeyPrivacy(keys []MCPKey, name string) string {
-	for _, k := range keys {
-		if k.Name == name {
-			return k.Privacy
-		}
-	}
-	return ""
 }
 
 // mcpBearer is the key in "Authorization: Bearer KEY"; ok is false when the header is there but not of that form.
@@ -204,7 +143,7 @@ func mcpWarnBadKey(from string) {
 		l.at = map[string]time.Time{}
 	}
 	l.at[from] = time.Now()
-	warnf("mcp: %s sent a key that matches none (Configure ▸ MCP ▸ Keys); refused", from)
+	warnf("mcp: %s sent a key that matches none (Configure ▸ Monitoring ▸ MCP ▸ Keys); refused", from)
 }
 
 func maxAccess(a, b string) string {
@@ -215,14 +154,4 @@ func maxAccess(a, b string) string {
 		return "ro"
 	}
 	return ""
-}
-
-// inNets reports whether a is in any of nets.
-func inNets(nets []netip.Prefix, a netip.Addr) bool {
-	for _, p := range nets {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	return false
 }

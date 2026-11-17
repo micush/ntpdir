@@ -26,7 +26,7 @@ type fakeAuth struct {
 
 func (f *fakeAuth) Authenticate(service, user, pass string) error {
 	f.authCalls.Add(1)
-	if service != "netdir" {
+	if service != "ntpdir" {
 		return errors.New("wrong service " + service)
 	}
 	if (user == "alice" || user == "bob") && pass == "pw" {
@@ -36,7 +36,7 @@ func (f *fakeAuth) Authenticate(service, user, pass string) error {
 }
 
 func (f *fakeAuth) InGroup(user, group string) (bool, error) {
-	if group != "netdir,netdir-users" {
+	if group != "ntpdir,ntpdir-users" {
 		return false, errors.New("wrong group")
 	}
 	return user == "alice" && !f.removed.Load(), nil
@@ -59,7 +59,7 @@ func newWebEnv(t *testing.T) *webEnv {
 	failDelay = time.Millisecond
 	e := &webEnv{t: t, auth: &fakeAuth{}}
 	dir := t.TempDir()
-	e.conf = filepath.Join(dir, "netdir.conf")
+	e.conf = filepath.Join(dir, "ntpdir.conf")
 	dc := newDaemonConfig()
 	dc.Cluster.Enabled = false
 	mg, err := NewMgmt(e.conf, filepath.Join(dir, "state"), dc)
@@ -161,16 +161,52 @@ func TestLoginRules(t *testing.T) {
 			t.Fatalf("%v: code %d", c, r.code)
 		}
 		// identical message for every cause
-		if !strings.Contains(r.body["error"].(string), "Login failed") || strings.Contains(r.body["error"].(string), "netdir") {
+		if !strings.Contains(r.body["error"].(string), "Login failed") || strings.Contains(r.body["error"].(string), "ntpdir") {
 			t.Fatalf("%v: %v", c, r.body)
 		}
 		if _, has := r.body["attempts_left"]; has {
 			t.Fatalf("%v: attempts left is reported: %v", c, r.body)
 		}
 	}
-	// bob authenticated in PAM but is not in the netdir group → still refused
+	// bob authenticated in PAM but is not in the ntpdir group → still refused
 	if r := e.login("alice", "pw"); r.code != 200 || r.body["user"] != "alice" || r.body["version"] != version() {
 		t.Fatalf("alice login: %d %v", r.code, r.body)
+	}
+}
+
+func TestAPIRequiresSession(t *testing.T) {
+	e := newWebEnv(t)
+	cookie = ""
+	for _, p := range []string{"/api/session", "/api/gateways", "/api/neighbors", "/api/ntp", "/api/config"} {
+		if r := e.do("GET", p, nil); r.code != 401 {
+			t.Fatalf("GET %s without session = %d", p, r.code)
+		}
+	}
+	if r := e.do("POST", "/api/assert-agc", map[string]any{}); r.code != 401 {
+		t.Fatalf("assert-agc without session = %d", r.code)
+	}
+	if r := e.do("GET", "/api/session", nil, func(r *http.Request) { r.Header.Set("Cookie", sessionCookie+"=forged") }); r.code != 401 {
+		t.Fatal("forged cookie accepted")
+	}
+}
+
+func TestCLIParityEndpoints(t *testing.T) {
+	e := newWebEnv(t)
+	e.login("alice", "pw")
+	for _, p := range []string{"/api/session", "/api/gateways", "/api/neighbors", "/api/ntp", "/api/config"} {
+		if r := e.do("GET", p, nil, withAuth(e, false)); r.code != 200 {
+			t.Fatalf("GET %s = %d %s", p, r.code, r.raw)
+		}
+	}
+	// no engines running → assert-agc reports it like the CLI
+	r := e.do("POST", "/api/assert-agc", map[string]any{}, withAuth(e, true))
+	if r.code != 200 || r.body["ok"] != false {
+		t.Fatalf("assert-agc: %d %v", r.code, r.body)
+	}
+	// no NTP server defined, nothing to show
+	r = e.do("GET", "/api/ntp", nil, withAuth(e, false))
+	if r.body["ok"] != false || !strings.Contains(r.body["error"].(string), "no NTP server") {
+		t.Fatalf("dns: %v", r.body)
 	}
 }
 
@@ -224,7 +260,7 @@ func TestSessionIdleTimeoutAndGroupRevocation(t *testing.T) {
 	}
 
 	e.login("alice", "pw")
-	e.auth.removed.Store(true) // alice leaves the netdir group
+	e.auth.removed.Store(true) // alice leaves the ntpdir group
 	e.ws.mu.Lock()
 	for _, s := range e.ws.sessions {
 		s.checked = time.Now().Add(-time.Hour) // force the periodic re-check
@@ -243,7 +279,7 @@ func TestLoginThrottle(t *testing.T) {
 		// a guesser is not told how many tries it has left, nor what the policy is, nor which group is needed
 		msg, _ := r.body["error"].(string)
 		if _, has := r.body["attempts_left"]; has || r.code != 401 || strings.ContainsAny(msg, "0123456789") ||
-			strings.Contains(msg, "left") || strings.Contains(msg, "netdir") || strings.Contains(msg, "lockout") {
+			strings.Contains(msg, "left") || strings.Contains(msg, "ntpdir") || strings.Contains(msg, "lockout") {
 			t.Fatalf("attempt %d of %d leaks something: %d %v", i, max, r.code, r.body)
 		}
 	}
@@ -339,16 +375,98 @@ func TestSecurityHeadersAndStatic(t *testing.T) {
 	}
 }
 
+func TestConfigGetPutValidateAndSave(t *testing.T) {
+	e := newWebEnv(t)
+	e.login("alice", "pw")
+
+	r := e.do("GET", "/api/config", nil, withAuth(e, false))
+	if r.body["exists"] != false || r.body["path"] != e.conf {
+		t.Fatalf("get: %v", r.body)
+	}
+	cfg := r.body["config"].(map[string]any)
+	if g, _ := cfg["groups"].([]any); len(g) == 0 { // no file yet means no gateways; give the test one to edit
+		b, _ := json.Marshal(defaultGroup())
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		cfg["groups"] = []any{m}
+	}
+
+	// invalid: bad VIP → 422, nothing written
+	cfg["groups"].([]any)[0].(map[string]any)["vip4"] = "not-an-ip"
+	r = e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true))
+	if r.code != 422 || !strings.Contains(r.body["error"].(string), "vip4") {
+		t.Fatalf("invalid config: %d %v", r.code, r.body)
+	}
+	if _, err := os.Stat(e.conf); err == nil {
+		t.Fatal("invalid config was written")
+	}
+
+	// unknown field (typo) rejected
+	cfg["groups"].([]any)[0].(map[string]any)["vip4"] = "10.9.0.1/24"
+	cfg["groups"].([]any)[0].(map[string]any)["prio"] = 5
+	if r = e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 400 {
+		t.Fatalf("unknown field: %d %v", r.code, r.body)
+	}
+	delete(cfg["groups"].([]any)[0].(map[string]any), "prio")
+
+	// an explicit empty groups list means "no gateways", not the default group
+	empty := map[string]any{"log_level": "info", "groups": []any{}}
+	if r = e.do("PUT", "/api/config?dry_run=1", map[string]any{"config": empty}, withAuth(e, true)); r.code != 200 {
+		t.Fatalf("zero groups: %d %v", r.code, r.body)
+	}
+	if g, _ := r.body["config"].(map[string]any)["groups"].([]any); len(g) != 0 {
+		t.Fatalf("zero groups became %v", g)
+	}
+
+	// dry run: valid, not written, not applied
+	if r = e.do("PUT", "/api/config?dry_run=1", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 200 {
+		t.Fatalf("dry run: %d %v", r.code, r.body)
+	}
+	if _, err := os.Stat(e.conf); err == nil || e.reloads.Load() != 0 {
+		t.Fatal("dry run wrote or applied")
+	}
+
+	// real save: written 0600, applied via reload, GET round-trips
+	cfg["ntp"] = map[string]any{"servers": []any{"10.0.0.123"}}
+	r = e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true))
+	if r.code != 200 {
+		t.Fatalf("save: %d %v", r.code, r.body)
+	}
+	if e.reloads.Load() != 1 {
+		t.Fatalf("reload calls = %d", e.reloads.Load())
+	}
+	st, err := os.Stat(e.conf)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("saved file: %v %v", err, st)
+	}
+	dc, err := loadConfig(e.conf)
+	if err != nil || dc.Groups[0].VIP4 != "10.9.0.1/24" ||
+		dc.NTP.Servers[0] != "10.0.0.123:123" {
+		t.Fatalf("saved content wrong: %v %+v", err, dc)
+	}
+	r = e.do("GET", "/api/config", nil, withAuth(e, false))
+	if r.body["exists"] != true {
+		t.Fatal("exists flag not updated")
+	}
+
+	// an existing file keeps its mode
+	os.Chmod(e.conf, 0o640)
+	e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true))
+	if st, _ := os.Stat(e.conf); st.Mode().Perm() != 0o640 {
+		t.Fatalf("mode not preserved: %v", st.Mode())
+	}
+}
+
 func TestWebConfigValidation(t *testing.T) {
 	ok := defaultWeb()
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if ok.Listen != ":22161" || ok.Group != "netdir,netdir-users" || ok.PAMService != "netdir" || ok.MaxFailedLogins != 3 || ok.FailedLoginWindowMinutes != 1 || ok.LockoutMinutes != 15 {
+	if ok.Listen != ":12380" || ok.Group != "ntpdir,ntpdir-users" || ok.PAMService != "ntpdir" || ok.MaxFailedLogins != 3 || ok.FailedLoginWindowMinutes != 1 || ok.LockoutMinutes != 15 {
 		t.Fatalf("defaults wrong: %+v", ok)
 	}
 	for name, mod := range map[string]func(*WebConfig){
-		"bad listen":   func(w *WebConfig) { w.Listen = "22161" },
+		"bad listen":   func(w *WebConfig) { w.Listen = "12380" },
 		"bad port":     func(w *WebConfig) { w.Listen = ":99999" },
 		"cert w/o key": func(w *WebConfig) { w.CertFile = "/x.crt" },
 		"empty group":  func(w *WebConfig) { w.Group = "" },
@@ -394,10 +512,10 @@ func TestHTTPSListenerSelfSigned(t *testing.T) {
 	e.ws.Apply(cfg)
 	defer e.ws.Stop()
 
-	if _, err := os.Stat(filepath.Join(filepath.Dir(e.conf), "netdir-web.key")); err != nil {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(e.conf), "ntpdir-web.key")); err != nil {
 		t.Fatalf("self-signed key not stored: %v", err)
 	}
-	if st, _ := os.Stat(filepath.Join(filepath.Dir(e.conf), "netdir-web.key")); st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(filepath.Join(filepath.Dir(e.conf), "ntpdir-web.key")); st.Mode().Perm() != 0o600 {
 		t.Fatalf("key mode %v", st.Mode())
 	}
 	c := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, Timeout: 5 * time.Second}
@@ -473,12 +591,12 @@ func TestConfigSaveNeverChangesTheNodePause(t *testing.T) {
 	var g map[string]any
 	_ = json.Unmarshal(b, &g)
 	cfg := map[string]any{"groups": []any{g}}
-	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true)); r.code != 200 {
+	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 200 {
 		t.Fatalf("save: %d %v", r.code, r.body)
 	}
 	paused := func() bool { st, _ := e.mg.NodePauseStatus(); return st.Paused }
 	cfg["node_paused"] = true // a copy from before the node was resumed
-	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true)); r.code != 200 {
+	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 200 {
 		t.Fatalf("save: %d %v", r.code, r.body)
 	}
 	if paused() {
@@ -489,7 +607,7 @@ func TestConfigSaveNeverChangesTheNodePause(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(cfg, "node_paused") // a copy from before the node was paused
-	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true)); r.code != 200 {
+	if r := e.do("PUT", "/api/config", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 200 {
 		t.Fatalf("save: %d %v", r.code, r.body)
 	}
 	if !paused() {
@@ -501,87 +619,5 @@ func TestConfigSaveNeverChangesTheNodePause(t *testing.T) {
 	}
 	if !paused() {
 		t.Fatal("an import resumed the node")
-	}
-}
-
-func TestConfigGetPutValidateAndSave(t *testing.T) {
-	e := newWebEnv(t)
-	e.login("alice", "pw")
-
-	r := e.do("GET", "/api/config", nil, withAuth(e, false))
-	if r.body["exists"] != false || r.body["path"] != e.conf {
-		t.Fatalf("get: %v", r.body)
-	}
-	cfg := r.body["config"].(map[string]any)
-	if g, _ := cfg["groups"].([]any); len(g) == 0 { // no file yet means no gateways; give the test one to edit
-		b, _ := json.Marshal(defaultGroup())
-		var m map[string]any
-		_ = json.Unmarshal(b, &m)
-		cfg["groups"] = []any{m}
-	}
-
-	// invalid: bad VIP → 422, nothing written
-	cfg["groups"].([]any)[0].(map[string]any)["vip4"] = "not-an-ip"
-	r = e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true))
-	if r.code != 422 || !strings.Contains(r.body["error"].(string), "vip4") {
-		t.Fatalf("invalid config: %d %v", r.code, r.body)
-	}
-	if _, err := os.Stat(e.conf); err == nil {
-		t.Fatal("invalid config was written")
-	}
-
-	// unknown field (typo) rejected
-	cfg["groups"].([]any)[0].(map[string]any)["vip4"] = "10.9.0.1/24"
-	cfg["groups"].([]any)[0].(map[string]any)["prio"] = 5
-	if r = e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true)); r.code != 400 {
-		t.Fatalf("unknown field: %d %v", r.code, r.body)
-	}
-	delete(cfg["groups"].([]any)[0].(map[string]any), "prio")
-
-	// an explicit empty groups list means "no gateways", not the default group
-	empty := map[string]any{"log_level": "info", "groups": []any{}}
-	if r = e.do("PUT", "/api/config?dry_run=1", map[string]any{"config": empty}, withAuth(e, true)); r.code != 200 {
-		t.Fatalf("zero groups: %d %v", r.code, r.body)
-	}
-	if g, _ := r.body["config"].(map[string]any)["groups"].([]any); len(g) != 0 {
-		t.Fatalf("zero groups became %v", g)
-	}
-
-	// dry run: valid, not written, not applied
-	if r = e.do("PUT", "/api/config?dry_run=1", map[string]any{"config": cfg}, withAuth(e, true)); r.code != 200 {
-		t.Fatalf("dry run: %d %v", r.code, r.body)
-	}
-	if _, err := os.Stat(e.conf); err == nil || e.reloads.Load() != 0 {
-		t.Fatal("dry run wrote or applied")
-	}
-
-	// real save: written 0600, applied via reload, GET round-trips
-	cfg["settings"] = map[string]any{"metrics_acl": []any{"10.0.0.123"}}
-	r = e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true))
-	if r.code != 200 {
-		t.Fatalf("save: %d %v", r.code, r.body)
-	}
-	if e.reloads.Load() != 1 {
-		t.Fatalf("reload calls = %d", e.reloads.Load())
-	}
-	st, err := os.Stat(e.conf)
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("saved file: %v %v", err, st)
-	}
-	dc, err := loadConfig(e.conf)
-	if err != nil || dc.Groups[0].VIP4 != "10.9.0.1/24" ||
-		dc.Settings.MetricsACL[0] != "10.0.0.123" {
-		t.Fatalf("saved content wrong: %v %+v", err, dc)
-	}
-	r = e.do("GET", "/api/config", nil, withAuth(e, false))
-	if r.body["exists"] != true {
-		t.Fatal("exists flag not updated")
-	}
-
-	// an existing file keeps its mode
-	os.Chmod(e.conf, 0o640)
-	e.do("PUT", "/api/config", map[string]any{"config": cfg, "base": "force"}, withAuth(e, true))
-	if st, _ := os.Stat(e.conf); st.Mode().Perm() != 0o640 {
-		t.Fatalf("mode not preserved: %v", st.Mode())
 	}
 }

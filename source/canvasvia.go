@@ -49,11 +49,11 @@ func servingPeers(g CanvasGateway) []CanvasNode {
 	return append(ok, degraded...)
 }
 
-// takeFrom puts the serving node's picture of the gateway in place of this node's: its colour, anycast
+// takeFrom puts the serving node's picture of the gateway in place of this node's: its colour, servers, anycast
 // addresses, members and uptime; the cluster's nodes and everything about this node's own entry stay.
 func (g *CanvasGateway) takeFrom(p CanvasGateway, from CanvasNode) {
-	g.Status, g.Detail, g.Families = p.Status, p.Detail, p.Families
-	g.Members, g.Anycast, g.Uptime = p.Members, p.Anycast, p.Uptime
+	g.Status, g.Detail, g.Families, g.Servers, g.Fallback, g.UsingFallback, g.FallbackDown = p.Status, p.Detail, p.Families, p.Servers, p.Fallback, p.UsingFallback, p.FallbackDown
+	g.Members, g.Anycast, g.Uptime, g.LB, g.LBOwn = p.Members, p.Anycast, p.Uptime, p.LB, p.LBOwn
 	// the serving node's own entry is "local" to it, not to this node: nobody is this node here, or the
 	// page would put the controller mark (and the star) on the node it is open on
 	g.Members = make([]CanvasMember, len(p.Members))
@@ -65,93 +65,24 @@ func (g *CanvasGateway) takeFrom(p CanvasGateway, from CanvasNode) {
 	g.Via, g.ViaAddr = from.Name, from.Addr
 }
 
-// peerCanvases keeps, for a few seconds, the picture each serving node gave of its own gateways, so a poll asks no node that was
-// asked a moment ago, and a slow node never holds the page up: a stale picture is used while a new one is fetched in the background.
-var (
-	peerCanvasMu sync.Mutex
-	peerCanvases = map[string]*peerCanvas{}
-	// viaColdWait is how long a request waits for a node it has no picture from yet; then it shows this node's own view.
-	viaColdWait = 1500 * time.Millisecond
-)
-
-const peerCanvasFor = 3 * time.Second
-
-type peerCanvas struct {
-	at       time.Time
-	data     []CanvasGateway
-	fetching bool
-	tried    bool // a fetch has ended (well or not): later requests do not wait for the next one
-	done     chan struct{}
-}
-
-// askPeerCanvas asks a node, over the cluster channel, for its own picture of its gateways.
-var askPeerCanvas = func(s *StatusServer, ctx context.Context, addr string) ([]CanvasGateway, bool) {
-	resp, err := s.mg.cl.Relay(ctx, addr, proxyReq{User: "topology", Method: http.MethodGet, Path: "/api/canvas?own=1"})
-	var out struct {
-		Data []CanvasGateway `json:"data"`
-	}
-	if err != nil || resp.Status != http.StatusOK || json.Unmarshal(resp.Body, &out) != nil {
-		return nil, false
-	}
-	return out.Data, true
-}
-
-func (s *StatusServer) peerCanvasOf(n CanvasNode) []CanvasGateway {
-	peerCanvasMu.Lock()
-	e := peerCanvases[n.Addr]
-	if e == nil {
-		e = &peerCanvas{}
-		peerCanvases[n.Addr] = e
-	}
-	if time.Since(e.at) >= peerCanvasFor && !e.fetching {
-		e.fetching = true
-		e.done = make(chan struct{})
-		done := e.done
-		go func() {
-			t0 := time.Now()
-			cctx, cancel := context.WithTimeout(context.Background(), viaFetchTimeout)
-			defer cancel()
-			data, good := askPeerCanvas(s, cctx, n.Addr)
-			if took := time.Since(t0); took > time.Second {
-				warnf("topology: node %s took %s to give its picture of its gateways (answered: %v)", n.Addr, took.Round(100*time.Millisecond), good)
-			}
-			peerCanvasMu.Lock()
-			defer peerCanvasMu.Unlock()
-			e.fetching, e.tried = false, true
-			close(done)
-			if good {
-				e.data, e.at = data, time.Now()
-			} else {
-				e.at = time.Now().Add(-(peerCanvasFor - time.Second)) // counts as 2 s old: asked again in a second, not at once
-			}
-		}()
-	}
-	data, done, at, tried := e.data, e.done, e.at, e.tried
-	peerCanvasMu.Unlock()
-	if data == nil && !tried && done != nil { // only the very first ask is waited for: a node that does not answer is not waited for again
-		select {
-		case <-done:
-		case <-time.After(viaColdWait):
-		}
-		peerCanvasMu.Lock()
-		data, at = e.data, e.at
-		peerCanvasMu.Unlock()
-	}
-	if time.Since(at) > time.Minute {
-		return nil // too old to say how the gateway is doing now
-	}
-	return data
-}
-
 // viaServing replaces, in place, each gateway this node does not serve with the picture of a node that does.
 func (s *StatusServer) viaServing(ctx context.Context, groups []CanvasGateway) {
 	if s.mg == nil || s.mg.cl == nil {
 		return
 	}
+	ask := func(n CanvasNode) []CanvasGateway {
+		var out struct {
+			Data []CanvasGateway `json:"data"`
+		}
+		if body := s.peerBody(n, "topology", "/api/canvas?own=1"); body == nil || json.Unmarshal(body, &out) != nil {
+			return nil
+		}
+		return out.Data
+	}
 	for i := range groups {
 	peers:
 		for _, n := range servingPeers(groups[i]) {
-			for _, p := range s.peerCanvasOf(n) {
+			for _, p := range ask(n) {
 				if p.GroupID == groups[i].GroupID {
 					groups[i].takeFrom(p, n)
 					break peers
@@ -161,31 +92,80 @@ func (s *StatusServer) viaServing(ctx context.Context, groups []CanvasGateway) {
 	}
 }
 
-// addPeerClients makes each gateway's Clients the callers of every node that serves it, counted once each: this node's own
-// (already in the gateway) and those the other nodes report in their own view (?own=1), from the picture peerCanvasOf keeps of each
-// (so a node that is slow or does not answer is asked once in a while, in the background, and never holds a poll up).  A node that
-// cannot be asked counts as it was.
-func (s *StatusServer) addPeerClients(ctx context.Context, groups []CanvasGateway) {
-	if s.mg == nil || s.mg.cl == nil || !s.mg.cl.Enabled() {
-		return
+// peerReplies keeps, per node and path, the last good answer of a node to a "?own=1" ask, so a poll asks no node that was asked a
+// moment ago and a slow node never holds a page up: an older answer is used at once while a new one is fetched in the background,
+// and a node that does not answer is waited for at most once (the very first ask), then only retried quietly in the background.
+var (
+	peerReplyMu sync.Mutex
+	peerReplies = map[string]*peerReply{}
+	// viaColdWait is how long a request waits for a node it has no answer from yet; then the page shows this node's own view.
+	viaColdWait = 1500 * time.Millisecond
+)
+
+const peerReplyFor = 3 * time.Second
+
+type peerReply struct {
+	at       time.Time
+	body     []byte
+	fetching bool
+	tried    bool // a fetch has ended (well or not): later requests do not wait for the next one
+	done     chan struct{}
+}
+
+// askPeerBody asks a node, over the cluster channel, for GET path.
+var askPeerBody = func(s *StatusServer, ctx context.Context, addr, user, path string) ([]byte, bool) {
+	resp, err := s.mg.cl.Relay(ctx, addr, proxyReq{User: user, Method: http.MethodGet, Path: path})
+	if err != nil || resp.Status != http.StatusOK {
+		return nil, false
 	}
-	for i := range groups {
-		set := map[string]bool{}
-		for _, c := range groups[i].MCPCallers {
-			set[c] = true
-		}
-		for _, n := range groups[i].Nodes {
-			if n.Self || !n.Reachable || n.Excluded || (n.Gw != "ok" && n.Gw != "degraded") {
-				continue
-			}
-			for _, p := range s.peerCanvasOf(n) {
-				if p.GroupID == groups[i].GroupID {
-					for _, id := range p.MCPCallers {
-						set[id] = true
-					}
-				}
-			}
-		}
-		groups[i].MCPClients = len(set)
+	return resp.Body, true
+}
+
+// peerBody is the body of GET path on node n as last heard (nil: not heard, or too old to say how things are now).
+func (s *StatusServer) peerBody(n CanvasNode, user, path string) []byte {
+	key := n.Addr + "|" + path
+	peerReplyMu.Lock()
+	e := peerReplies[key]
+	if e == nil {
+		e = &peerReply{}
+		peerReplies[key] = e
 	}
+	if time.Since(e.at) >= peerReplyFor && !e.fetching {
+		e.fetching = true
+		e.done = make(chan struct{})
+		done := e.done
+		go func() {
+			t0 := time.Now()
+			cctx, cancel := context.WithTimeout(context.Background(), viaFetchTimeout)
+			defer cancel()
+			body, good := askPeerBody(s, cctx, n.Addr, user, path)
+			if took := time.Since(t0); took > time.Second {
+				warnf("topology: node %s took %s to answer %s (answered: %v)", n.Addr, took.Round(100*time.Millisecond), path, good)
+			}
+			peerReplyMu.Lock()
+			defer peerReplyMu.Unlock()
+			e.fetching, e.tried = false, true
+			close(done)
+			if good {
+				e.body, e.at = body, time.Now()
+			} else {
+				e.at = time.Now().Add(-(peerReplyFor - time.Second)) // counts as 2 s old: asked again in a second, not at once
+			}
+		}()
+	}
+	body, done, at, tried := e.body, e.done, e.at, e.tried
+	peerReplyMu.Unlock()
+	if body == nil && !tried && done != nil {
+		select {
+		case <-done:
+		case <-time.After(viaColdWait):
+		}
+		peerReplyMu.Lock()
+		body, at = e.body, e.at
+		peerReplyMu.Unlock()
+	}
+	if time.Since(at) > time.Minute {
+		return nil
+	}
+	return body
 }

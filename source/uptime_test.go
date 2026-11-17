@@ -43,6 +43,43 @@ func TestUpTrackerTransitions(t *testing.T) {
 	}
 }
 
+func TestUpTrackerAnnotate(t *testing.T) {
+	u := newUpTracker()
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	mk := func(srv string) []CanvasGateway {
+		return []CanvasGateway{{GroupID: 1, Status: "ok", Anycast: []AnycastState{{Addr: "10.9.9.9", Up: true}},
+			Servers: []CanvasServer{{Addr: "1.1.1.1", Status: srv}}}}
+	}
+	g := mk("ok")
+	u.annotate(g, t0)
+	if g[0].Uptime == nil || g[0].Anycast[0].Uptime == nil || g[0].Servers[0].Uptime == nil {
+		t.Fatalf("not annotated: %+v", g[0])
+	}
+	g = mk("bad")
+	u.annotate(g, t0.Add(time.Minute))
+	if up := g[0].Servers[0].Uptime; up.Up || up.Failures != 1 {
+		t.Fatalf("server should be down: %+v", up)
+	}
+	if !g[0].Uptime.Up || g[0].Uptime.Failures != 0 {
+		t.Fatalf("gateway unaffected: %+v", g[0].Uptime)
+	}
+	// a removed server is forgotten
+	g = mk("ok")
+	g[0].Servers = nil
+	u.annotate(g, t0.Add(2*time.Minute))
+	for k := range u.items {
+		if strings.Contains(k, "/s/") || strings.Contains(k, "/t/") {
+			t.Fatalf("stale item %s", k)
+		}
+	}
+	// withdrawn anycast on a gateway that is not running says nothing
+	g = []CanvasGateway{{GroupID: 2, Status: "idle", Anycast: []AnycastState{{Addr: "10.8.8.8"}}}}
+	u.annotate(g, t0)
+	if g[0].Anycast[0].Uptime != nil || g[0].Uptime != nil {
+		t.Fatalf("idle gateway: %+v", g[0])
+	}
+}
+
 func TestDurText(t *testing.T) {
 	for d, want := range map[time.Duration]string{9 * time.Second: "9s", 7*time.Minute + 12*time.Second: "7m 12s", 2*time.Hour + 5*time.Minute: "2h 5m", 76 * time.Hour: "3d 4h"} {
 		if got := durText(d); got != want {
@@ -76,41 +113,5 @@ func TestUpTextCountsFailures(t *testing.T) {
 	var none *UpInfo
 	if none.Text(t0) != "" {
 		t.Fatal("nothing to say for an item with no uptime")
-	}
-}
-
-func TestUpTrackerAnnotate(t *testing.T) {
-	u := newUpTracker()
-	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	mk := func(up bool) []CanvasGateway {
-		return []CanvasGateway{{GroupID: 1, Status: "ok", Anycast: []AnycastState{{Addr: "10.9.9.9", Up: up}}}}
-	}
-	g := mk(true)
-	u.annotate(g, t0)
-	if g[0].Uptime == nil || g[0].Anycast[0].Uptime == nil {
-		t.Fatalf("not annotated: %+v", g[0])
-	}
-	g = mk(false)
-	u.annotate(g, t0.Add(time.Minute))
-	if up := g[0].Anycast[0].Uptime; up.Up || up.Failures != 1 {
-		t.Fatalf("anycast address should be down: %+v", up)
-	}
-	if !g[0].Uptime.Up || g[0].Uptime.Failures != 0 {
-		t.Fatalf("gateway unaffected: %+v", g[0].Uptime)
-	}
-	// a removed address is forgotten
-	g = mk(true)
-	g[0].Anycast = nil
-	u.annotate(g, t0.Add(2*time.Minute))
-	for k := range u.items {
-		if strings.Contains(k, "/a/") {
-			t.Fatalf("stale item %s", k)
-		}
-	}
-	// withdrawn anycast on a gateway that is not running says nothing
-	g = []CanvasGateway{{GroupID: 2, Status: "idle", Anycast: []AnycastState{{Addr: "10.8.8.8"}}}}
-	u.annotate(g, t0)
-	if g[0].Anycast[0].Uptime != nil || g[0].Uptime != nil {
-		t.Fatalf("idle gateway: %+v", g[0])
 	}
 }
