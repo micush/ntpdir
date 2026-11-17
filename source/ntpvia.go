@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,21 +104,12 @@ func (s *StatusServer) ntpVia(ctx context.Context, resp map[string]any) map[stri
 	if s.mg == nil || s.mg.cl == nil {
 		return resp
 	}
-	fetched := map[string]*ntpAnswer{}
 	ask := func(n CanvasNode) *ntpAnswer {
-		if a, done := fetched[n.Addr]; done {
-			return a
-		}
-		cctx, cancel := context.WithTimeout(ctx, viaFetchTimeout)
-		defer cancel()
-		r, err := s.mg.cl.Relay(cctx, n.Addr, proxyReq{User: "ntp", Method: http.MethodGet, Path: "/api/ntp?own=1"})
 		var out ntpAnswer
-		if err == nil && r.Status == http.StatusOK && json.Unmarshal(r.Body, &out) == nil {
-			fetched[n.Addr] = &out
-		} else {
-			fetched[n.Addr] = nil
+		if body := s.peerBody(n, "ntp", "/api/ntp?own=1"); body == nil || json.Unmarshal(body, &out) != nil {
+			return nil
 		}
-		return fetched[n.Addr]
+		return &out
 	}
 	local := func(gid int) bool {
 		data, _ := resp["data"].(map[string]any)
