@@ -78,13 +78,13 @@ func TestBackupArchiveHoldsTheStateAndLeavesOutTheRest(t *testing.T) {
 	base := t.TempDir()
 	state := filepath.Join(base, "state")
 	writeTree(t, state, map[string]string{
-		"ntpdir.conf": "CONF", "webcert/ntpdir-web.key": "KEY", "versions/1.json": "V1", "cluster/id": "ID", "alerts.json": "AL",
+		"netdir.conf": "CONF", "webcert/netdir-web.key": "KEY", "versions/1.json": "V1", "cluster/id": "ID", "alerts.json": "AL",
 		"backup/id_ed25519": "SSHKEY", "backup/known_hosts": "KH",
-		"update/staged.tgz": "BIG", "blocklists/a.gz": "BL", "ntpdir.log": "LOG", "ntpdir.log.1": "LOG1", "sessions.json": "S", "stats.json.gz": "ST",
+		"update/staged.tgz": "BIG", "blocklists/a.gz": "BL", "netdir.log": "LOG", "netdir.log.1": "LOG1", "sessions.json": "S", "stats.json.gz": "ST",
 		"pairs/x": "P", "backup/work/x.part": "W", "backup/status.json": "S",
 	})
 	var buf bytes.Buffer
-	n, err := writeBackupArchive(&buf, "pw-12345678", state, filepath.Join(state, "ntpdir.conf"), "ns1", time.Now())
+	n, err := writeBackupArchive(&buf, "pw-12345678", state, filepath.Join(state, "netdir.conf"), "ns1", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestBackupArchiveHoldsTheStateAndLeavesOutTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if man.Node != "ns1" || man.Product != backupProduct || man.Conf != "ntpdir.conf" {
+	if man.Node != "ns1" || man.Product != backupProduct || man.Conf != "netdir.conf" {
 		t.Fatalf("manifest %+v", man)
 	}
 	var got []string
@@ -108,11 +108,11 @@ func TestBackupArchiveHoldsTheStateAndLeavesOutTheRest(t *testing.T) {
 		return nil
 	})
 	sort.Strings(got)
-	want := "alerts.json backup/id_ed25519 backup/known_hosts cluster/id ntpdir.conf versions/1.json webcert/ntpdir-web.key"
+	want := "alerts.json backup/id_ed25519 backup/known_hosts cluster/id netdir.conf versions/1.json webcert/netdir-web.key"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("restored\n got %v\nwant %s", got, want)
 	}
-	if b, _ := os.ReadFile(filepath.Join(out, "webcert/ntpdir-web.key")); string(b) != "KEY" {
+	if b, _ := os.ReadFile(filepath.Join(out, "webcert/netdir-web.key")); string(b) != "KEY" {
 		t.Fatal("content differs")
 	}
 }
@@ -120,36 +120,36 @@ func TestBackupArchiveHoldsTheStateAndLeavesOutTheRest(t *testing.T) {
 func TestBackupRestoreReplacesAndKeepsWhatWasThere(t *testing.T) {
 	base := t.TempDir()
 	state := filepath.Join(base, "state")
-	writeTree(t, state, map[string]string{"ntpdir.conf": "NEW", "versions/1.json": "V1"})
+	writeTree(t, state, map[string]string{"netdir.conf": "NEW", "versions/1.json": "V1"})
 	var buf bytes.Buffer
-	if _, err := writeBackupArchive(&buf, "pw-12345678", state, filepath.Join(state, "ntpdir.conf"), "ns1", time.Now()); err != nil {
+	if _, err := writeBackupArchive(&buf, "pw-12345678", state, filepath.Join(state, "netdir.conf"), "ns1", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(base, "x"+backupExt)
 	os.WriteFile(file, buf.Bytes(), 0o600)
 	// the node now: another configuration, a log and a staged upgrade the backup does not hold
 	os.RemoveAll(state)
-	writeTree(t, state, map[string]string{"ntpdir.conf": "OLD", "versions/9.json": "V9", "update/s.tgz": "U", "ntpdir.log": "L"})
-	if _, _, err := restoreBackup(file, "wrong-password", state, filepath.Join(state, "ntpdir.conf")); err == nil {
+	writeTree(t, state, map[string]string{"netdir.conf": "OLD", "versions/9.json": "V9", "update/s.tgz": "U", "netdir.log": "L"})
+	if _, _, err := restoreBackup(file, "wrong-password", state, filepath.Join(state, "netdir.conf")); err == nil {
 		t.Fatal("a wrong password restored something")
 	}
-	if b, _ := os.ReadFile(filepath.Join(state, "ntpdir.conf")); string(b) != "OLD" {
+	if b, _ := os.ReadFile(filepath.Join(state, "netdir.conf")); string(b) != "OLD" {
 		t.Fatal("a failed restore changed the state")
 	}
-	_, aside, err := restoreBackup(file, "pw-12345678", state, filepath.Join(state, "ntpdir.conf"))
+	_, aside, err := restoreBackup(file, "pw-12345678", state, filepath.Join(state, "netdir.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(state, "ntpdir.conf")); string(b) != "NEW" {
+	if b, _ := os.ReadFile(filepath.Join(state, "netdir.conf")); string(b) != "NEW" {
 		t.Fatalf("conf is %q", b)
 	}
 	if _, err := os.Stat(filepath.Join(state, "versions/9.json")); err == nil {
 		t.Fatal("the old versions directory was merged in")
 	}
-	if b, _ := os.ReadFile(filepath.Join(aside, "ntpdir.conf")); string(b) != "OLD" {
+	if b, _ := os.ReadFile(filepath.Join(aside, "netdir.conf")); string(b) != "OLD" {
 		t.Fatal("the old configuration was not kept")
 	}
-	for _, keep := range []string{"update/s.tgz", "ntpdir.log"} {
+	for _, keep := range []string{"update/s.tgz", "netdir.log"} {
 		if _, err := os.Stat(filepath.Join(state, keep)); err != nil {
 			t.Fatalf("%s was not left alone", keep)
 		}
@@ -165,7 +165,7 @@ func TestBackupRestoreRefusesBadPaths(t *testing.T) {
 		sw, _ := newSealWriter(&raw, "pw-12345678")
 		gz := gzip.NewWriter(sw)
 		tw := tar.NewWriter(gz)
-		tarAdd(tw, backupManifestName, 0o600, []byte(`{"format":1,"product":"`+backupProduct+`","conf":"ntpdir.conf"}`), time.Now())
+		tarAdd(tw, backupManifestName, 0o600, []byte(`{"format":1,"product":"`+backupProduct+`","conf":"netdir.conf"}`), time.Now())
 		tarAdd(tw, name, 0o600, []byte("x"), time.Now())
 		tw.Close()
 		gz.Close()
@@ -206,9 +206,9 @@ func TestBackupPasswordHasNoLimits(t *testing.T) {
 			t.Fatalf("%q was changed to %q", pw, c.Password)
 		}
 		state := t.TempDir()
-		writeTree(t, state, map[string]string{"ntpdir.conf": "CONF"})
+		writeTree(t, state, map[string]string{"netdir.conf": "CONF"})
 		var buf bytes.Buffer
-		if _, err := writeBackupArchive(&buf, pw, state, filepath.Join(state, "ntpdir.conf"), "ns1", time.Now()); err != nil {
+		if _, err := writeBackupArchive(&buf, pw, state, filepath.Join(state, "netdir.conf"), "ns1", time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := readBackupArchive(bytes.NewReader(buf.Bytes()), pw, t.TempDir()); err != nil {
@@ -221,7 +221,7 @@ func TestBackupPasswordHasNoLimits(t *testing.T) {
 }
 
 func TestBackupConfigIsChecked(t *testing.T) {
-	good := BackupConfig{Enabled: true, Host: "backup.example.com", User: "ntpdir", Dir: "backups/dns", Keep: 7, At: "03:15", Password: "longenough"}
+	good := BackupConfig{Enabled: true, Host: "backup.example.com", User: "netdir", Dir: "backups/dns", Keep: 7, At: "03:15", Password: "longenough"}
 	if err := (&good).Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func (f *fakeServer) run(_ context.Context, c *BackupTarget, _ string, script, _
 func newBackupRig(t *testing.T, cfg *BackupConfig) (*BackupEngine, *fakeServer, *time.Time) {
 	t.Helper()
 	state := filepath.Join(t.TempDir(), "state")
-	writeTree(t, state, map[string]string{"ntpdir.conf": "C"})
+	writeTree(t, state, map[string]string{"netdir.conf": "C"})
 	srv := &fakeServer{files: map[string]bool{}}
 	oldS, oldK := backupSFTP, backupKeygen
 	backupSFTP = srv.run
@@ -299,7 +299,7 @@ func newBackupRig(t *testing.T, cfg *BackupConfig) (*BackupEngine, *fakeServer, 
 	}
 	t.Cleanup(func() { backupSFTP, backupKeygen = oldS, oldK })
 	clock := time.Date(2026, 10, 25, 12, 0, 0, 0, time.Local)
-	e := NewBackupEngine(state, filepath.Join(state, "ntpdir.conf"), "NS1.example", func() *BackupConfig { return cfg })
+	e := NewBackupEngine(state, filepath.Join(state, "netdir.conf"), "NS1.example", func() *BackupConfig { return cfg })
 	e.now = func() time.Time { return clock }
 	e.scheduled = func() bool { return true }
 	return e, srv, &clock
@@ -423,25 +423,25 @@ func TestBackupRunScheduled(t *testing.T) {
 // A configuration file with the old schedule reads as the task, so a page that saves what it read keeps the backups on.
 func TestBackupOldScheduleReadsAsATask(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "c.json")
-	os.WriteFile(f, []byte(`{"groups":[],"ntp":{"backup":{"enabled":true,"hours":6,"password":"p","targets":[{"host":"h","user":"u"}]}}}`), 0o600)
+	os.WriteFile(f, []byte(`{"groups":[],"settings":{"backup":{"enabled":true,"hours":6,"password":"p","targets":[{"host":"h","user":"u"}]}}}`), 0o600)
 	dc, err := loadConfig(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dc.NTP.Schedule) != 1 || dc.NTP.Schedule[0].Action != "backup" || dc.NTP.Backup.Enabled || dc.NTP.Backup.Hours != 0 {
-		t.Fatalf("%+v %+v", dc.NTP.Schedule, dc.NTP.Backup)
+	if len(dc.Settings.Schedule) != 1 || dc.Settings.Schedule[0].Action != "backup" || dc.Settings.Backup.Enabled || dc.Settings.Backup.Hours != 0 {
+		t.Fatalf("%+v %+v", dc.Settings.Schedule, dc.Settings.Backup)
 	}
 	if err := dc.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if len(dc.NTP.Schedule) != 1 {
-		t.Fatalf("%+v", dc.NTP.Schedule)
+	if len(dc.Settings.Schedule) != 1 {
+		t.Fatalf("%+v", dc.Settings.Schedule)
 	}
 }
 
 // The schedule of v184-v187 becomes a Scheduler task once, and the old fields are cleared.
 func TestBackupScheduleMovesToTheScheduler(t *testing.T) {
-	d := NTPConfig{Backup: &BackupConfig{Enabled: true, At: "03:15", Targets: []BackupTarget{{Host: "h", User: "u"}}}}
+	d := Settings{Backup: &BackupConfig{Enabled: true, At: "03:15", Targets: []BackupTarget{{Host: "h", User: "u"}}}}
 	migrateBackupSchedule(&d)
 	if len(d.Schedule) != 1 || d.Schedule[0].Action != "backup" || d.Schedule[0].Freq != "daily" || d.Backup.Enabled || d.Backup.At != "" {
 		t.Fatalf("%+v %+v", d.Schedule, d.Backup)
@@ -469,7 +469,7 @@ func TestBackupScheduleMovesToTheScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	// switched off: no task, the fields go
-	off := NTPConfig{Backup: &BackupConfig{Hours: 4, Targets: []BackupTarget{{Host: "h", User: "u"}}}}
+	off := Settings{Backup: &BackupConfig{Hours: 4, Targets: []BackupTarget{{Host: "h", User: "u"}}}}
 	migrateBackupSchedule(&off)
 	if len(off.Schedule) != 0 || off.Backup.Hours != 0 {
 		t.Fatalf("%+v", off)
@@ -568,14 +568,14 @@ func TestPendingRestoreIsAppliedAtStart(t *testing.T) {
 	backupIter = 1000
 	defer func() { backupIter = old }()
 	src := filepath.Join(t.TempDir(), "src")
-	writeTree(t, src, map[string]string{"ntpdir.conf": "FROM-BACKUP", "webcert/k": "KEY"})
+	writeTree(t, src, map[string]string{"netdir.conf": "FROM-BACKUP", "webcert/k": "KEY"})
 	var raw bytes.Buffer
-	if _, err := writeBackupArchive(&raw, "pw-12345678", src, filepath.Join(src, "ntpdir.conf"), "ns1", time.Now()); err != nil {
+	if _, err := writeBackupArchive(&raw, "pw-12345678", src, filepath.Join(src, "netdir.conf"), "ns1", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	state := filepath.Join(t.TempDir(), "state")
-	writeTree(t, state, map[string]string{"ntpdir.conf": "CURRENT", "other": "O"})
-	conf := filepath.Join(state, "ntpdir.conf")
+	writeTree(t, state, map[string]string{"netdir.conf": "CURRENT", "other": "O"})
+	conf := filepath.Join(state, "netdir.conf")
 	cfg := &BackupConfig{}
 	e := NewBackupEngine(state, conf, "ns1", func() *BackupConfig { return cfg })
 	file := filepath.Join(t.TempDir(), "b"+backupExt)
@@ -621,11 +621,11 @@ func TestBackupRestoreNeedsNoPassword(t *testing.T) {
 	cfg := &BackupConfig{Targets: []BackupTarget{{Host: "h", User: "u"}}}
 	e, _, _ := newBackupRig(t, cfg)
 	src := t.TempDir()
-	writeTree(t, src, map[string]string{"ntpdir.conf": "CONF"})
+	writeTree(t, src, map[string]string{"netdir.conf": "CONF"})
 	mk := func(pw string) string {
 		f := filepath.Join(t.TempDir(), "b"+backupExt)
 		var buf bytes.Buffer
-		if _, err := writeBackupArchive(&buf, pw, src, filepath.Join(src, "ntpdir.conf"), "ns1", time.Now()); err != nil {
+		if _, err := writeBackupArchive(&buf, pw, src, filepath.Join(src, "netdir.conf"), "ns1", time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		os.WriteFile(f, buf.Bytes(), 0o600)
@@ -666,7 +666,7 @@ func TestBackupSaysWhatIsMissing(t *testing.T) {
 func TestSFTPErrorSaysWhy(t *testing.T) {
 	e := errors.New("exit status 255")
 	for _, c := range []struct{ out, want string }{
-		{"ntpdir@ns1: Permission denied (publickey).\r\nConnection closed\r\n", "use Install key"},
+		{"netdir@ns1: Permission denied (publickey).\r\nConnection closed\r\n", "use Install key"},
 		{"ssh: Could not resolve hostname ns1: Name or service not known\r\nConnection closed.\n", "Could not resolve hostname ns1"},
 		{"ssh: connect to host ns1 port 22: Connection refused\nConnection closed\n", "Connection refused"},
 		{"Connection closed\n", "the connection was closed: exit status 255"},

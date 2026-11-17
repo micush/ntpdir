@@ -185,39 +185,9 @@ func clusterGatherSel[T any](ctx context.Context, m *Mgmt, req proxyReq, timeout
 	return parts, infos
 }
 
-// clusterQStats is qstats.get for the whole cluster.
-func (m *Mgmt) clusterQStats(ctx context.Context, actor string, from, to time.Time, f QFilter) (*QStatsResult, error) {
-	return m.clusterQStatsGW(ctx, actor, from, to, f, 0)
-}
-
 // gatewayNodes accepts the cluster nodes that serve a gateway: every node but the ones removed from it.
 func gatewayNodes(g *GroupConfig) func(PeerView) bool {
 	return func(p PeerView) bool { return p.NodeID == "" || !containsStr(g.ExcludedNodes, p.NodeID) }
-}
-
-// clusterQStatsGW is clusterQStats for the nodes of one gateway (gid > 0), or every node (0).  Statistics are kept per node, not
-// per gateway, so a node that serves several gateways counts all its traffic in each of them.
-func (m *Mgmt) clusterQStatsGW(ctx context.Context, actor string, from, to time.Time, f QFilter, gid int) (*QStatsResult, error) {
-	var keep func(PeerView) bool
-	if gid > 0 {
-		dc, _, err := m.LiveConfig()
-		if err != nil {
-			return nil, err
-		}
-		g, err := findGroup(dc, gid)
-		if err != nil {
-			return nil, err
-		}
-		keep = gatewayNodes(g)
-	}
-	q := url.Values{"from": {strconv.FormatInt(from.Unix(), 10)}, "to": {strconv.FormatInt(to.Unix(), 10)},
-		"outcome": {f.Outcome}, "client": {f.Client}, "server": {f.Server}, "cmatch": {f.CMatch}, "smatch": {f.SMatch}}
-	parts, infos := clusterGatherSel(ctx, m, proxyReq{User: actor, Method: "GET", Path: "/api/qstats?" + q.Encode()}, clusterStatsTimeout,
-		func() (*QStatsResult, error) { return qstats.Query(from, to, f), nil }, keep)
-	if len(parts) == 0 {
-		return nil, errors.New("no node answered")
-	}
-	return mergeQStats(parts, infos), nil
 }
 
 // clusterHost is host.get for the whole cluster.
@@ -281,8 +251,8 @@ func commonSpan(starts []int64, lens []int, step int) (start int64, n int) {
 		}
 	}
 	n = int((end - start) / int64(step))
-	if n > qsMaxPoints {
-		n = qsMaxPoints
+	if n > maxPoints {
+		n = maxPoints
 	}
 	return start, n
 }
@@ -304,143 +274,6 @@ func addGuard(dst *MemGuardInfo, g MemGuardInfo) {
 	if g.Last > dst.Last {
 		dst.Last, dst.LastNote = g.Last, g.LastNote
 	}
-}
-
-// addCounts adds every row of src to dst (by name), keeping a client's reverse-DNS names.
-func addCounts(dst map[string]*NameCount, src []NameCount) {
-	for _, e := range src {
-		d := dst[e.Name]
-		if d == nil {
-			d = &NameCount{Name: e.Name}
-			dst[e.Name] = d
-		}
-		d.Count += e.Count
-		if e.Manual && !d.Manual { // a name given by hand wins over a reverse-DNS one another node found first
-			d.Host, d.Hosts, d.Manual = e.Host, e.Hosts, true
-		}
-		if d.Host == "" {
-			d.Host = e.Host
-		}
-		if len(d.Hosts) == 0 {
-			d.Hosts = e.Hosts
-		}
-	}
-}
-
-// sortedCounts orders rows like topList (count, then name; "(others)" last) and keeps limit of them (0 keeps all).
-func sortedCounts(m map[string]*NameCount, limit int) []NameCount {
-	out := make([]NameCount, 0, len(m))
-	for _, v := range m {
-		out = append(out, *v)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		oi, oj := out[i].Name == qsOthers, out[j].Name == qsOthers
-		if oi != oj {
-			return oj
-		}
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Name < out[j].Name
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
-}
-
-// mergeQStats adds the statistics of several nodes together: the series point by point (they are aligned to the same
-// step), the totals, and the top lists by name.  The distinct client count cannot be added (a client that asked two nodes
-// is one client): it is the larger of the busiest node's count and the clients seen in the nodes' lists, a lower bound.
-func mergeQStats(parts []clusterPart[QStatsResult], infos []ClusterNodeInfo) *QStatsResult {
-	steps := make([]int, len(parts))
-	for i, p := range parts {
-		steps[i] = p.R.Step
-	}
-	step := commonStep(steps)
-	use := parts[:0:0]
-	for _, p := range parts {
-		if p.R.Step == step {
-			use = append(use, p)
-		} else {
-			markExcluded(infos, p.Name, "answered with another time resolution")
-		}
-	}
-	starts, lens := make([]int64, len(use)), make([]int, len(use))
-	for i, p := range use {
-		starts[i], lens[i] = p.R.Start, len(p.R.Total)
-	}
-	start, n := commonSpan(starts, lens, step)
-	r := &QStatsResult{Outcome: use[0].R.Outcome, Client: use[0].R.Client, Server: use[0].R.Server,
-		Start: start, Step: step, From: use[0].R.From, To: use[0].R.To, Since: use[0].R.Since,
-		Total: make([]uint64, n), Answered: make([]uint64, n), Failed: make([]uint64, n), KoD: make([]uint64, n), Refused: make([]uint64, n), ClientsN: make([]uint64, n),
-		Versions: []NameCount{}, Families: []NameCount{}, Clients: []NameCount{}, Servers: []NameCount{}}
-	versions, families, clients, servers := map[string]*NameCount{}, map[string]*NameCount{}, map[string]*NameCount{}, map[string]*NameCount{}
-	maxClients := 0
-	for _, p := range use {
-		q := p.R
-		if q.From < r.From {
-			r.From = q.From
-		}
-		if q.To > r.To {
-			r.To = q.To
-		}
-		if q.Since > r.Since {
-			r.Since = q.Since // the cluster has been counting since the last node began
-		}
-		off := int((q.Start - start) / int64(step))
-		add := func(dst, src []uint64) {
-			for i, v := range src {
-				if j := off + i; j >= 0 && j < len(dst) {
-					dst[j] += v
-				}
-			}
-		}
-		add(r.Total, q.Total)
-		add(r.Answered, q.Answered)
-		add(r.Failed, q.Failed)
-		add(r.KoD, q.KoD)
-		add(r.Refused, q.Refused)
-		s := q.Sums
-		r.Sums.Total, r.Sums.Answered, r.Sums.Failed = r.Sums.Total+s.Total, r.Sums.Answered+s.Answered, r.Sums.Failed+s.Failed
-		r.Sums.KoD, r.Sums.Refused = r.Sums.KoD+s.KoD, r.Sums.Refused+s.Refused
-		if s.Clients > maxClients {
-			maxClients = s.Clients
-		}
-		addGuard(&r.Guard, q.Guard)
-		addCounts(versions, q.Versions)
-		addCounts(families, q.Families)
-		addCounts(clients, q.Clients)
-		addCounts(servers, q.Servers)
-	}
-	r.Versions = sortedCounts(versions, 0)
-	for _, name := range []string{"IPv4", "IPv6"} {
-		if e := families[name]; e != nil {
-			r.Families = append(r.Families, *e)
-		}
-	}
-	nc, nd := qsKeepResult, qsKeepResult // a picked client or server lists everything it has
-	if parts[0].R.Server != "" {
-		nc = qsKeepPicked
-	}
-	if parts[0].R.Client != "" {
-		nd = qsKeepPicked
-	}
-	r.Clients, r.Servers = sortedCounts(clients, nc), sortedCounts(servers, nd)
-	seen := len(clients)
-	if _, ok := clients[qsOthers]; ok {
-		seen--
-	}
-	r.ClientsN = unionPerPoint(use, start, int64(step), n, r.ClientsN)
-	if n > 0 && int(r.ClientsN[n-1]) > maxClients {
-		maxClients = int(r.ClientsN[n-1])
-	}
-	r.Sums.Clients = maxClients
-	if seen > r.Sums.Clients {
-		r.Sums.Clients = seen
-	}
-	r.Cluster = &ClusterInfo{Nodes: infos}
-	return r
 }
 
 // hostWeight is the weight of a node's percentage in the cluster's: its share of the capacity (cores, memory).
@@ -617,32 +450,3 @@ func mergeHost(parts []clusterPart[HostResult], infos []ClusterNodeInfo) *HostRe
 }
 
 var _ = strings.TrimSpace
-
-// unionPerPoint adds up, for every point, the clients the nodes first saw at or before it, each client once:
-// the cluster's distinct clients so far.  A node that does not send its first-seen lists (an older version)
-// leaves the point as the busiest single node's count.
-func unionPerPoint(use []clusterPart[QStatsResult], start, step int64, n int, fallback []uint64) []uint64 {
-	out := make([]uint64, n)
-	seen := map[string]struct{}{}
-	any := false
-	for _, p := range use {
-		if p.R.ClientsNew != nil {
-			any = true
-		}
-	}
-	for j := 0; j < n; j++ {
-		for _, p := range use {
-			i := j - int((p.R.Start-start)/step)
-			if i >= 0 && i < len(p.R.ClientsNew) {
-				for _, c := range p.R.ClientsNew[i] {
-					seen[c] = struct{}{}
-				}
-			}
-		}
-		out[j] = uint64(len(seen))
-	}
-	if !any {
-		return fallback
-	}
-	return out
-}

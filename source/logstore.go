@@ -16,11 +16,11 @@ import (
 )
 
 // The daemon's log goes to stderr (journald under systemd) and, so that the GUI and
-// `ntpdir --log` can show and filter all of it, also to a size-rotated file in the state
-// directory: ntpdir.log, plus ntpdir.log.1 and ntpdir.log.2 (the two previous files).
+// `netdir --log` can show and filter all of it, also to a size-rotated file in the state
+// directory: netdir.log, plus netdir.log.1 and netdir.log.2 (the two previous files).
 
 const (
-	logFileName    = "ntpdir.log"
+	logFileName    = "netdir.log"
 	logFileMax     = 100 << 20 // rotate when the current file reaches this size
 	logFileKeep    = 2         // rotated files kept
 	logReadMax     = 5000      // most lines one GUI request returns

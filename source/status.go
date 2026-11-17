@@ -20,11 +20,10 @@ import (
 //
 //	{"cmd":"snapshot"}   neighbor/gateway table
 //	{"cmd":"assert-agc"} directed failover onto this node
-//	{"cmd":"ntp"}        upstream pool state and chrony
 //
 // Anything that changes state or exposes configuration (assert-agc and every
 // management command such as versions.restore or tls.install) is accepted
-// only from root (SO_PEERCRED); the read-only snapshot/ntp views stay open to
+// only from root (SO_PEERCRED); the read-only snapshot views stay open to
 // local users as before.
 type StatusServer struct {
 	path   string
@@ -107,21 +106,7 @@ func (s *StatusServer) sampleUptime(stop chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			// every pass is also one availability sample for the gateways' history (idle and paused say nothing)
-			cs := chrony.State()
-			for _, g := range s.canvasGroups() {
-				switch g.Status {
-				case "ok", "warn":
-					sr := srvhist.series(gwKey(g.GroupID))
-					sr.avail(true)
-					if cs.Running && cs.Synced { // the time itself: this node's clock against what chrony believes, and its distance to the reference
-						sr.off(time.Duration(cs.OffsetMS * float64(time.Millisecond)))
-						sr.lat(time.Duration(cs.RootDelay * float64(time.Millisecond)))
-					}
-				case "bad":
-					srvhist.series(gwKey(g.GroupID)).avail(false)
-				}
-			}
+			s.canvasGroups() // notes the uptimes
 		}
 	}
 }
@@ -158,8 +143,6 @@ func (s *StatusServer) handle(c net.Conn) {
 	switch req.Cmd {
 	case "snapshot":
 		res = map[string]any{"ok": true, "data": s.snapshot(), "names": s.ipNames()}
-	case "ntp":
-		res = s.ntpStatus()
 	case "canvas":
 		res = s.canvasView()
 	case "assert-agc":
@@ -237,74 +220,6 @@ func (s *StatusServer) ipNames() map[string]string {
 	return nodeNamesByIP(s.mg.cl.View().Peers)
 }
 
-func (s *StatusServer) ntpStatus() map[string]any {
-	pools := s.sup.poolList()
-	if len(pools) == 0 {
-		return map[string]any{"ok": false, "error": "no NTP server is defined (add one in Configure ▸ NTP or draw one on the Topology page)"}
-	}
-	listeners := []string{}
-	for _, r := range s.snapshot() {
-		if r.Local && r.NTPUp {
-			vip := r.VIP4
-			if r.AF == "v6" {
-				vip = r.VIP6
-			}
-			listeners = append(listeners, "group "+itoa(r.GroupID)+" "+
-				strings.SplitN(vip, "/", 2)[0]+":"+itoa(s.sup.ntpPort()))
-		}
-	}
-	var list []map[string]any
-	for _, pi := range pools {
-		name := ""
-		if pi.Key != 0 {
-			name = s.sup.groupName(pi.Key)
-		}
-		list = append(list, map[string]any{
-			"key": pi.Key, "name": name, "groups": pi.Groups, "servers": s.namedServers(pi), "using_fallback": pi.Pool.UsingFallback(),
-			"fail_threshold": pi.Cfg.FailThreshold, "max_stratum": pi.Cfg.MaxStratum, "max_offset_ms": pi.Cfg.MaxOffsetMS, "max_root_distance_ms": pi.Cfg.MaxRootDistanceMS,
-			"max_rtt_ms": pi.Cfg.MaxRTTMS,
-		})
-	}
-	first := list[0]
-	cfg := s.sup.sharedNTP()
-	return map[string]any{"ok": true, "data": map[string]any{
-		"servers":         first["servers"],
-		"pools":           list,
-		"listeners":       listeners,
-		"chrony":          chrony.State(),
-		"chrony_roll":     s.rollText(),
-		"server_stats":    readServerStats(),
-		"allowed_clients": len(cfg.AllowedClients),
-		"blocked_clients": len(cfg.BlockedClients),
-		"client_rate":     cfg.ClientRate,
-		"client_burst":    int(effectiveBurst(cfg.ClientRate, cfg.ClientBurst)),
-		"client_action":   orDefault(cfg.ClientAction, actDrop),
-		"fail_threshold":  first["fail_threshold"],
-	}}
-}
-
-// rollText says where this node is in the rolling chrony restart ("" when it has nothing to do).
-func (s *StatusServer) rollText() string {
-	if s.mg == nil {
-		return ""
-	}
-	return s.mg.ChronyRollText()
-}
-
-// namedServers is the pool's servers with the names given on the Topology page (Configure ▸ NTP ▸ server names).  The pool
-// itself runs without them (a rename must not restart it), so they come from the full configuration.
-func (s *StatusServer) namedServers(pi poolInfo) []ServerStat {
-	sv := pi.Pool.Snapshot()
-	names := s.sup.serverNames(pi.Key)
-	cs := chrony.State()
-	for i := range sv {
-		sv[i].Name = names[sv[i].Addr]
-		sv[i].Chrony = cs.stateOf(sv[i].Addr)
-		sv[i].Auth = chrony.authStatus(sv[i].Addr, cs)
-	}
-	return sv
-}
-
 func denied() map[string]any {
 	return map[string]any{"ok": false, "error": "permission denied: this command must be run as root (try sudo)"}
 }
@@ -321,7 +236,7 @@ func statusRequestTimeout(path string, cmd map[string]any, timeout time.Duration
 	c, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("ntpdir is not running (status socket not found)")
+			return nil, errors.New("netdir is not running (status socket not found)")
 		}
 		return nil, err
 	}

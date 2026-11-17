@@ -76,6 +76,30 @@ func fakeAddrsList(t *testing.T, c string) []net.Addr {
 	return a
 }
 
+// Pausing the gateway while it is held back cancels the wait.
+func TestOffSubnetWaitCancelled(t *testing.T) {
+	oldF, oldE := ifaceAddrsFn, offnetEvery
+	offnetEvery = 20 * time.Millisecond
+	ifaceAddrsFn = fakeAddrs("10.5.5.9/24")
+	defer func() { ifaceAddrsFn, offnetEvery = oldF, oldE }()
+	g := defaultGroup()
+	g.Interface = "netdirnone0"
+	g.VIP4 = "192.168.122.111/24"
+	dc := newDaemonConfig()
+	dc.Groups = []GroupConfig{g}
+	s := NewSupervisor(context.Background(), dc)
+	t.Cleanup(s.StopAll)
+	s.mu.Lock()
+	s.startGroupWhenReadyLocked(g)
+	s.stopGroupLocked(1)
+	s.mu.Unlock()
+	ifaceAddrsFn = fakeAddrs("192.168.122.74/24")
+	time.Sleep(200 * time.Millisecond)
+	if len(s.engineList()) != 0 || len(s.offnetGroups()) != 0 {
+		t.Fatal("a removed gateway started anyway")
+	}
+}
+
 // A node on another subnet does not start the gateway, shows it grey, does not
 // count as serving it (so it is no cover for a neighbour's update), and starts
 // by itself once it has an address in the subnet.
@@ -86,7 +110,7 @@ func TestGatewayHeldBackOffSubnet(t *testing.T) {
 	defer func() { ifaceAddrsFn, offnetEvery = oldF, oldE }()
 
 	g := defaultGroup()
-	g.Interface = "ntpdirnone0"
+	g.Interface = "netdirnone0"
 	g.VIP4 = "192.168.122.111/24"
 	dc := newDaemonConfig()
 	dc.Groups = []GroupConfig{g}
@@ -103,7 +127,7 @@ func TestGatewayHeldBackOffSubnet(t *testing.T) {
 	if off[1] == "" {
 		t.Fatal("not reported as off-subnet")
 	}
-	cg := buildCanvas(dc, nil, nil)
+	cg := buildCanvas(dc, nil)
 	markOffnet(cg, off)
 	if cg[0].Status != "idle" || cg[0].Families[0].Status != "idle" {
 		t.Fatalf("canvas: %s %s", cg[0].Status, cg[0].Detail)
@@ -124,29 +148,5 @@ func TestGatewayHeldBackOffSubnet(t *testing.T) {
 	}
 	if len(s.engineList()) == 0 || len(s.offnetGroups()) != 0 {
 		t.Fatal("did not start once on the subnet")
-	}
-}
-
-// Pausing the gateway while it is held back cancels the wait.
-func TestOffSubnetWaitCancelled(t *testing.T) {
-	oldF, oldE := ifaceAddrsFn, offnetEvery
-	offnetEvery = 20 * time.Millisecond
-	ifaceAddrsFn = fakeAddrs("10.5.5.9/24")
-	defer func() { ifaceAddrsFn, offnetEvery = oldF, oldE }()
-	g := defaultGroup()
-	g.Interface = "ntpdirnone0"
-	g.VIP4 = "192.168.122.111/24"
-	dc := newDaemonConfig()
-	dc.Groups = []GroupConfig{g}
-	s := NewSupervisor(context.Background(), dc)
-	t.Cleanup(s.StopAll)
-	s.mu.Lock()
-	s.startGroupWhenReadyLocked(g)
-	s.stopGroupLocked(1)
-	s.mu.Unlock()
-	ifaceAddrsFn = fakeAddrs("192.168.122.74/24")
-	time.Sleep(200 * time.Millisecond)
-	if len(s.engineList()) != 0 || len(s.offnetGroups()) != 0 {
-		t.Fatal("a removed gateway started anyway")
 	}
 }

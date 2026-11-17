@@ -41,12 +41,12 @@ import (
 // made with a password are opened with the one still in the settings (BackupConfig.Password), or the one given.
 
 const (
-	backupProduct  = "ntpdir"
-	backupEnv      = "NTPDIR" // prefix of the environment variables
-	backupConfName = "ntpdir.conf"
-	backupLogName  = "ntpdir.log"
-	backupExt      = ".ntpbak"
-	backupMagic    = "NTPDIRBAK1\n"
+	backupProduct  = "netdir"
+	backupEnv      = "NETDIR" // prefix of the environment variables
+	backupConfName = "netdir.conf"
+	backupLogName  = "netdir.log"
+	backupExt      = ".netbak"
+	backupMagic    = "NETDIRBAK1\n"
 	backupChunk    = 64 << 10
 	backupMaxFile  = 256 << 20
 	backupRetry    = 15 * time.Minute

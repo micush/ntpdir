@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+
+	"netdir/device"
 )
 
 // What a cluster replicates.  Gateway groups are the same group on every
 // member (same VIP, key, timers), but each node has its own interface,
 // priority, weight, preempt flag and unicast neighbours — those are local and
-// never replicated.  The ntp block is shared as a whole, and so are the web login groups and sign-in rules (see WebGroup, WebAuth); the rest of web, cluster and
+// never replicated.  The settings block is shared as a whole, and so are the web login groups and sign-in rules (see WebGroup, WebAuth); the rest of web, cluster and
 // log_level are local.
 
 // SharedGroup is the replicated part of a GroupConfig.
@@ -29,14 +31,8 @@ type SharedGroup struct {
 	// ExtraVIPs are the anycast addresses (omitted when none, so the hash of a
 	// cluster without any is unchanged).
 	ExtraVIPs []string `json:"extra_vips,omitempty"`
-	// Piggyback: the gateway that answers on dnsdir's addresses (omitted when not: the hash is unchanged).
-	Piggyback bool `json:"piggyback,omitempty"`
-	// PiggybackOf is the dnsdir gateway it mirrors (omitted when none).
-	PiggybackOf int `json:"piggyback_of,omitempty"`
-	// DNSDirShared are the shared addresses among DNSDirVIPs (omitted when none).
-	DNSDirShared []string `json:"dnsdir_shared,omitempty"`
-	// DNSDirVIPs are the dnsdir anycast addresses the gateway also answers NTP on (omitted when none: the hash is unchanged).
-	DNSDirVIPs []string `json:"dnsdir_vips,omitempty"`
+	// Devices are the managed devices of the gateway, by name (omitted when none: the hash is unchanged).
+	Devices []string `json:"devices,omitempty"`
 	// MoreVIP4 / MoreVIP6 are the further shared addresses in the subnet (omitted when none: the hash is unchanged).
 	MoreVIP4 []string `json:"more_vip4,omitempty"`
 	MoreVIP6 []string `json:"more_vip6,omitempty"`
@@ -53,14 +49,12 @@ type SharedGroup struct {
 	ExcludedNodes []string `json:"excluded_nodes,omitempty"`
 	// NodeOrder is the order the nodes are drawn in beside the gateway (omitted when not set).
 	NodeOrder []string `json:"node_order,omitempty"`
-	// NTP is the group's own upstream pool (nil: it uses the shared one).
-	NTP *NTPConfig `json:"ntp,omitempty"`
 }
 
 // SharedConfig is the replicated document.
 type SharedConfig struct {
-	NTP    NTPConfig     `json:"ntp"`
-	Groups []SharedGroup `json:"groups"`
+	Settings Settings      `json:"settings"`
+	Groups   []SharedGroup `json:"groups"`
 	// WebGroup is the web login groups setting (web.group), so the same people may sign in on every node.  It is omitted
 	// while it is the single local group every earlier version had (legacyWebGroup): the hash of a cluster that has not
 	// set it is unchanged, so members on different versions during a rolling update agree.  A member that gets no value
@@ -103,7 +97,7 @@ func (a *SharedWebAuth) applyTo(w *WebConfig) {
 }
 
 // legacyWebGroup is the value web.group had before it could be shared.
-const legacyWebGroup = "ntpdir"
+const legacyWebGroup = "netdir"
 
 // GroupSeed carries the primary's local values for a group, used only to
 // initialise a group a replica doesn't have yet.
@@ -116,22 +110,19 @@ type GroupSeed struct {
 }
 
 func sharedOf(dc *DaemonConfig) SharedConfig {
-	sc := SharedConfig{NTP: dc.NTP, Groups: []SharedGroup{}}
+	sc := SharedConfig{Settings: dc.Settings, Groups: []SharedGroup{}}
 	if dc.Web.Group != legacyWebGroup {
 		sc.WebGroup = dc.Web.Group
 	}
 	sc.WebAuth = sharedWebAuth(dc.Web)
 	sc.SSO = dc.Web.SSOConfig.clone()
 	sc.LDAP = dc.Web.LDAPConfig.clone()
-	if sc.NTP.Servers == nil {
-		sc.NTP.Servers = []string{}
-	}
-	sc.NTP = cloneNTP(sc.NTP)
+	sc.Settings = cloneSettings(sc.Settings)
 	for _, g := range dc.Groups {
 		sc.Groups = append(sc.Groups, SharedGroup{
 			GroupID: g.GroupID, Name: g.Name, VIP4: g.VIP4, VIP6: g.VIP6, LBMethod: g.LBMethod,
 			HelloMS: g.HelloMS, HoldMS: g.HoldMS, MaxAFNs: g.MaxAFNs, Key: g.Key,
-			NTP: cloneNTPPtr(g.NTP), Piggyback: g.Piggyback, PiggybackOf: g.PiggybackOf, DNSDirShared: nonEmpty(g.DNSDirShared), ExtraVIPs: nonEmpty(g.ExtraVIPs), DNSDirVIPs: nonEmpty(g.DNSDirVIPs), MoreVIP4: nonEmpty(g.MoreVIP4), MoreVIP6: nonEmpty(g.MoreVIP6), PausedVIPs: nonEmpty(g.PausedVIPs), PausedAll: g.PausedAll, Neighbors: nonEmpty(g.Neighbors), RealMACs: g.RealMACs, ExcludedNodes: nonEmpty(g.ExcludedNodes), NodeOrder: nonEmpty(g.NodeOrder),
+			ExtraVIPs: nonEmpty(g.ExtraVIPs), Devices: nonEmpty(g.Devices), MoreVIP4: nonEmpty(g.MoreVIP4), MoreVIP6: nonEmpty(g.MoreVIP6), PausedVIPs: nonEmpty(g.PausedVIPs), PausedAll: g.PausedAll, Neighbors: nonEmpty(g.Neighbors), RealMACs: g.RealMACs, ExcludedNodes: nonEmpty(g.ExcludedNodes), NodeOrder: nonEmpty(g.NodeOrder),
 		})
 	}
 	sort.Slice(sc.Groups, func(i, j int) bool { return sc.Groups[i].GroupID < sc.Groups[j].GroupID })
@@ -161,7 +152,7 @@ func (s SharedConfig) Validate() error {
 		applySharedGroup(&gc, g)
 		dc.Groups = append(dc.Groups, gc)
 	}
-	dc.NTP = s.NTP
+	dc.Settings = s.Settings
 	if s.WebGroup != "" {
 		dc.Web.Group = s.WebGroup
 	}
@@ -174,11 +165,8 @@ func (s SharedConfig) Validate() error {
 func applySharedGroup(gc *GroupConfig, g SharedGroup) {
 	gc.GroupID, gc.Name, gc.VIP4, gc.VIP6, gc.LBMethod = g.GroupID, g.Name, g.VIP4, g.VIP6, g.LBMethod
 	gc.HelloMS, gc.HoldMS, gc.MaxAFNs, gc.Key = g.HelloMS, g.HoldMS, g.MaxAFNs, g.Key
-	gc.NTP = cloneNTPPtr(g.NTP)
 	gc.ExtraVIPs = append([]string(nil), g.ExtraVIPs...)
-	gc.DNSDirVIPs = append([]string(nil), g.DNSDirVIPs...)
-	gc.Piggyback, gc.PiggybackOf = g.Piggyback, g.PiggybackOf
-	gc.DNSDirShared = append([]string(nil), g.DNSDirShared...)
+	gc.Devices = nonEmpty(g.Devices)
 	gc.MoreVIP4 = append([]string(nil), g.MoreVIP4...)
 	gc.MoreVIP6 = append([]string(nil), g.MoreVIP6...)
 	gc.PausedVIPs = append([]string(nil), g.PausedVIPs...)
@@ -232,7 +220,7 @@ func mergeShared(dc *DaemonConfig, sh SharedConfig, seeds []GroupSeed) (bool, er
 		}
 	}
 	dc.Groups = kept
-	dc.NTP = sh.NTP
+	dc.Settings = sh.Settings
 	if sh.WebGroup != "" {
 		dc.Web.Group = sh.WebGroup
 	}
@@ -245,49 +233,16 @@ func mergeShared(dc *DaemonConfig, sh SharedConfig, seeds []GroupSeed) (bool, er
 	return sharedOf(dc).hash() != before || len(dc.Groups) != beforeGroups, nil
 }
 
-// cloneNTP copies a NTPConfig deeply enough that two configs never share
+// cloneSettings copies a Settings deeply enough that two configs never share
 // slices or maps (Validate normalises in place).
-func cloneNTP(d NTPConfig) NTPConfig {
-	d.Servers = append([]string{}, d.Servers...)
-	if len(d.FallbackServers) > 0 {
-		d.FallbackServers = append([]string{}, d.FallbackServers...)
-	} else {
-		d.FallbackServers = nil
-	}
-	d.AllowedClients = append([]string(nil), d.AllowedClients...)
-	if len(d.AllowedClients) == 0 {
-		d.AllowedClients = nil
-	}
-	d.BlockedClients = append([]string(nil), d.BlockedClients...)
-	if len(d.BlockedClients) == 0 {
-		d.BlockedClients = nil
-	}
-	d.Keys = append([]string(nil), d.Keys...)
-	if len(d.Keys) == 0 {
-		d.Keys = nil
-	}
-	d.ServerAuth = append([]string(nil), d.ServerAuth...)
-	if len(d.ServerAuth) == 0 {
-		d.ServerAuth = nil
-	}
-	d.SNMPCommunities = append([]string(nil), d.SNMPCommunities...)
-	if len(d.SNMPCommunities) == 0 {
-		d.SNMPCommunities = nil
-	}
+func cloneSettings(d Settings) Settings {
+	d.SNMPCommunities = nonEmpty(d.SNMPCommunities)
+	d.SNMPACL = nonEmpty(d.SNMPACL)
+	d.MetricsACL = nonEmpty(d.MetricsACL)
+	d.MCPACL = nonEmpty(d.MCPACL)
+	d.Privacy = d.Privacy.clone()
 	d.Alerts = d.Alerts.clone()
 	d.Backup = d.Backup.clone()
-	d.SNMPACL = append([]string(nil), d.SNMPACL...)
-	if len(d.SNMPACL) == 0 {
-		d.SNMPACL = nil
-	}
-	d.MetricsACL = append([]string(nil), d.MetricsACL...)
-	if len(d.MetricsACL) == 0 {
-		d.MetricsACL = nil
-	}
-	d.MCPACL = append([]string(nil), d.MCPACL...)
-	if len(d.MCPACL) == 0 {
-		d.MCPACL = nil
-	}
 	d.MCPKeys = append([]MCPKey(nil), d.MCPKeys...)
 	if len(d.MCPKeys) == 0 {
 		d.MCPKeys = nil
@@ -308,49 +263,30 @@ func cloneNTP(d NTPConfig) NTPConfig {
 	} else {
 		d.Schedule = nil
 	}
-	d.ClientExempt = append([]string(nil), d.ClientExempt...)
-	if len(d.ClientExempt) == 0 {
-		d.ClientExempt = nil
-	}
-	d.ClientLimits = append([]string(nil), d.ClientLimits...)
-	if len(d.ClientLimits) == 0 {
-		d.ClientLimits = nil
-	}
-	if len(d.ClientNames) > 0 {
-		m := make(map[string]string, len(d.ClientNames))
-		for k, v := range d.ClientNames {
-			m[k] = v
+	if len(d.Devices) > 0 {
+		devs := make([]device.Device, len(d.Devices))
+		for i, x := range d.Devices {
+			x.Tags = nonEmpty(x.Tags)
+			if len(x.Options) > 0 {
+				o := make(map[string]string, len(x.Options))
+				for k, v := range x.Options {
+					o[k] = v
+				}
+				x.Options = o
+			} else {
+				x.Options = nil
+			}
+			devs[i] = x
 		}
-		d.ClientNames = m
+		d.Devices = devs
 	} else {
-		d.ClientNames = nil
+		d.Devices = nil
 	}
-	d.PausedServers = append([]string(nil), d.PausedServers...)
-	if len(d.PausedServers) == 0 {
-		d.PausedServers = nil
-	}
-	if len(d.ServerNames) > 0 {
-		m := make(map[string]string, len(d.ServerNames))
-		for k, v := range d.ServerNames {
-			m[k] = v
-		}
-		d.ServerNames = m
-	} else {
-		d.ServerNames = nil
-	}
-	if d.LB != nil {
-		l := *d.LB
-		d.LB = &l
+	d.DeviceCredentials = append([]device.Credential(nil), d.DeviceCredentials...)
+	if len(d.DeviceCredentials) == 0 {
+		d.DeviceCredentials = nil
 	}
 	return d
-}
-
-func cloneNTPPtr(d *NTPConfig) *NTPConfig {
-	if d == nil {
-		return nil
-	}
-	c := cloneNTP(*d)
-	return &c
 }
 
 // ssoOf is the single sign-on settings of a shared document: none when the document has none (a primary that clears them clears every node's).

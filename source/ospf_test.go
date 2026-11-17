@@ -58,17 +58,17 @@ func TestRenderFRROSPF(t *testing.T) {
 		{Name: "eth1", Area: "0.0.0.1", Disabled: true}}}
 	c := renderFRRAll(nil, o, v4, v6, "x")
 	for _, want := range []string{
-		"ip prefix-list NTPDIR-ANYCAST-V4 seq 10 permit 203.0.113.53/32\n",
-		"ipv6 prefix-list NTPDIR-ANYCAST-V6 seq 10 permit 2001:db8::53/128\n",
-		"route-map NTPDIR-OSPF-V4 permit 10\n match ip address prefix-list NTPDIR-ANYCAST-V4\n",
-		"route-map NTPDIR-OSPF-IN deny 10\n",
+		"ip prefix-list NETDIR-ANYCAST-V4 seq 10 permit 203.0.113.53/32\n",
+		"ipv6 prefix-list NETDIR-ANYCAST-V6 seq 10 permit 2001:db8::53/128\n",
+		"route-map NETDIR-OSPF-V4 permit 10\n match ip address prefix-list NETDIR-ANYCAST-V4\n",
+		"route-map NETDIR-OSPF-IN deny 10\n",
 		"interface eth0\n ip ospf area 0.0.0.0\n ipv6 ospf6 area 0.0.0.0\n ip ospf network point-to-point\n ipv6 ospf6 network point-to-point\n",
 		" ip ospf authentication message-digest\n ip ospf message-digest-key 1 md5 s3cret\n",
 		" ip ospf bfd\n ipv6 ospf6 bfd\n",
 		"interface eth1\n ip ospf area 0.0.0.1\n ipv6 ospf6 area 0.0.0.1\n ip ospf bfd\n ipv6 ospf6 bfd\n ip ospf passive\n ipv6 ospf6 passive\n",
-		"router ospf\n ospf router-id 192.0.2.10\n redistribute connected metric 50 metric-type 1 route-map NTPDIR-OSPF-V4\n",
-		"router ospf6\n ospf6 router-id 192.0.2.10\n redistribute connected metric 50 metric-type 1 route-map NTPDIR-OSPF-V6\n",
-		"ip protocol ospf route-map NTPDIR-OSPF-IN\nipv6 protocol ospf6 route-map NTPDIR-OSPF-IN\n",
+		"router ospf\n ospf router-id 192.0.2.10\n redistribute connected metric 50 metric-type 1 route-map NETDIR-OSPF-V4\n",
+		"router ospf6\n ospf6 router-id 192.0.2.10\n redistribute connected metric 50 metric-type 1 route-map NETDIR-OSPF-V6\n",
+		"ip protocol ospf route-map NETDIR-OSPF-IN\nipv6 protocol ospf6 route-map NETDIR-OSPF-IN\n",
 	} {
 		if !strings.Contains(c, want) {
 			t.Errorf("missing %q in:\n%s", want, c)
@@ -88,7 +88,7 @@ func TestRenderFRROSPF(t *testing.T) {
 	// both protocols in one file
 	b := &BGPConfig{ASN: 64512, Neighbors: []BGPNeighbor{{Peer: "192.0.2.1", RemoteAS: 64500}}}
 	both := renderFRRAll(b, o, v4, v6, "x")
-	if !strings.Contains(both, "router bgp 64512") || !strings.Contains(both, "router ospf6") || strings.Count(both, "ip prefix-list NTPDIR-ANYCAST-V4 seq 1000") != 1 || strings.Count(both, "line vty") != 1 {
+	if !strings.Contains(both, "router bgp 64512") || !strings.Contains(both, "router ospf6") || strings.Count(both, "ip prefix-list NETDIR-ANYCAST-V4 seq 1000") != 1 || strings.Count(both, "line vty") != 1 {
 		t.Errorf("combined file wrong:\n%s", both)
 	}
 	// BGP alone is unchanged by the OSPF code
@@ -340,7 +340,7 @@ func TestOSPFSetOperateAndKeyOmitted(t *testing.T) {
 	}
 }
 
-// With dnsdir installed on the host, ntpdir leaves FRR alone for OSPF as it does for BGP: OSPF is not active, the
+// With dnsdir installed on the host, netdir leaves FRR alone for OSPF as it does for BGP: OSPF is not active, the
 // settings are refused (clearing them is still allowed), FRR files are not touched and its daemons are not switched.
 func TestOSPFBlockedWithDnsdir(t *testing.T) {
 	calls, dir := fakeFRR(t, nil)

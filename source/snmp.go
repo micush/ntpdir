@@ -18,7 +18,7 @@ import (
 //	location     what snmpd reports as sysLocation
 //	contact      what snmpd reports as sysContact
 //
-// The communities and the contact are cluster settings (NTPConfig.SNMPCommunities/SNMPContact, replicated); the location is
+// The communities and the contact are cluster settings (Settings.SNMPCommunities/SNMPContact, replicated); the location is
 // local to the node (DaemonConfig.SNMP) because it differs from node to node.  dnsdir owns
 // /etc/snmp/snmpd.conf while it is in use: the file it writes starts with snmpHeader, an snmpd.conf that was there before
 // is kept once as snmpd.conf.dnsdir-orig and put back when the communities are emptied.  An snmpd that dnsdir never took

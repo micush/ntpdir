@@ -32,14 +32,14 @@ func TestMinimumPasswordLength(t *testing.T) {
 		t.Fatalf("a 5 character password with the default policy: %v", err)
 	}
 	// configured
-	m.webPolicy.Store(&WebConfig{Group: "ntpdir", MinPasswordLength: 12})
+	m.webPolicy.Store(&WebConfig{Group: "netdir", MinPasswordLength: 12})
 	if err := m.checkPassword("eleven-char"); err == nil {
 		t.Error("11 characters accepted with a minimum of 12")
 	}
 	if err := m.checkPassword("twelve-chars"); err != nil {
 		t.Errorf("12 characters refused with a minimum of 12: %v", err)
 	}
-	m.webPolicy.Store(&WebConfig{Group: "ntpdir", MinPasswordLength: 1})
+	m.webPolicy.Store(&WebConfig{Group: "netdir", MinPasswordLength: 1})
 	if err := m.checkPassword("x"); err != nil {
 		t.Errorf("a minimum of 1 refused one character: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestSessionCookieHasHostPrefix(t *testing.T) {
 
 // ── cluster: the signature is checked before the body is read ────────────────
 
-// rawPeerReq sends a request to a node's cluster listener signed with secret.  withHash adds X-Ntpdir-Body (the
+// rawPeerReq sends a request to a node's cluster listener signed with secret.  withHash adds X-Netdir-Body (the
 // form v194 sends); without it the request is the legacy form.  signedBody is the body the signature is made
 // over, body what is really sent (they differ in the mismatch test).
 func rawPeerReq(t *testing.T, secret []byte, to *tnode, claim ClusterPeer, me *tls.Certificate, method, path string, signedBody, body []byte, withHash bool) (int, string) {
@@ -179,16 +179,16 @@ func rawPeerReq(t *testing.T, secret []byte, to *tnode, claim ClusterPeer, me *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("X-Ntpdir-Peer", peerHdr)
-	req.Header.Set("X-Ntpdir-Ts", ts)
-	req.Header.Set("X-Ntpdir-Nonce", nonce)
+	req.Header.Set("X-Netdir-Peer", peerHdr)
+	req.Header.Set("X-Netdir-Ts", ts)
+	req.Header.Set("X-Netdir-Nonce", nonce)
 	if withHash {
 		sum := sha256.Sum256(signedBody)
 		h := hex.EncodeToString(sum[:])
-		req.Header.Set("X-Ntpdir-Body", h)
-		req.Header.Set("X-Ntpdir-Sig", signMessageHash(secret, peerHdr, ts, nonce, method, path, h))
+		req.Header.Set("X-Netdir-Body", h)
+		req.Header.Set("X-Netdir-Sig", signMessageHash(secret, peerHdr, ts, nonce, method, path, h))
 	} else {
-		req.Header.Set("X-Ntpdir-Sig", signMessage(secret, peerHdr, ts, nonce, method, path, signedBody))
+		req.Header.Set("X-Netdir-Sig", signMessage(secret, peerHdr, ts, nonce, method, path, signedBody))
 	}
 	res, err := pinnedClientAs(to.addr, to.mg.cl.node.Fingerprint(), 5*time.Second, me).Do(req)
 	if err != nil {

@@ -1,5 +1,5 @@
 "use strict";
-// AnyTime web GUI. No framework, no innerHTML: every value from the server goes
+// MCP Network Director web GUI. No framework, no innerHTML: every value from the server goes
 // through textContent, so nothing it returns can inject markup.
 
 (() => {
@@ -38,6 +38,47 @@
     return h("div", { class: "nav-theme" }, btn);
   }
 
+  // A small eye (struck through while the value is shown), drawn with DOM calls: no innerHTML.
+  function eyeIcon(struck) {
+    const NS = "http://www.w3.org/2000/svg";
+    const el = (n, a) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+    const svg = el("svg", { viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
+    svg.append(el("path", { d: "M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z" }), el("circle", { cx: "12", cy: "12", r: "3" }));
+    if (struck) svg.append(el("path", { d: "M3 3l18 18" }));
+    return svg;
+  }
+
+  // Every password box except the sign-in one gets an eye button beside it, so a saved password, token or key can be read.
+  (function revealPasswords() {
+    const decorate = (inp) => {
+      if (inp._rv || inp.getAttribute("autocomplete") === "current-password") return;
+      inp._rv = true;
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "reveal"; b.title = "Show";
+      b.append(eyeIcon(false));
+      b.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-label", "Show " + (inp.getAttribute("aria-label") || "value"));
+      b.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const on = inp.type === "password";
+        inp.type = on ? "text" : "password";
+        b.title = on ? "Hide" : "Show";
+        b.replaceChildren(eyeIcon(on));
+        b.setAttribute("aria-pressed", String(on));
+      });
+      const wrap = document.createElement("span");
+      wrap.className = "reveal-wrap";
+      inp.replaceWith(wrap);
+      wrap.append(inp, b);
+    };
+    const scan = (n) => {
+      if (n.nodeType !== 1) return;
+      if (n.matches("input[type=password]")) decorate(n);
+      else n.querySelectorAll("input[type=password]").forEach(decorate);
+    };
+    new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach(scan))).observe(root, { childList: true, subtree: true });
+  })();
+
   // The daemon puts its version in BUILD when it serves this file. After an upgrade the daemon restarts with a new
   // interface; a page left open notices (the session says which version answers) and reloads itself, but not while
   // a dialog is open, a field is being typed in, or a Configure page is open (it may hold changes not yet saved).
@@ -59,22 +100,6 @@
   }, 15000);
 
   // ── DOM helper ────────────────────────────────────────────────────────────
-  // A filter box: words must all match (AND, also written out); OR makes alternatives; a ! before a word (!x), or NOT, means "does not match".
-  // "a AND !b" and "a !b" both find what has a and not b; "a OR c" finds either.  `match(test)` asks test(word) for each word.
-  function parseFilter(text) {
-    const groups = [[]];
-    let pend = false;   // a "not" waits for the word it applies to
-    for (const raw of String(text || "").toLowerCase().split(/\s+/).filter(Boolean)) {
-      if (raw === "and") { pend = false; continue; }
-      if (raw === "or") { pend = false; if (groups[groups.length - 1].length) groups.push([]); continue; }
-      if (raw === "not") { pend = !pend; continue; }
-      const w = raw.replace(/^!+/, ""), neg = ((raw.length - w.length) % 2 === 1) !== pend;
-      pend = false;
-      if (w) groups[groups.length - 1].push({ w, neg });
-    }
-    const gs = groups.filter((g) => g.length);
-    return { empty: !gs.length, match: (test) => !gs.length || gs.some((g) => g.every((t) => !!test(t.w) !== t.neg)) };
-  }
   function h(tag, attrs, ...kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
@@ -92,6 +117,61 @@
     return el;
   }
   const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); return el; };
+  const DOT_DEFAULT = 36;   // Topology: a gateway with more devices than settings.topology_squares_above draws each as a small square
+  // A box of tags (words separated by spaces or commas) that offers the tags already in use while the last word is typed: a list under the box,
+  // chosen with the mouse, or with Down/Up and Enter or Tab.  Enter with nothing chosen is left alone (it still submits the form).
+  // `tagsNow()` gives every tag in use at that moment (a table may hold rows that are not saved yet).
+  // A filter box: words must all match (AND, also written out); OR makes alternatives; a ! before a word (!dns), or NOT, means "does not match".
+  // "phx AND !dns" and "phx !dns" both find what has phx and not dns; "phx OR sea" finds either.  `match(test)` asks test(word) for each word.
+  function parseFilter(text) {
+    const groups = [[]];
+    let pend = false;   // a "not" waits for the word it applies to
+    for (const raw of String(text || "").toLowerCase().split(/\s+/).filter(Boolean)) {
+      if (raw === "and") { pend = false; continue; }
+      if (raw === "or") { pend = false; if (groups[groups.length - 1].length) groups.push([]); continue; }
+      if (raw === "not") { pend = !pend; continue; }
+      const w = raw.replace(/^!+/, ""), neg = ((raw.length - w.length) % 2 === 1) !== pend;
+      pend = false;
+      if (w) groups[groups.length - 1].push({ w, neg });
+    }
+    const gs = groups.filter((g) => g.length);
+    return { empty: !gs.length, match: (test) => !gs.length || gs.some((g) => g.every((t) => !!test(t.w) !== t.neg)) };
+  }
+  function tagSuggest(input, tagsNow) {
+    let pop = null, items = [], at = -1;
+    const word = () => { const m = /[^\s,]*$/.exec(input.value); return m ? m[0] : ""; };
+    const close = () => { if (pop) { pop.remove(); pop = null; } items = []; at = -1; };
+    const pick = (t) => {
+      input.value = input.value.slice(0, input.value.length - word().length) + t + " ";
+      close();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    };
+    const paint = () => { if (pop) [...pop.children].forEach((b, i) => b.classList.toggle("on", i === at)); };
+    const open = (all) => {
+      const w = word().toLowerCase(), have = new Set(input.value.split(/[\s,]+/).filter(Boolean).slice(0, -1).map((x) => x.toLowerCase()));
+      if (!w && !all) return close();
+      let tags = []; try { tags = tagsNow() || []; } catch (_) { /* a row that is not finished */ }
+      items = [...new Set(tags)].filter((t) => !have.has(t.toLowerCase()) && t.toLowerCase() !== w && t.toLowerCase().includes(w)).sort((a, b) => (b.toLowerCase().startsWith(w) ? 1 : 0) - (a.toLowerCase().startsWith(w) ? 1 : 0) || a.localeCompare(b)).slice(0, 8);
+      if (!items.length) return close();
+      if (!pop) pop = h("div", { class: "tagpop", role: "listbox", "aria-label": "Tags in use" });
+      clear(pop).append(...items.map((t) => h("button", { type: "button", role: "option", tabindex: "-1", onmousedown: (e) => { e.preventDefault(); pick(t); } }, t)));
+      const r = input.getBoundingClientRect();
+      pop.style.left = r.left + "px"; pop.style.top = r.bottom + 2 + "px"; pop.style.minWidth = r.width + "px";
+      (input.closest("dialog") || document.body).append(pop);
+      at = -1;
+    };
+    input.setAttribute("autocomplete", "off");
+    input.addEventListener("input", () => open(false));
+    input.addEventListener("blur", close);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" && !pop) { open(true); if (pop) { at = 0; paint(); e.preventDefault(); } return; }
+      if (!pop) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); at = (at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; paint(); }
+      else if ((e.key === "Enter" || e.key === "Tab") && at >= 0) { e.preventDefault(); pick(items[at]); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+    });
+  }
 
   // morph makes the children of dst the same as the children of src, reusing the elements that are already there (only
   // their text and attributes are patched).  A page that is redrawn on a timer uses it so that what the browser keeps
@@ -132,25 +212,23 @@
   // numbers are never cut off.  ~6.6 units a character at the 11px axis font, plus the gap and a little edge room.
   const axisMargin = (labels, min) => Math.max(min, Math.ceil(Math.max(0, ...labels.map((t) => String(t).length)) * 6.6) + 14);
   const pill = (text, kind) => h("span", { class: "pill " + (kind || "") }, text);
-  // what lldpd is doing on a node (GET /api/lldp), in a few words; the same as `ntpdir --lldp`
+  // what lldpd is doing on a node (GET /api/lldp), in a few words; the same as `netdir --lldp`
   const lldpWords = (st) => !st.installed ? "lldpd is not installed on this node"
     : st.deferred ? (st.running ? "Running, managed in AnyName on this host" : "Stopped: AnyName is on this host and decides")
     : st.running ? "Running" : st.enabled ? "Stopped: see the log" : "Stopped";
-  const fmtMs = (n) => (n == null ? "–" : Number(n).toFixed(2));
 
   // ── API ───────────────────────────────────────────────────────────────────
   // Everything follows the node picked in the top bar (relayed through the node
   // you are logged in to) except the login itself.  The picker's own list of
   // nodes is asked of the login node explicitly (api(..., true)).
   const LOCAL_API = /^\/api\/(login|logout|session|proxy|tshoot\/download)(\/|\?|$)/;
-  // The Node menu's "Cluster" entry: Monitor ▸ Statistics and Monitor ▸ Node show every node's numbers added together
-  // (the node you are logged in to asks the others).  Only those two pages offer it, and only their two requests change;
+  // The Node menu's "Cluster" entry: Monitor ▸ Node shows every node's numbers added together (the node you are logged in to
+  // asks the others), and Monitor ▸ Capture captures on every node.  Only those pages offer it, and only their requests change;
   // anything else a page asks goes to this node as before.
   const CLUSTER = "*cluster";
-  // Statistics also offers each gateway: the nodes that serve it, added together like Cluster.  (The numbers are kept per node,
-  // so a node that serves several gateways counts all its traffic in each.)
+  // Node and Capture also offer each gateway: the nodes that serve it, together like Cluster.
   const GW = "*gw:";
-  const GW_TABS = ["stats", "host", "capture"];   // the pages that offer the gateways
+  const GW_TABS = ["host", "capture"];   // the pages that offer the gateways
   const isGw = () => typeof state.target === "string" && state.target.startsWith(GW);
   const gwTitle = (g) => g.name || String(g.vip4 || g.vip6 || "").split("/")[0] || "gateway " + g.group_id;
   const gwItems = () => (state.gws || []).map((g) => {
@@ -159,10 +237,10 @@
   }).filter(Boolean);
   const pickedGw = () => (isGw() ? (state.gws || []).find((g) => String(g.group_id) === state.target.slice(GW.length)) || null : null);
   const many = () => state.target === CLUSTER || isGw();   // a page about several nodes: every node, or a gateway's own
-  const CLUSTER_TABS = ["stats", "host", "capture"];
-  const CLUSTER_API = [[/^\/api\/qstats(\?|$)/, "/api/clusterstats"], [/^\/api\/host(\?|$)/, "/api/clusterhost"], [/^\/api\/qstats\/clear$/, "/api/clusterstats"]];
+  const CLUSTER_TABS = ["host", "capture"];
+  const CLUSTER_API = [[/^\/api\/host(\?|$)/, "/api/clusterhost"]];
   function route(path) {
-    if (isGw()) { const to = /^\/api\/qstats(\?|$)/.test(path) ? "/api/clusterstats" : /^\/api\/host(\?|$)/.test(path) ? "/api/clusterhost" : ""; return to ? path.replace(/^\/api\/[a-z]+/, to) + (path.includes("?") ? "&" : "?") + "gw=" + encodeURIComponent(state.target.slice(GW.length)) : path; }
+    if (isGw()) { const to = /^\/api\/host(\?|$)/.test(path) ? "/api/clusterhost" : ""; return to ? path.replace(/^\/api\/[a-z]+/, to) + (path.includes("?") ? "&" : "?") + "gw=" + encodeURIComponent(state.target.slice(GW.length)) : path; }
     if (state.target === CLUSTER) {
       for (const [re, to] of CLUSTER_API) if (re.test(path)) return path.replace(/^\/api\/[a-z]+/, to);
       return path;
@@ -288,7 +366,7 @@
     const ssoBox = h("div", { class: "sso-buttons hidden" });
     root.append(h("div", { class: "login-wrap" }, h("div", { class: "login" },
       h("div", { class: "card" }, h("div", { class: "body" },
-        h("h1", {}, "AnyTime NTP Director"),
+        h("h1", {}, "MCP Network Director"),
         h("p", { class: "sub" }, "Sign in with your system account"),
         err, form, ssoBox)))));
     user.focus();
@@ -311,9 +389,9 @@
   // Topology comes first; its items are the gateways themselves (filled in from the daemon).
   const TOPO = "Topology";
   const NAV_GROUPS = [
-    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_ntp", "NTP"], ["cfg_web", "Web GUI"], ["cfg_monitoring", "Monitoring"], ["cfg_alerts", "Alerts"], ["cfg_backup", "Backup"], ["anycast", "Anycast"], ["users", "Users"]]],
+    ["Configure", [["cfg_general", "Settings"], ["cfg_groups", "Gateways"], ["cfg_mcp", "MCP"], ["cfg_privacy", "Privacy"], ["cfg_devices", "Devices"], ["cfg_web", "Web GUI"], ["cfg_monitoring", "Monitoring"], ["cfg_alerts", "Alerts"], ["cfg_backup", "Backup"], ["anycast", "Anycast"], ["users", "Users"]]],
     ["Operate", [["node", "Node"], ["cluster", "Cluster"], ["anycastop", "Anycast"], ["scheduler", "Scheduler"], ["history", "History"], ["updates", "Upgrade"]]],
-    ["Monitor", [["stats", "Statistics"], ["host", "Node"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["ntp", "NTP"], ["anycaststatus", "Anycast"], ["alerts", "Alerts"], ["capture", "Capture"], ["log", "Log"]]],
+    ["Monitor", [["mcpusage", "MCP"], ["host", "Node"], ["devices", "Devices"], ["gateways", "Gateways"], ["nodes", "Cluster"], ["anycaststatus", "Anycast"], ["alerts", "Alerts"], ["capture", "Capture"], ["log", "Log"]]],
   ];
   const TABS = [["topology", TOPO]].concat(NAV_GROUPS.flatMap(([, items]) => items));
   const groupOf = (id) => (id === "topology" ? TOPO : (NAV_GROUPS.find(([, items]) => items.some(([i]) => i === id)) || [null])[0]);
@@ -324,8 +402,7 @@
     try {
       // always the node you signed in to, and the gateway's state for the cluster as a whole (from its nodes), so the dot does not change with the Node menu
       const r = await api("GET", "/api/canvas?own=1", undefined, true);
-      state.topo.dnsdir = !!(r.dnsdir && r.dnsdir.present);   // dnsdir is installed here: ntpdir answers on its addresses and makes no gateway of its own
-      state.topo.list = (r.data || []).map((g) => ({ id: g.group_id, piggyback: !!g.piggyback, label: g.name || bareIP(g.vip4) || bareIP(g.vip6) || "gateway " + g.group_id,
+      state.topo.list = (r.data || []).map((g) => ({ id: g.group_id, label: g.name || bareIP(g.vip4) || bareIP(g.vip6) || "gateway " + g.group_id,
         status: g.cluster_status || g.status, title: "Group " + g.group_id + (g.name ? " · " + (bareIP(g.vip4) || bareIP(g.vip6)) : "") + " — " + (g.cluster_status ? g.cluster_detail : g.detail) }));
     } catch (_) { return; }
     state.topo.list.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }) || a.id - b.id);   // alphabetical (10.0.0.2 before 10.0.0.10)
@@ -357,14 +434,14 @@
     const box = root.querySelector('.nav-group[data-group="' + TOPO + '"] .nav-items');
     if (!box) return;
     const here = state.tab === "topology";
-    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title + (g.piggyback ? " — imported from AnyName" : ""), "data-gw": g.id,
+    clear(box).append(...state.topo.list.map((g) => h("button", { type: "button", class: "nav-item", title: g.title, "data-gw": g.id,
         "aria-current": here && g.id === state.topo.gid ? "page" : null,
         onclick: () => { state.topo.gid = g.id; selectTab("topology"); },
-        oncontextmenu: g.piggyback ? null : rowMenu([["Rename…", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
+        oncontextmenu: rowMenu([["Rename", () => { state.topo.gid = g.id; state.topo.action = "rename"; selectTab("topology"); }],
+          ["MCP", () => selectTab("cfg_mcp")],
           ["Delete", () => { state.topo.gid = g.id; state.topo.action = "delete"; selectTab("topology"); }, "danger"]]) },
       h("span", { class: "dot st-" + g.status }), g.label)),
-      state.topo.dnsdir ? h("div", { class: "nav-note muted small", title: "AnyName is installed on this host: these are its gateways. ntpdir answers NTP on their addresses and keeps no gateway of its own." }, "Imported from AnyName")
-        : h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
+      h("button", { type: "button", class: "nav-item add", onclick: () => { state.topo.action = "new"; selectTab("topology"); } }, "＋ New gateway"));
   }
 
   function openNavGroup(name) {
@@ -387,8 +464,8 @@
       h("div", { class: "nav-items hidden" },
         items.map(([id, label]) => h("button", { type: "button", class: "nav-item", "data-tab": id, onclick: () => selectTab(id) }, label)))));
     const nav = h("nav", { class: "side", "aria-label": "Sections" },
-      h("div", { class: "mark" }, h("div", { class: "brand" }, "AnyTime NTP Director"),
-        h("div", { class: "muted small" }, "v" + s.version + (s.hostname && s.hostname.toLowerCase() !== "ntpdir" ? " · " + s.hostname : ""))),
+      h("div", { class: "mark" }, h("div", { class: "brand" }, "MCP Network Director"),
+        h("div", { class: "muted small" }, "v" + s.version + (s.hostname && s.hostname.toLowerCase() !== "netdir" ? " · " + s.hostname : ""))),
       h("div", { class: "nav-section" }, groups),
       themeToggle(),
       h("div", { class: "nav-footer" },
@@ -411,8 +488,6 @@
     state.nodesTimer = setInterval(() => { if (!document.hidden) refreshNodes(); }, 6000);
     refreshAlertMark();
     state.alertTimer = setInterval(() => { if (!document.hidden) refreshAlertMark(); }, 5000);
-    loadClock();
-    state.clockTimer = setInterval(tickClock, 1000);
     let wanted = location.hash.slice(1);
     if (wanted === "canvas") wanted = "topology"; // the page's old name: keep old bookmarks working
     if (wanted === "neighbors") wanted = "nodes"; // likewise
@@ -457,7 +532,7 @@
   }
 
   // ── help: the "?" in the top right, a slide-out panel for the current page ──
-  // Content is data in help.js (NTPDIR_HELP); this builds it with DOM calls only.
+  // Content is data in help.js (NETDIR_HELP); this builds it with DOM calls only.
   function richText(str) {
     const out = [];
     for (const part of String(str).split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/)) {
@@ -470,7 +545,7 @@
     return out;
   }
   function helpBody(topic) {
-    const t = NTPDIR_HELP[topic] || NTPDIR_HELP._default;
+    const t = NETDIR_HELP[topic] || NETDIR_HELP._default;
     const kids = t.body.map((blk) => {
       if (typeof blk === "string") return h("p", {}, richText(blk));
       if (blk[0] === "h") return h("h3", {}, blk[1]);
@@ -556,19 +631,21 @@
       switch (state.tab) {
       case "cfg_general": return state.settingsTab === "cluster" ? "config_cluster" : state.settingsTab === "upgrades" ? "config_upgrades" : state.settingsTab === "general" ? "config_general" : "config_logs";
       case "cfg_groups": return "config_groups";
+      case "cfg_devices": return state.devTab === 3 ? "config_tags" : state.devTab === 2 ? "config_checks" : state.devTab === 1 ? "config_logins" : "config_devices";
       case "cfg_web": return "config_web";
       case "anycast": return "anycast_" + (state.anycastTab === 1 ? "ospf" : "bgp");
       case "anycaststatus": return "anycaststatus_" + (state.anycastMonTab === 1 ? "ospf" : "bgp");
       case "anycastop": return "anycastop_" + (state.anycastOpTab === 1 ? "ospf" : "bgp");
       case "cfg_alerts": return "config_alerts";
       case "cfg_backup": return "config_backup";
-      case "cfg_monitoring": return state.monTab === 2 ? "config_mcp" : state.monTab === 1 ? "config_metrics" : "config_snmp";
-      case "cfg_ntp": return "config_ntp" + (state.ntpTab >= 0 ? state.ntpTab : 0);
+      case "cfg_mcp": return "config_mcp";
+      case "cfg_privacy": return "config_privacy";
+      case "cfg_monitoring": return state.monTab === 1 ? "config_metrics" : "config_snmp";
       case "users": return state.usersTab === 1 ? "users_ldap" : state.usersTab === 2 ? "users_sso" + (state.ssoTab >= 0 ? state.ssoTab : 0) : "users_local";
       default: return state.tab;
       }
     })();
-    return NTPDIR_HELP[k] ? k : state.tab;
+    return NETDIR_HELP[k] ? k : state.tab;
   }
   // a tab inside a page was changed: if the help is open, show the panel of that tab
   function refreshHelp() {
@@ -609,12 +686,23 @@
     renderTopbar();
   }
 
+  // The filter box takes the focus when a gateway's drawing is opened, and again for each gateway picked in the sidebar, but not from another
+  // box being typed in or an open dialog, and never again for the same gateway (the drawing and the bar are redrawn all the time).
+  function focusTopoFilter(gid) {
+    if (state.topoFocusGid === gid) return;
+    const f = document.querySelector("input.cv-filter");
+    if (!f) return;
+    state.topoFocusGid = gid;
+    const ae = document.activeElement;
+    if (document.querySelector("dialog[open]") || (ae && ae !== f && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))) return;
+    f.focus();
+  }
   function renderTopbar() {
     const bar = document.getElementById("topbar");
     if (!bar) return;
     // The nodes are asked for every few seconds; the bar is only redrawn when what it shows changed, and not at all while one of its
     // pickers has the focus (redrawing it shut an open list).
-    const view = [state.tab, state.target, state.tab === "topology" ? state.topo.gid : null];   // each gateway has its own time zone
+    const view = [state.tab, state.target];
     const sig = JSON.stringify([view, GW_TABS.includes(state.tab) ? gwItems() : null, state.nodes.map((n) => [n.addr, nodeLabel(n), n.is_primary, n.reachable, !!n.self])]);
     if (bar.dataset.sig === sig) return;
     if (bar.contains(document.activeElement) && bar.dataset.view === JSON.stringify(view)) return;
@@ -622,15 +710,13 @@
     bar.dataset.view = JSON.stringify(view);
     clear(bar);
     const rows = [];
-    if (state.tab === "topology") {   // the time zone the clock in the gateway circle is shown in (kept in a cookie, per browser)
-      // a box you can type in: the list narrows as you type (the browser filters a datalist); the whole list shows on focus
-      const list = h("datalist", { id: "tz-list" }, tzList().map((z) => h("option", { value: z, label: tzLabel(z) })));
-      const tz = h("input", { id: "tz-pick", type: "text", list: "tz-list", autocomplete: "off", spellcheck: "false", "aria-label": "Time zone of the clock", value: getTz(),
-        onfocus: (e) => { e.target.placeholder = e.target.value; e.target.value = ""; },
-        oninput: (e) => { const z = tzList().find((x) => x.toLowerCase() === e.target.value.trim().toLowerCase()); if (z) { setTz(z); tickClock(true); } },
-        onblur: (e) => { const z = tzList().find((x) => x.toLowerCase() === e.target.value.trim().toLowerCase()); e.target.value = z || getTz(); e.target.placeholder = ""; } });
-      rows.push(h("div", { class: "tbrow" }, h("label", { for: "tz-pick", class: "muted small" }, "Time zone"), tz, list));
-    }
+    if (state.tab === "topology") {   // the filter of the Topology map sits at the left of the bar, level with the node picker
+      const fin = h("input", { type: "text", class: "cv-filter", value: state.topoFilter || "", placeholder: "Filter devices", autocomplete: "off", spellcheck: "false", "aria-label": "Filter devices",
+        oninput: () => { state.topoFilter = fin.value; if (state.onTopoFilter) state.onTopoFilter(); } });
+      rows.push(h("div", { class: "tbrow tbfilter" }, fin));
+      // the box has the focus when a gateway's drawing is opened (once for each: later redraws of the bar never take the focus from what is being typed)
+      setTimeout(() => focusTopoFilter(state.topo.gid), 0);
+    } else state.topoFocusGid = null;
     if (state.nodes.length >= 2) {
       const sel = h("select", { id: "node-pick", "aria-label": "Node to configure and monitor", onchange: (e) => setTarget(e.target.value || null) });
       const self = selfNode();
@@ -649,72 +735,11 @@
     bar.append(...rows);
   }
 
-  // The clock in the gateway circle: the time of the node being looked at, from that node (asked every 15 s, and counted by the
-  // second in between), in the zone picked under the node picker; the tooltip says how chrony rates it.
-  const clock = { skew: null, info: null, asked: 0 };
-  // The zone list is the browser's own (every IANA zone it knows, plus UTC); the choice is a cookie, so each person's browser keeps its own.
-  const TZ_COOKIE = "ntpdir_tz";
-  let tzNames = null;
-  const tzList = () => {
-    if (!tzNames) {
-      let l = [];
-      try { l = Intl.supportedValuesOf("timeZone"); } catch (_) { /* an old browser: UTC only */ }
-      tzNames = ["UTC"].concat(l.filter((z) => z !== "UTC"));
-    }
-    return tzNames;
-  };
-  const tzOffset = (z) => {
-    try { return new Intl.DateTimeFormat("en-GB", { timeZone: z, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName").value.replace("GMT", "UTC"); } catch (_) { return ""; }
-  };
-  const tzLabel = (z) => (z === "UTC" ? "UTC" : z.replace(/_/g, " ") + " (" + tzOffset(z) + ")");
-  // Each gateway (each drawing under Topology) remembers the zone picked for it; one that has none yet uses the zone chosen before
-  // gateways had their own (the plain cookie), then UTC.
-  const tzCookieName = () => (state.topo && state.topo.gid != null ? TZ_COOKIE + "_" + state.topo.gid : TZ_COOKIE);
-  function readTzCookie(name) {
-    try {
-      const m = document.cookie.match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
-      if (m) { const z = decodeURIComponent(m[1]); if (tzList().includes(z)) return z; }
-    } catch (_) { /* no cookies */ }
-    return null;
-  }
-  function getTz() { return readTzCookie(tzCookieName()) || readTzCookie(TZ_COOKIE) || "UTC"; }
-  function setTz(z) {
-    try { document.cookie = tzCookieName() + "=" + encodeURIComponent(z) + "; max-age=31536000; path=/; SameSite=Strict" + (location.protocol === "https:" ? "; Secure" : ""); } catch (_) { /* kept for this page only */ }
-  }
-  const tzFmt = {};
-  const tzTime = (ms, z) => {
-    try {
-      const f = tzFmt[z] || (tzFmt[z] = new Intl.DateTimeFormat("en-GB", { timeZone: z, hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }));
-      return f.format(new Date(ms)).replace(/GMT/, "UTC");
-    } catch (_) { return new Date(ms).toISOString().slice(11, 19) + " UTC"; }
-  };
-  const tzDate = (ms, z) => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: z }).format(new Date(ms)); } catch (_) { return new Date(ms).toISOString().slice(0, 10); } };
-  const clockText = () => (clock.skew === null ? "--:--:--" : tzTime(Date.now() + clock.skew, getTz()));
-  const clockTip = () => {
-    const i = clock.info;
-    if (!i) return "Time of this node";
-    return tzDate(Date.now() + (clock.skew || 0), getTz()) + " — " + (!i.running ? "chrony is not running" : !i.synced ? "chrony is not synchronised yet" : "stratum " + i.stratum + (i.ref ? ", " + i.ref : "") + ", clock " + (i.offset_ms >= 0 ? "+" : "") + Number(i.offset_ms).toFixed(3) + " ms off");
-  };
-  async function loadClock() {
-    clock.asked = Date.now();
-    try {
-      const r = (await api("GET", "/api/time")).data;
-      clock.skew = r.now_ms - Date.now(); clock.info = r;
-    } catch (_) { /* the next tick asks again */ }
-    tickClock(true);
-  }
-  function tickClock(redraw) {
-    if (document.hidden && redraw !== true) return;
-    if (Date.now() - clock.asked > 15000) loadClock();
-    for (const el of document.querySelectorAll(".vipclock")) { el.firstChild.nodeValue = clockText(); const t = el.querySelector("title"); if (t) t.textContent = clockTip(); }
-  }
-
   function setTarget(addr) {
     if ((addr || null) === state.target) return;
     state.target = addr || null;
     document.body.classList.toggle("remote", !!state.target && state.target !== CLUSTER && !isGw());   // another node's page is marked; the cluster's is no node
     renderTopbar();
-    clock.skew = null; clock.info = null; loadClock();
     state.topo.action = null;   // the gateway picked stays picked: the sidebar list is the signed-in node's, whichever node is driven
     refreshTopoNav();
     certBanner();
@@ -735,9 +760,8 @@
     stopPolling();
     if (state.topoTimer) clearInterval(state.topoTimer);
     if (state.nodesTimer) clearInterval(state.nodesTimer);
-    if (state.clockTimer) clearInterval(state.clockTimer);
     if (state.alertTimer) clearInterval(state.alertTimer);
-    state.topoTimer = state.nodesTimer = state.clockTimer = state.alertTimer = null;
+    state.topoTimer = state.nodesTimer = state.alertTimer = null;
   }
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.timer && VIEWS[state.tab].poll) VIEWS[state.tab].poll().catch(() => {});
@@ -745,15 +769,6 @@
 
   // partialLast: the range ends inside the last bucket (more than one bucket, so there is something left to draw)
   const partialLast = (d, len) => len > 2 && d.to < d.start + len * d.step;
-  // 2,710,532 -> 2.71M, 100,555,111 -> 100.56M: rounded to two decimals (a trailing 0 dropped), M, B, T from a million up; below a million in full
-  const shortCount = (v) => {
-    v = Number(v || 0);
-    if (v < 1e6) return Number(v).toLocaleString();
-    const units = ["M", "B", "T"];
-    let i = 0, x = v / 1e6;
-    while (i < units.length - 1 && Math.round(x * 100) / 100 >= 1000) { x /= 1000; i++; }
-    return String(Math.round(x * 100) / 100) + units[i];
-  };
   // the canary soak: a node that took a new update first shows an hourglass until the others are let go (sec = seconds left)
   const soakTip = (sec) => "soaking: " + sec + "s remaining";
   const soakMark = (sec) => (sec > 0 ? [" ", h("span", { class: "soak", title: soakTip(sec), "aria-label": soakTip(sec) }, "⏳")] : null);
@@ -767,9 +782,9 @@
   const VIEWS = {};
 
 
-  // Topology  (CLI: ntpdir --canvas …)
-  // One tab per gateway.  Circle = the gateway and its shared address, squares =
-  // the NTP servers it forwards to.  Every change is saved as soon as it is made.
+  // Topology  (CLI: netdir --canvas …)
+  // One drawing per gateway: the circle is the gateway and its shared address, the cluster's nodes are on its left
+  // and its anycast addresses on its right.  Every change is saved as soon as it is made.
   VIEWS.topology = (() => {
     const SVGNS = "http://www.w3.org/2000/svg";
     const sv = (tag, attrs, ...kids) => {
@@ -783,26 +798,9 @@
     };
         const CV_ZOOM_MIN = 0.2, CV_ZOOM_MAX = 3;   // what the mouse wheel can zoom the drawing to
     const CV_MIN_SCALE = 0.65;   // the drawing shrinks to fit the window down to this, then scrolls
-    const cv = { cfg: null, orig: null, gid: null, sel: null, view: [], loaded: false, drawn: null, ro: null };
+    const cv = { cfg: null, orig: null, gid: null, sel: null, multi: null, view: [], loaded: false, drawn: null, ro: null };
     let svgHost, legendEl, pending = 0;
 
-    const normAddr = (a) => {
-      a = a.trim().toLowerCase();
-      if (/^\[.*\]:\d+$/.test(a)) return a;
-      if (a.split(":").length > 2) return "[" + a.replace(/^\[|\]$/g, "") + "]:123";
-      if (/:\d+$/.test(a)) return a;
-      return a + ":123";
-    };
-    // the servers a new gateway starts with (the same list as defaultGatewayServers in config.go; remove what you do not want)
-    const DEFAULT_SERVERS = ["pool.ntp.org", "time.nist.gov", "time.google.com", "time.cloudflare.com"];
-    const shortAddr = (a) => a.replace(/:123$/, "").replace(/^\[(.*)\]$/, "$1");
-    // the optional name of a server (ntp.server_names), shown under its address
-    const srvName = (g, addr) => ((g.ntp || cv.cfg.ntp || {}).server_names || {})[addr] || "";
-    // A server's state for its tooltip, one fact to a line: "stratum 1, offset +4.47 ms, round trip 62.48 ms — chrony takes the time
-    // from it" reads "Stratum 1, offset +4.47 ms" and "Time is taken from it" (the round trip is in the server's statistics).
-    const srvWhyLines = (why) => String(why).split(" — ").map((p) => p.replace(/, round trip [\d.]+ ms/, "").replace(/^chrony takes the time from it/, "Time is taken from it"))
-      .filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("\n");
-    const srvTitle = (g, addr) => (srvName(g, addr) ? srvName(g, addr) + " (" + shortAddr(addr) + ")" : shortAddr(addr));
     const trunc = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
     // cut a text to a pixel width (measured in the font the drawing uses), ending in … when it had to be cut
     let measureCtx = null;
@@ -833,10 +831,10 @@
     const gwTip = (g, st, dual) => {
       const fam = (af) => (st.fams[af] ? st.fams[af].detail : "not running");
       const together = dual ? "IPv4: " + fam("v4") + "; IPv6: " + fam("v6") : null;
-      return ["Gateway " + gwLabel(g), g.piggyback ? "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there" : "", st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
+      return ["Gateway " + gwLabel(g), st.why && st.why !== together ? st.why : "", st.clusterUp > 0 ? "Online for " + spanText(st.clusterUp) : upText(st.uptime),
         ...(dual ? [["IPv4", "v4"], ["IPv6", "v6"]].map(([n, af]) => n + " — " + fam(af)) : []),
         (g.more_vip4 || []).length + (g.more_vip6 || []).length ? "Also answers on " + [...(g.more_vip4 || []), ...(g.more_vip6 || [])].join(", ") : "",
-        membersText(st.members), st.vmac && st.vmac.verdict !== "off" && !(st.why || "").startsWith("Virtual MACs:") ? vmacLine(st.vmac) : ""].filter(Boolean).join("\n");
+        membersText(st.members), "Clients: " + st.mcpClients, st.vmac && st.vmac.verdict !== "off" && !(st.why || "").startsWith("Virtual MACs:") ? vmacLine(st.vmac) : ""].filter(Boolean).join("\n");
     };
     const gwAddr = (g) => bareIP(g.vip4) || bareIP(g.vip6) || "gateway " + g.group_id;
     const gwLabel = (g) => g.name || gwAddr(g);
@@ -845,8 +843,8 @@
     // not in it yet — an unsaved shape — is grey.
     function statusOf(g) {
       const v = (cv.view || []).find((x) => x.group_id === g.group_id);
-      const servers = {};
-      if (v) for (const x of v.servers) servers[x.addr] = x;
+      const devs = {};
+      if (v) for (const d of v.devices || []) devs[d.name] = d;
       const fams = {};
       if (v) for (const f of v.families || []) fams[f.af] = f;
       const members = (v ? v.members || [] : []).map((m) => (m.via_local ? { ...m, via_addr: v.via_addr } : m));   // the serving node's own entry says which node it is
@@ -860,18 +858,9 @@
       if (gwPaused || nodePaused || removed) { circle = "paused"; why = g.paused_all ? "Paused on all nodes — nothing is serving it until resumed" : removed && !g.paused && !nodePaused ? "This node was removed from the gateway — it does not serve it; the other nodes carry on" : nodePaused && !g.paused ? "This node is paused (Operate ▸ Node) — it is not serving; the other nodes carry on" : "Paused on this node — it is not serving; the other nodes carry on"; }
       else if (!via && circle === "paused") { circle = "idle"; why = "Resuming…"; }
       if (via) why = "As " + v.via + " sees it (it serves the gateway; this node does not): " + why;
-      return { via: (v && v.via) || "", circle, why, servers, fams, members, anycast: v ? v.anycast || [] : [], nodes: v ? v.nodes || [] : [], vmac: v && !via ? v.vmac || null : null, uptime: v && !gwPaused && !nodePaused && !removed ? v.uptime : null, clusterUp: v && !gwPaused && !removed ? v.cluster_up_sec || 0 : 0 };
+      return { via: (v && v.via) || "", mcpClients: v ? v.mcp_clients || 0 : 0, circle, why, devs, fams, members, anycast: v ? v.anycast || [] : [], nodes: v ? v.nodes || [] : [], vmac: v && !via ? v.vmac || null : null, uptime: v && !gwPaused && !nodePaused && !removed ? v.uptime : null, clusterUp: v && !gwPaused && !removed ? v.cluster_up_sec || 0 : 0 };
     }
-    // Where a server is paused: "all" (shared, every node), "node" (this node's own settings) or "".
-    const srvPausedScope = (g, addr) => (((g.ntp || cv.cfg.ntp || {}).paused_servers || []).includes(addr) ? "all" : (cv.cfg.paused_servers_here || []).includes(addr) ? "node" : "");
-    const pausedSrv = (g, addr) => !!srvPausedScope(g, addr);
-        const scopeWord = (sc) => (sc === "all" ? "all nodes" : "this node");
-    function serverState(g, addr, st, via) {
-      const sc = via ? "" : srvPausedScope(g, addr);   // seen from a serving node: what it says, not this node's own pauses
-      if (sc) return { c: "paused", why: "Paused on " + scopeWord(sc) + " — not probed or sent requests until resumed" };
-      if (st && st.status === "paused") return via ? { c: "paused", why: st.detail } : { c: "idle", why: "Resuming…" };
-      return st ? { c: st.status, why: st.detail } : { c: "idle", why: "Not probed yet" };
-    }
+    const scopeWord = (sc) => (sc === "all" ? "all nodes" : "this node");
     // Pause / resume: saved at once like every other change.
     function quick(change) { change(); commit(); }
     // Toggle one entry in a list held on `obj` (deleting the list when it empties).
@@ -885,29 +874,10 @@
       if (!pause) { quick(() => { delete g[k]; }); return; }
       confirmDialog("Pause gateway " + gwLabel(g) + " on " + scopeWord(scope) + "?",
         scope === "all"
-          ? "Every node stops serving the gateway — it gives up its address and stops answering NTP. Resume it when you are done."
-          : "This node stops serving the gateway — it gives up its address and stops answering NTP — so it can be taken offline. The other cluster nodes carry on. Resume it here when you are done.",
+          ? "Every node stops serving the gateway — it gives up its address and stops answering on it. Resume it when you are done."
+          : "This node stops serving the gateway — it gives up its address and stops answering on it — so it can be taken offline. The other cluster nodes carry on. Resume it here when you are done.",
         "Pause gateway", () => quick(() => { g[k] = true; }), "btn primary");
     }
-    // The last server in service stays on unless the gateway has fallback servers to answer from; a server that is down (not answering or
-    // paused) is not in service.  "" when it may be paused, otherwise the reason.
-    function lastServerWhy(g, addr) {
-      const d = g.ntp || cv.cfg.ntp || {}, st = statusOf(g);
-      const inService = (x) => { const c = serverState(g, x, st.servers[x], st.via).c; return c !== "bad" && c !== "paused"; };
-      return inService(addr) && !(d.servers || []).some((x) => x !== addr && inService(x)) && !(d.fallback_servers || []).length
-        ? "That is the last NTP server in service on gateway " + gwLabel(g) + " (the others are down or paused) and the gateway has no fallback servers, so pausing it would leave clients unanswered." : "";
-    }
-    function pauseServer(g, addr, scope, pause) {
-      if (pause) {
-        const why = lastServerWhy(g, addr);
-        if (why) return;   // the menu item is greyed with the reason; nothing is written above the drawing
-      }
-      quick(() => {
-        if (scope === "all") { ensureNTP(g); toggleIn(g.ntp, "paused_servers", addr, pause); }
-        else toggleIn(cv.cfg, "paused_servers_here", addr, pause);
-      });
-    }
-
     // ── drawing ──────────────────────────────────────────────────────────
     function draw() {
       cv.stale = 0;
@@ -917,16 +887,13 @@
       const g = curGroup();
       if (!g) { clear(svgHost); svgHost.append(h("div", { class: "empty" }, "No gateway yet. Click “＋ New gateway” under Topology in the sidebar to draw one.")); return; }
       const st = statusOf(g);
-      const servers = (g.ntp && g.ntp.servers) || [];
-      const COLW = 190, SW = 156;
       // The circle shows bare addresses (no /prefix) and grows until the longest one fits,
       // up to a full 39-character IPv6 address (monospace 12px ≈ 7.3px per character).
-      const pigShared = g.piggyback ? (g.dnsdir_shared || []) : [];   // the dnsdir gateway's own addresses: the circle shows them as dnsdir's does
-      const ip4 = g.piggyback ? (pigShared.find((x) => !x.includes(":")) || "") : (g.vip4 || "").split("/")[0], ip6 = g.piggyback ? (pigShared.find((x) => x.includes(":")) || "") : (g.vip6 || "").split("/")[0];
+      const ip4 = (g.vip4 || "").split("/")[0], ip6 = (g.vip6 || "").split("/")[0];
       const dual = !!(ip4 && ip6);
-      const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);   // wide enough for the clock line too
-      const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 36 : 28)));
-      const own = g.extra_vips || [], dds = (g.dnsdir_vips || []).filter((a) => !g.piggyback || !pigShared.includes(a)), anys = [...own, ...dds], AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
+      const textW = Math.max(Math.max(ip4.length, ip6.length, 9) * 6.2, 118);
+      const R = Math.max(50, Math.ceil(Math.hypot((textW + 22) / 2, dual ? 28 : 20)));
+      const own = g.extra_vips || [], anys = own, AH = 40, AG = 8;      // anycast pills sit to the right of the circle, the cluster's nodes to the left
       const AW = Math.max(170, Math.ceil(Math.max(0, ...anys.map((a) => a.length)) * 7.3 + 28));  // wide enough for the longest address in full (monospace 12px)
       const waiting = cv.nodeWait || {};
       // a node removed from the gateway is not drawn (right-click the gateway ▸ Add node brings it back); the saved list decides, so it goes at once
@@ -940,67 +907,64 @@
         if (ia !== ib && (ia >= 0 || ib >= 0)) return ia < 0 ? 1 : ib < 0 ? -1 : ia - ib;
         return String(a.name || a.addr).localeCompare(String(b.name || b.addr), undefined, { numeric: true }) || String(a.node_id || "").localeCompare(String(b.node_id || ""));
       }), NW = 190, NSL = 14;      // a node is a parallelogram: its name and what it is doing
-      // each side is four rows tall, or three when a four-row side would have a server's line run through a box; the next ones go in a new column further out
       const CG = 25, SIDE_GAP = 70;   // SIDE_GAP: room between the circle and the nodes on its left, the anycast pills on its right
-      const SH = servers.some((a) => srvName(g, a)) ? 62 : 46;   // a named server has a third line, so every square in the row is taller
-      const CY = R + 12;
-      const layout = (PER, extra = 0) => {
-        const sideH = (n) => Math.min(PER, n) * (AH + AG) - (n ? AG : 0);
-        const aCols = Math.ceil(anys.length / PER), nCols = Math.ceil(nodes.length / PER);
-        const anyH = sideH(anys.length), nodeH = sideH(nodes.length);
-        const anyTop = Math.max(8, CY - anyH / 2), nodeTop = Math.max(8, CY - nodeH / 2);
-        const anyAt = (k) => ({ x: R + SIDE_GAP + Math.floor(k / PER) * (AW + CG), y: anyTop + (k % PER) * (AH + AG) });   // x from the circle's centre
-        const nodeAt = (k) => ({ x: -(R + SIDE_GAP + NW + Math.floor(k / PER) * (NW + CG)), y: nodeTop + (k % PER) * (AH + AG) });
-        const rightX = anys.length ? R + SIDE_GAP + aCols * AW + (aCols - 1) * CG : 0, leftX = nodes.length ? R + SIDE_GAP + nCols * NW + (nCols - 1) * CG : 0;
-        const sideBottom = Math.max(anys.length ? anyTop + anyH : 0, nodes.length ? nodeTop + nodeH : 0);
-        // extra is spare height to use: it goes into the gap between the circle and the servers
-        const SY0 = Math.max(CY + R + 80, sideBottom ? sideBottom + 84 : 0);
-        const SY = SY0 + Math.max(0, extra);   // servers' top
-        const W = Math.max(Math.max(servers.length, 1) * COLW + 20, 2 * R + 140, 2 * Math.max(rightX, leftX) + 20), H = SY + SH + 12;
-        const cx = W / 2, rowX = (W - Math.max(servers.length, 1) * COLW) / 2;   // the row of servers is centred under the circle
-        // does a line from the circle to a server pass through a node or a pill?
-        const boxes = [...anys.map((_, k) => ({ ...anyAt(k), w: AW })), ...nodes.map((_, k) => ({ ...nodeAt(k), w: NW }))];
-        let clash = false;
-        servers.forEach((_, i) => {
-          const x2 = rowX + i * COLW + COLW / 2;
-          for (let t = 0; t <= 1 && !clash; t += 0.02) {
-            const px = cx + (x2 - cx) * t - cx, py = CY + R + (SY - CY - R) * t;
-            if (boxes.some((b) => px > b.x - 3 && px < b.x + b.w + 3 && py > b.y - 3 && py < b.y + AH + 3)) clash = true;
-          }
-        });
-        return { PER, anyAt, nodeAt, SY, W, H, cx, rowX, clash };
+      const CY = R + 12, PER = 4;      // each side is four rows tall; the next ones go in a new column further out
+      const sideH = (n) => Math.min(PER, n) * (AH + AG) - (n ? AG : 0);
+      const aCols = Math.ceil(anys.length / PER), nCols = Math.ceil(nodes.length / PER);
+      const anyH = sideH(anys.length), nodeH = sideH(nodes.length);
+      const anyTop = Math.max(8, CY - anyH / 2), nodeTop = Math.max(8, CY - nodeH / 2);
+      const anyAt = (k) => ({ x: R + SIDE_GAP + Math.floor(k / PER) * (AW + CG), y: anyTop + (k % PER) * (AH + AG) });   // x from the circle's centre
+      const nodeAt = (k) => ({ x: -(R + SIDE_GAP + NW + Math.floor(k / PER) * (NW + CG)), y: nodeTop + (k % PER) * (AH + AG) });
+      const rightX = anys.length ? R + SIDE_GAP + aCols * AW + (aCols - 1) * CG : 0, leftX = nodes.length ? R + SIDE_GAP + nCols * NW + (nCols - 1) * CG : 0;
+      const sideBottom = Math.max(anys.length ? anyTop + anyH : 0, nodes.length ? nodeTop + nodeH : 0);
+      // the gateway's devices: a row of squares under the circle (and under the nodes and pills when those reach lower)
+      // the filter box: only the devices whose name, address or platform holds every word typed are drawn; `tag:` before a word asks the tags instead
+      // (a plain word searches the tags too, except `source=…`, which an imported device carries and which would match its server's name).
+      // Dragging to reorder is off meanwhile.
+      const flt = parseFilter(state.topoFilter), words = { length: flt.empty ? 0 : 1 };
+      const devMatch = (n) => {
+        const d = devByName(n), t = [d.name, d.address, platformName(d.platform)].join(" ").toLowerCase();
+        return flt.match((w) => (w.startsWith("tag:") ? (d.tags || []).some((x) => x.toLowerCase().includes(w.slice(4))) : t.includes(w) || (d.tags || []).some((x) => !x.toLowerCase().startsWith("source=") && x.toLowerCase().includes(w))));
       };
-      let lay = layout(4);
-      if (lay.clash) lay = layout(3);
-      // When the window is taller than the drawing at the size it will be shown, the rows are spread apart to use the
-      // height (never more than twice as tall as drawn).
-      if (svgHost.isConnected) {   // the zoom does not come into it: zooming scales this layout, it must not change it
-        const hostW = oldWrap && svgHost.contains(oldWrap) ? oldWrap.clientWidth : svgHost.clientWidth;
-        if (hostW > 0) {
-          const s0 = Math.max(CV_MIN_SCALE, Math.min(1, hostW / lay.W));   // the size it is fitted to, whatever the zoom is
-          const after = svgHost.nextElementSibling;   // the legend under the card
-          let top = 0;   // where the card is on the page, not on the screen: scrolling the page (it scrolls when zoomed in) must not move the layout
-          for (let el = svgHost; el; el = el.offsetParent) top += el.offsetTop;
-          const room = window.innerHeight - top - (after ? after.offsetHeight + 24 : 0) - 16;
-          const extra = Math.min(room / s0 - lay.H, lay.H, 600);
-          if (extra > 20) { const taller = layout(lay.PER, extra); if (!taller.clash) lay = taller; }
-        }
-      }
-      const { anyAt, nodeAt, SY, W, H, cx, rowX } = lay;
+      // Up to DOT_FROM devices each is a square with its name, as always.  More than that, each is a small square joined to the gateway, and the
+      // full-size square comes when the pointer is on it, or when the filter matches it (the matches are drawn full size above the others).
+      const allDevs = (g.devices || []).filter((n) => devByName(n)), DOT_FROM = ((cv.cfg && cv.cfg.settings) || {}).topology_squares_above || DOT_DEFAULT, dotMode = allDevs.length > DOT_FROM;
+      const problem = (n) => { const i = st.devs[n], d = devByName(n); return !d.disabled && !devPausedHere(n) && !!i && (i.status === "warn" || i.status === "bad"); };   // amber or red
+      const devs = !dotMode ? allDevs.filter(devMatch) : words.length ? allDevs.filter(devMatch) : allDevs.filter(problem), COLW = 190, SW = 160, SH = 46, DEV_ROW = 6, RG = 20;   // at most six across, then a new row
+      const fullSet = new Set(devs), dotted = dotMode ? allDevs.filter((n) => !fullSet.has(n)) : [], devOrder = devs.concat(dotted);
+      const DS = 12, DP = 18, DOT_COLS = 48;   // a small square, the distance from one to the next, the most across
+      const SY = Math.max(CY + R, sideBottom) + 70, devRows = Math.ceil(devs.length / DEV_ROW), perRow = Math.min(DEV_ROW, devs.length);
+      const W = Math.max(2 * R + 140, 2 * Math.max(rightX, leftX) + 20, perRow * COLW + 20, dotted.length ? Math.min(40, dotted.length) * DP + 40 : 0);
+      const dotCols = Math.max(1, Math.min(dotted.length, DOT_COLS, Math.floor((W - 40) / DP)));
+      const bigBottom = SY + devRows * SH + (devRows - 1) * RG, dotTop = devs.length ? bigBottom + 36 : SY, dotRows = Math.ceil(dotted.length / dotCols);
+      const H = dotted.length ? dotTop + dotRows * DP + 12 : devs.length ? bigBottom + 12 : Math.max(CY + R, sideBottom) + 16;
+      const dotAt = (k) => ({ x: (W - (dotCols * DP - (DP - DS))) / 2 + (k % dotCols) * DP, y: dotTop + Math.floor(k / dotCols) * DP });
+      const cx = W / 2;
+      // the slot of device k: x and y of its square (a short last row is centred)
+      const devAt = (k) => { const r = Math.floor(k / DEV_ROW), n = Math.min(DEV_ROW, devs.length - r * DEV_ROW); return { x: (W - n * COLW) / 2 + (k % DEV_ROW) * COLW + (COLW - SW) / 2, y: SY + r * (SH + RG) }; };
       const svg = sv("svg", { class: "cv", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "group", "aria-label": "Gateway diagram", tabindex: "0",
         onkeydown: (e) => { if ((e.key === "Delete" || e.key === "Backspace") && cv.sel && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); delSel(); } },
-        onclick: (e) => { if (e.target === svg) { cv.sel = null; refresh(); } } });
-      const sel = (kind, addr) => cv.sel && cv.sel.kind === kind && cv.sel.addr === addr;
+        onclick: (e) => { if (e.target === svg) { cv.sel = null; cv.multi = null; refresh(); } } });
+      // Shift-click picks the devices from the last one clicked to this one, Ctrl-click (or Cmd-click) adds or takes one away; a plain click picks one
+      const sel = (kind, addr) => cv.sel && cv.sel.kind === kind && cv.sel.addr === addr || kind === "dev" && !!cv.multi && cv.multi.has(addr);
       const pick = (kind, addr) => (e) => {
-        e.stopPropagation(); cv.sel = { kind, addr }; refresh();
+        e.stopPropagation();
+        if (kind === "dev" && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+          const cur = cv.multi ? new Set(cv.multi) : new Set(cv.sel && cv.sel.kind === "dev" ? [cv.sel.addr] : []);
+          if (e.shiftKey && cv.sel && cv.sel.kind === "dev" && devOrder.includes(cv.sel.addr)) {
+            const a = devOrder.indexOf(cv.sel.addr), b = devOrder.indexOf(addr);
+            for (let i = Math.min(a, b); i <= Math.max(a, b); i++) cur.add(devOrder[i]);
+          } else if (cur.has(addr)) cur.delete(addr); else cur.add(addr);
+          cv.multi = cur.size > 1 ? cur : null;
+          cv.sel = cur.size ? { kind, addr: cur.has(addr) ? addr : [...cur][cur.size - 1] } : null;
+        } else { cv.multi = null; cv.sel = { kind, addr }; }
+        refresh();
         const el = svgHost.querySelector("svg"); if (el) el.focus({ preventScroll: true }); // keep the Delete key working after the redraw
       };
       const label = (x, y, t, cls) => sv("text", { x, y, "text-anchor": "middle", class: cls || "" }, t);
-      // the time of the node being looked at, kept by the clock timer (see tickClock); it is the time every node serving the gateway hands out
-      const clockEl = (x, y) => sv("text", { x, y, "text-anchor": "middle", class: "t1 vipclock" }, clockText(), sv("title", {}, clockTip()));
       const lines = [];
       const shapes = [];
-      // Drag a server left/right, or an anycast address up/down to another place.  The shape follows the pointer, a dashed outline shows where it will land, and letting go saves the new
+      // Drag an anycast address, a node or a device to another place.  The shape follows the pointer, a dashed outline shows where it will land, and letting go saves the new
       // order at once.  Nothing is redrawn while it is held (the poll skips cv.drag); Escape puts it back.
       const dragStart = (sp) => (e) => {
         if (e.button !== 0 || cv.drag || sp.n < 2) return;
@@ -1051,47 +1015,33 @@
         window.addEventListener("keydown", key, true);
       };
       const reorder = (list, from, to) => { const [it] = list.splice(from, 1); list.splice(to, 0, it); };
-      if (g.piggyback) shapes.push(sv("text", { x: 8, y: 16, class: "t2", "text-anchor": "start" }, sv("title", {}, "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there"), "Imported from AnyName"));
       shapes.push(sv("g", { class: "shape st-" + st.circle + (sel("gw") ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "Gateway " + gwLabel(g), onclick: pick("gw"), oncontextmenu: rightClick("gw"),
         onkeydown: (e) => { if (e.key === "Enter") pick("gw")(e); } },
         sv("title", {}, gwTip(g, st, dual)),
         sv("circle", { cx, cy: CY, r: R }),
         ...(dual
-          ? [clockEl(cx, CY - 22), label(cx, CY - 4, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), label(cx, CY + 14, ip4, "t2"), label(cx, CY + 32, ip6, "t2")]
-          : [clockEl(cx, CY - 10), label(cx, CY + 8, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t2"), label(cx, CY + 26, ip4 || ip6, "t2")])));
+          ? [label(cx, CY - 14, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t1"), label(cx, CY + 4, ip4, "t2"), label(cx, CY + 22, ip6, "t2")]
+          : [label(cx, CY - 2, g.name ? g.name.slice(0, 22) : g.interface + " · group " + g.group_id, "t1"), label(cx, CY + 16, ip4 || ip6, "t2")])));
       anys.forEach((addr, i) => {
         const at = anyAt(i), x = cx + at.x, y = at.y;
         const a = st.anycast.find((z) => z.addr === addr);
-        if (i >= own.length) {   // an address of dnsdir on this host: ntpdir only answers NTP on it, dnsdir holds and announces it
-          const c = a && a.up ? (a.reason ? "warn" : "ok") : "idle";
-          const dwhy = !a ? "Applying…" : a.up ? "Answering NTP; AnyName announces it (on lo)" + (a.reason ? " — " + a.reason : "") : "Not answering: " + (a.reason || "AnyName does not have it on lo");
-          lines.push(sv("line", { x1: cx + R, y1: CY, x2: x, y2: y + AH / 2, class: "edge" }));
-          shapes.push(sv("g", { class: "shape st-" + c + (sel("dd", addr) ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "AnyName address " + addr, onclick: pick("dd", addr), oncontextmenu: rightClick("dd", addr),
-            onkeydown: (e) => { if (e.key === "Enter") pick("dd", addr)(e); } },
-            sv("title", {}, "AnyName address " + addr + " — " + dwhy),
-            sv("rect", { x, y, width: AW, height: AH, rx: 18 }),
-            label(x + AW / 2, y + 17, addr, "ip"),
-            label(x + AW / 2, y + 32, a && a.up ? (a.reason ? "AnyName · " + a.reason : "AnyName · answering") : "AnyName · not announced", "t2")));
-          return;
-        }
-        const noSrv = !(g.ntp && (g.ntp.servers || []).length);
         // A pill is never more alarming than its gateway: green while announced,
         // otherwise it takes the gateway's own colour only when that is amber, red or paused.
         const pzAll = (g.paused_vips || []).includes(addr), pzHere = !st.via && (g.paused_vips_here || []).includes(addr), pz = pzAll || pzHere;
-        const c = pz ? "paused" : noSrv || !a ? "idle" : a.up ? (a.status === "warn" || a.status === "bad" ? a.status : "ok") : ["warn", "bad", "paused"].includes(st.circle) ? st.circle : "idle";
-        const why = pz ? "Paused on " + (pzAll ? "all nodes" : "this node") + ": not announced until resumed" : noSrv ? "Add an NTP server to this gateway: the address is only announced while a server answers"
+        const c = pz ? "paused" : !a ? "idle" : a.up ? (a.status === "warn" || a.status === "bad" ? a.status : "ok") : ["warn", "bad", "paused"].includes(st.circle) ? st.circle : "idle";
+        const why = pz ? "Paused on " + (pzAll ? "all nodes" : "this node") + ": not announced until resumed"
           : !st.via && (g.paused || g.paused_all) ? "Gateway paused on " + (g.paused_all ? "all nodes" : "this node") + ": not announced"
-          : !a ? "Applying…" : a.up ? "Announced from " + (st.via || "this node") + " (on lo)" + (a.carried && a.carried.length ? " — kept up by " + a.carried.map((n) => { const x = groups().find((z) => z.group_id === n); return x ? gwLabel(x) : "group " + n; }).join(", ") + (a.reason ? ", because this gateway's NTP cannot answer here (" + a.reason + ")" : "") : "") + (a.detail ? " — " + a.detail : "") : "Withdrawn on " + (st.via || "this node") + (a.reason ? ": " + a.reason : "");
+          : !a ? "Applying…" : a.up ? "Announced from " + (st.via || "this node") + " (on lo)" + (a.carried && a.carried.length ? " — kept up by " + a.carried.map((n) => { const x = groups().find((z) => z.group_id === n); return x ? gwLabel(x) : "group " + n; }).join(", ") + (a.reason ? ", because this node cannot answer on it here (" + a.reason + ")" : "") : "") + (a.detail ? " — " + a.detail : "") : "Withdrawn on " + (st.via || "this node") + (a.reason ? ": " + a.reason : "");
         lines.push(sv("line", { x1: cx + R, y1: CY, x2: x, y2: y + AH / 2, class: "edge" }));
         shapes.push(sv("g", { class: "shape drag st-" + c + (sel("any", addr) ? " sel" : ""), tabindex: "0", role: "button", "aria-label": "Anycast address " + addr, onclick: pick("any", addr), oncontextmenu: rightClick("any", addr),
           onpointerdown: dragStart({ axis: "xy", n: own.length, index: i, pos: { x, y }, slot: (k) => ({ x: cx + anyAt(k).x, y: anyAt(k).y }),
             ghost: (k) => sv("rect", { class: "dropslot", x: cx + anyAt(k).x, y: anyAt(k).y, width: AW, height: AH, rx: 18 }),
             drop: (k) => { reorder(g.extra_vips, i, k); cv.sel = { kind: "any", addr }; commit(); } }),
           onkeydown: (e) => { if (e.key === "Enter") pick("any", addr)(e); } },
-          sv("title", {}, "Anycast " + addr + " — " + why + (a && !noSrv && !g.paused && !g.paused_all && !pz ? (a.cluster_up_sec > 0 ? "\nOnline for " + spanText(a.cluster_up_sec) : upLine(a.uptime)) : "")),
+          sv("title", {}, "Anycast " + addr + " — " + why + (a && !g.paused && !g.paused_all && !pz ? (a.cluster_up_sec > 0 ? "\nOnline for " + spanText(a.cluster_up_sec) : upLine(a.uptime)) : "")),
           sv("rect", { x, y, width: AW, height: AH, rx: 18 }),
           label(x + AW / 2, y + 17, addr, "ip"),
-          label(x + AW / 2, y + 32, a && a.up && !noSrv && !pz && a.status === "warn" ? "anycast · neighbor down" : a && a.up && !noSrv && !pz && a.status === "bad" ? (a.bgp === "disabled" ? "anycast · " + (/^OSPF/.test(a.detail || "") ? "OSPF" : "BGP") + " disabled" : /OSPF/.test(a.detail || "") ? "anycast · no OSPF neighbor" : "anycast · no BGP session") : c === "ok" ? "anycast · announced" : c === "paused" && pz ? "paused · " + (pzAll ? "all nodes" : "this node") : c === "paused" ? "anycast · paused" : a && !a.up && !noSrv ? "anycast · withdrawn" : "anycast", "t2")));
+          label(x + AW / 2, y + 32, a && a.up && !pz && a.status === "warn" ? "anycast · neighbor down" : a && a.up && !pz && a.status === "bad" ? (a.bgp === "disabled" ? "anycast · " + (/^OSPF/.test(a.detail || "") ? "OSPF" : "BGP") + " disabled" : /OSPF/.test(a.detail || "") ? "anycast · no OSPF neighbor" : "anycast · no BGP session") : c === "ok" ? "anycast · announced" : c === "paused" && pz ? "paused · " + (pzAll ? "all nodes" : "this node") : c === "paused" ? "anycast · paused" : a && !a.up ? "anycast · withdrawn" : "anycast", "t2")));
       });
       // the cluster's nodes, left of the circle, as parallelograms: drag one to another place (the order is saved with the gateway)
       const nodeIds = nodes.map((n) => n.node_id);
@@ -1115,23 +1065,46 @@
           label(mid, y + 32, fitPx(n.label, NW - 2 * NSL - 12, "400 11px system-ui, sans-serif"), "t2"),
           n.soak_sec > 0 ? sv("text", { x: x + NSL + 8, y: y + 17, class: "t1 soak" }, sv("title", {}, soakTip(n.soak_sec)), "⏳") : null));
       });
-      servers.forEach((addr, i) => {
-        const x = rowX + i * COLW + (COLW - SW) / 2, mx = x + SW / 2;
-        const ss = serverState(g, addr, st.servers[addr], st.via);
-        const info = st.servers[addr];
-        lines.push(sv("line", { x1: cx, y1: CY + R, x2: mx, y2: SY, class: "edge" + (info && (info.chrony === "*" || info.chrony === "+") ? " spread" : "") }));   // blue: chrony takes the time from it
-        shapes.push(sv("g", { class: "shape drag st-" + ss.c + (sel("srv", addr) ? " sel" : ""), "data-col": addr, tabindex: "0", role: "button", "aria-label": "NTP server " + srvTitle(g, addr), onclick: pick("srv", addr), oncontextmenu: rightClick("srv", addr),
-          onpointerdown: dragStart({ axis: "x", n: servers.length, index: i, pos: x, origin: rowX + (COLW - SW) / 2, step: COLW, group: addr,
-            ghost: (k) => sv("rect", { class: "dropslot", x: rowX + (COLW - SW) / 2 + k * COLW, y: SY, width: SW, height: SH, rx: 4 }),
-            drop: (k) => { ensureNTP(g); reorder(g.ntp.servers, i, k); cv.sel = { kind: "srv", addr }; commit(); } }),
-          onkeydown: (e) => { if (e.key === "Enter") pick("srv", addr)(e); } },
-          sv("title", {}, srvTitle(g, addr) + "\n" + srvWhyLines(ss.why) + (info && ss.c !== "paused" && ss.c !== "idle" ? upLine(info.uptime) : "")),
-          sv("rect", { x, y: SY, width: SW, height: SH, rx: 4 }),
-          label(mx, SY + (srvName(g, addr) ? 19 : 20), info && (ss.c === "ok" || ss.c === "warn") ? (info.time ? (info.time.offset_ms >= 0 ? "+" : "") + Number(info.time.offset_ms).toFixed(2) + " ms" : info.ms + " ms") + (info.chrony === "*" ? " *" : "") : ss.c === "bad" ? "down" : ss.c === "paused" ? "paused" : "", "t1 strong"),   // the offset first, in bold; the star: the source chrony has selected
-          ...(srvName(g, addr) ? [label(mx, SY + 35, fitPx(srvName(g, addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")] : []),
-          label(mx, SY + (srvName(g, addr) ? 51 : 35), fitPx(shortAddr(addr), SW - 44, "400 11px system-ui, sans-serif"), "t2")));
+      devs.forEach((name, i) => {
+        const d = devByName(name), { x, y } = devAt(i), mx = x + SW / 2;
+        const info = st.devs[name], c = d.disabled || devPausedHere(name) ? "paused" : info ? info.status : "idle";
+        lines.push(sv("line", { x1: cx, y1: CY + R, x2: mx, y2: y, class: "edge" + (c === "bad" ? " down" : "") }));
+        shapes.push(sv("g", { class: "shape drag st-" + c + (sel("dev", name) ? " sel" : ""), "data-col": "dev:" + name, tabindex: "0", role: "button", "aria-label": "Device " + name,
+          onclick: pick("dev", name), oncontextmenu: rightClick("dev", name),
+          onpointerdown: dragStart({ axis: "xy", n: words.length ? 1 : devs.length, index: i, pos: { x, y }, slot: devAt, group: "dev:" + name,
+            ghost: (k) => sv("rect", { class: "dropslot", x: devAt(k).x, y: devAt(k).y, width: SW, height: SH, rx: 4 }),
+            drop: (k) => { reorder(g.devices, i, k); cv.sel = { kind: "dev", addr: name }; commit(); } }),
+          onkeydown: (e) => { if (e.key === "Enter") pick("dev", name)(e); } },
+          sv("title", {}, devTip(d, info)),
+          sv("rect", { x, y, width: SW, height: SH, rx: 4 }),
+          label(mx, y + 19, fitPx(name, SW - 20, "600 13px system-ui, sans-serif"), "t1"),
+          label(mx, y + 35, fitPx(d.address + " · " + platformName(d.platform), SW - 20, "400 11px system-ui, sans-serif"), "t2")));
+      });
+      // the small squares (more than DOT_FROM devices): each joined to the gateway; one full-size square, drawn last so nothing covers it, is shown
+      // beside the one the pointer (or the keyboard) is on
+      const hov = sv("g", { class: "shape hovcard", visibility: "hidden" }, sv("rect", { x: 0, y: 0, width: SW, height: SH, rx: 4 }), label(SW / 2, 19, "", "t1"), label(SW / 2, 35, "", "t2"));
+      const hovT1 = hov.querySelector("text.t1"), hovT2 = hov.querySelector("text.t2");
+      const hideHov = () => hov.setAttribute("visibility", "hidden");
+      dotted.forEach((name, i) => {
+        const d = devByName(name), { x, y } = dotAt(i), mx = x + DS / 2, info = st.devs[name], c = d.disabled || devPausedHere(name) ? "paused" : info ? info.status : "idle";
+        const showHov = () => {
+          const hx = Math.max(4, Math.min(W - SW - 4, mx - SW / 2)), hy = Math.max(2, y - SH - 6);   // above the dot, so the dots beside and below it stay in reach
+          hov.setAttribute("class", "shape hovcard st-" + c);
+          hov.setAttribute("transform", `translate(${hx} ${hy})`);
+          hovT1.textContent = fitPx(name, SW - 20, "600 13px system-ui, sans-serif");
+          hovT2.textContent = fitPx(d.address + " · " + platformName(d.platform), SW - 20, "400 11px system-ui, sans-serif");
+          hov.setAttribute("visibility", "visible");
+        };
+        lines.push(sv("line", { x1: cx, y1: CY + R, x2: mx, y2: y, class: "edge thin" + (c === "bad" ? " down" : "") }));
+        shapes.push(sv("g", { class: "shape dotsq st-" + c + (sel("dev", name) ? " sel" : ""), "data-col": "dev:" + name, tabindex: "0", role: "button", "aria-label": "Device " + name,
+          onclick: pick("dev", name), oncontextmenu: rightClick("dev", name), onmouseenter: showHov, onmouseleave: hideHov, onfocus: showHov, onblur: hideHov,
+          onkeydown: (e) => { if (e.key === "Enter") pick("dev", name)(e); } },
+          sv("title", {}, devTip(d, info)),
+          sv("rect", { x, y, width: DS, height: DS, rx: 2 })));
       });
       svg.append(...lines, ...shapes);
+      if (dotted.length) svg.append(hov);
+      focusTopoFilter(g.group_id);
       // The scrolling box (.cv-wrap) is made once and kept: only the drawing inside it is swapped on each refresh, so its
       // scrollbars neither blink nor get pulled from under the pointer while they are being dragged.
       let wrap = oldWrap && svgHost.contains(oldWrap) ? oldWrap : null;
@@ -1239,26 +1212,35 @@
       d.showModal();
       return d;
     }
-    function form(title, fields, onOk, okLabel) {
+    // onOk returns null (done: saved), an error text (kept open), or "" with noSave (done, nothing to save)
+    function form(title, fields, onOk, okLabel, noSave) {
       const els = {}, hints = {};
       const grid = h("div", { class: "grid" }, fields.map((f) => {
-        els[f.k] = f.options
-          ? h("select", {}, f.options.map((o) => h("option", { value: o, selected: o === f.v }, o)))
-          : h("input", { type: "text", autocomplete: "off", spellcheck: "false", value: f.v || "", disabled: f.disabled, placeholder: f.ph || "" });
+        els[f.k] = f.check
+          ? h("input", { type: "checkbox", checked: !!f.v })
+          : f.multi
+          ? h("select", { multiple: true, size: String(Math.min(Math.max(f.options.length, 3), 10)) }, f.options.map((o) => h("option", { value: o, selected: o === f.v }, o)))   // Shift-click and Ctrl-click pick several
+          : f.options
+          ? h("select", {}, f.options.map((o) => h("option", { value: o, selected: o === f.v }, PLATFORM_LABEL[o] || o)))
+          : f.suggest
+          ? tagPicker((f.v || "").split(/[\s,]+/), () => {}, f.suggest, f.l)
+          : h("input", { type: f.secret ? "password" : "text", autocomplete: f.secret ? "new-password" : "off", spellcheck: "false", value: f.v || "", disabled: f.disabled, placeholder: f.ph || "" });
         hints[f.k] = h("span", { class: "hint" }, f.hint || "");
         // a field may react when it is left (f.on): it gets the fields, and note(key, text) to say something under a field
         if (f.on) els[f.k].addEventListener("change", () => f.on(els, (k, t) => { const o = fields.find((x) => x.k === k); hints[k].textContent = (o && o.hint ? o.hint : "") + (t ? (o && o.hint ? " " : "") + t : ""); }));
-        return h("label", { class: "f" + (fields.length === 1 ? " wide" : "") }, f.l, els[f.k], f.hint || f.on ? hints[f.k] : null);
+        if (f.check) return h("label", { class: "f check wide" }, els[f.k], f.l);
+        return h("label", { class: "f" + (fields.length === 1 || f.wide ? " wide" : "") }, f.l, els[f.k], f.hint || f.on ? hints[f.k] : null);
       }));
       for (const f of fields) if (f.on && f.initOn) f.on(els, () => {});
       const err = h("div", { "aria-live": "polite" });
       const submit = (e) => {
         e.preventDefault();
         const vals = {};
-        for (const f of fields) vals[f.k] = els[f.k].value.trim();
+        for (const f of fields) vals[f.k] = f.check ? (els[f.k].checked ? "1" : "") : f.multi ? [...els[f.k].selectedOptions].map((o) => o.value).join("\n") : els[f.k].value.trim();
         const m = onOk(vals);
         if (m) { errorBox(err, m); return; }
-        closeEditor(); commit();
+        closeEditor();
+        if (!noSave) commit();
       };
       openDialog(title, h("form", { onsubmit: submit }, grid, err,
         h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "submit" }, okLabel || "OK"),
@@ -1374,124 +1356,6 @@
       window.addEventListener("blur", closeMenu);
       window.addEventListener("resize", closeMenu);
     }
-    // ── a server's statistics (right-click ▸ Statistics…; CLI: --server-stats) ──
-    const niceMaxV = (v, floor) => {
-      if (v <= floor) return floor;
-      const p = Math.pow(10, Math.floor(Math.log10(v)));
-      for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
-      return 10 * p;
-    };
-    const stampV = (sec, step, long) => {
-      const d = new Date(sec * 1000);
-      const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-      return step >= 3600 || long ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm : hm;
-    };
-    function tsChart(title, d, series, o) {
-      // the last bucket is still filling (it holds only part of a step), so it is left out: plotted, it would be a drop to nearly nothing
-      const n = series[0].values.length - (partialLast(d, series[0].values.length) ? 1 : 0);
-      series = series.map((s) => ({ ...s, values: s.values.slice(0, n) }));
-      const peak = Math.max(0, ...series.flatMap((s) => s.values));
-      const max = o.fixedMax || niceMaxV(peak, o.floor || 10);
-      const W = 620, H = 230, L = axisMargin([0, 1, 2, 3, 4].map((g) => o.axis((max * g) / 4)), 62), R = 12, T = 12, B = 28, pw = W - L - R, ph = H - T - B;
-      const x = (i) => L + (n <= 1 ? pw / 2 : (pw * i) / (n - 1));
-      const y = (v) => T + ph - (ph * Math.min(v, max)) / max;
-      const svg = sv("svg", { class: "qchart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title + " over time" });
-      for (let g = 0; g <= 4; g++) {
-        const v = (max * g) / 4;
-        svg.append(sv("line", { class: "qgrid", x1: L, x2: W - R, y1: y(v), y2: y(v) }), sv("text", { class: "qax", x: L - 6, y: y(v) + 4, "text-anchor": "end" }, o.axis(v)));
-      }
-      const ticks = Math.min(8, n);
-      const long = d.step >= 600 && d.to - d.from > 20 * 3600;
-      for (let k = 0; k < ticks; k++) {
-        const i = ticks === 1 ? 0 : Math.round((k * (n - 1)) / (ticks - 1));
-        svg.append(sv("text", { class: "qax", x: x(i), y: H - 8, "text-anchor": k === 0 ? "start" : k === ticks - 1 ? "end" : "middle" }, stampV(d.start + i * d.step, d.step, long)));
-      }
-      for (const s of series) {
-        let path = "", pen = false;
-        s.values.forEach((v, i) => { if (v < 0) { pen = false; return; } path += (pen ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1); pen = true; });
-        if (path) svg.append(sv("path", { class: "qline " + s.cls, d: path }));
-        // a minute with data between two without has no line to show it: a dot, so it is not mistaken for nothing
-        s.values.forEach((v, i) => { if (v >= 0 && !(i > 0 && s.values[i - 1] >= 0) && !(i < n - 1 && s.values[i + 1] >= 0)) svg.append(sv("circle", { class: "qpt " + s.cls, r: 2.5, cx: x(i).toFixed(1), cy: y(v).toFixed(1) })); });
-      }
-      const cross = sv("line", { class: "qcross hidden", y1: T, y2: T + ph });
-      const dots = series.map((s) => sv("circle", { class: "qdot hidden " + s.cls, r: 4, cx: 0, cy: 0 }));
-      const tip = sv("g", { class: "qtip hidden" });
-      const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 250, height: 20 + 18 * (series.length + 1) });
-      const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
-      const tipRows = series.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
-      tip.append(tipBg, tipHead, ...tipRows);
-      const hit = sv("rect", { class: "qhit", x: L, y: T, width: pw, height: ph,
-        onmousemove: (e) => {
-          const r = svg.getBoundingClientRect();
-          const px = ((e.clientX - r.left) / r.width) * W;
-          const i = Math.max(0, Math.min(n - 1, Math.round(((px - L) / pw) * (n - 1))));
-          cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.classList.remove("hidden");
-          series.forEach((s, k) => { const v = s.values[i]; dots[k].classList.toggle("hidden", v < 0); dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", v < 0 ? 0 : y(v)); });
-          tipHead.textContent = new Date((d.start + i * d.step) * 1000).toLocaleString();
-          series.forEach((s, k) => { tipRows[k].lastChild.textContent = s.label + ": " + (s.values[i] < 0 ? "no data" : s.text(i)); });
-          const tx = x(i) > W / 2 ? x(i) - 260 : x(i) + 12;
-          tip.setAttribute("transform", `translate(${tx} ${T + 6})`); tip.classList.remove("hidden");
-        },
-        onmouseleave: () => { cross.classList.add("hidden"); tip.classList.add("hidden"); dots.forEach((c) => c.classList.add("hidden")); } });
-      svg.append(cross, ...dots, hit, tip);
-      const legend = series.length > 1 || o.legend ? h("div", { class: "qlegend" }, series.map((s) => h("span", { class: "qchip " + s.cls }, h("span", { class: "sw" }), s.label))) : null;
-      return h("div", { class: "tsc" }, h("h3", {}, tc(title)), legend, svg);
-    }
-
-    // The statistics dialog for a server or a gateway.  It is built once; choosing another
-    // range only swaps the numbers and charts in place (the old charts stay until the new ones arrive), so the box
-    // never shrinks and grows again.
-    const pctAxis = (v) => (Number.isInteger(v) ? v : v.toFixed(1)) + "%";
-    const msAxis = (v) => (Number.isInteger(v) ? v : v.toFixed(1)) + " ms";
-    async function statsDialog(spec, rng) {   // spec: { key, title, kind }
-      rng = rng || "1h";
-      let d = dlg && dlg.dataset.stats === spec.key ? dlg : null;
-      if (!d) {
-        const sum = h("p", { class: "hint" }, "Loading…");
-        const body = h("div", {});
-        const tabs = h("div", { class: "toolbar" }, h("span", { class: "segs", role: "group", "aria-label": "Time range" }, [["1h", "Last hour"], ["1d", "Last day"], ["7d", "Last week"]].map(([k, l]) =>
-          h("button", { class: "seg", type: "button", "data-r": k, onclick: () => statsDialog(spec, k) }, l))));
-        const nodes = h("span", { class: "hint stats-nodes" });   // a gateway's graphs: which nodes' history this is (filled in below)
-        tabs.append(nodes);
-        d = openDialog("Statistics — " + spec.title, tabs, sum, body);
-        d.prepend(h("button", { class: "dlg-x", type: "button", "aria-label": "Close", title: "Close", onclick: closeEditor }, "✕"));   // first, so it floats to the top-right corner and sticks there
-        d.dataset.stats = spec.key;
-        d.style.width = "min(46rem, calc(100vw - 2rem))";   // CSSOM, allowed by the CSP
-        d.sum = sum; d.body = body; d.nodes = nodes;
-      }
-      for (const b of d.querySelectorAll(".segs .seg")) b.setAttribute("aria-pressed", b.dataset.r === rng ? "true" : "false");
-      d.rng = rng;
-      const sum = d.sum, body = d.body;
-      try {
-        const r = (await api("GET", "/api/serverstats?addr=" + encodeURIComponent(spec.key) + "&from=" + rng)).data;
-        if (dlg !== d || d.rng !== rng) return;   // closed, or another range was chosen meanwhile
-        if (!r.known) { clear(body); sum.hidden = false; sum.textContent = "Nothing recorded for this " + spec.kind + " yet (the daemon keeps 7 days, and only once it has something to count)."; return; }
-        d.nodes.textContent = r.kind !== "gateway" ? (r.via_cluster ? "Counted on " + r.nodes + (r.nodes === 1 ? " other node" : " other nodes") + " (this node does not probe it)" : "") : r.nodes_off > 0 ? "Nodes counted: " + r.nodes + " of " + (r.nodes + r.nodes_off) + " (" + r.nodes_off + " not answering)" : r.nodes > 1 ? "All " + r.nodes + " nodes counted together" : "";
-        const f1 = (v) => (v < 0 ? "no data" : v.toFixed(2));
-        const dd = { start: r.start, step: r.step, from: r.from, to: r.to };
-        const lat = (name) => tsChart(name, dd, [
-          { label: "Average", cls: "t1", values: r.latency, text: (i) => f1(r.latency[i]) + " ms" },
-          { label: "Worst", cls: "t3", values: r.latency_max, text: (i) => f1(r.latency_max[i]) + " ms" }], { floor: 1, axis: msAxis, legend: true });
-        let charts;
-        if (r.kind === "gateway") {
-          const goff = (r.offset_ms || []).map((v) => (v == null ? -1 : Math.abs(v)));
-          charts = [
-            tsChart("Availability", dd, [{ label: "Available", cls: "t3", values: r.avail, text: (i) => r.avail[i].toFixed(2) + "% of the time" }], { fixedMax: 100, axis: pctAxis }),
-            tsChart("Clock offset", dd, [{ label: "Offset", cls: "t3", values: goff, text: (i) => (r.offset_ms[i] > 0 ? "+" : "") + Number(r.offset_ms[i]).toFixed(3) + " ms" }], { floor: 1, axis: msAxis }),
-            lat("Root delay")];
-        } else {
-          const off = (r.offset_ms || []).map((v) => (v == null ? -1 : Math.abs(v)));
-          charts = [lat("Round trip"),
-            tsChart("Clock offset", dd, [{ label: "Offset", cls: "t3", values: off, text: (i) => (r.offset_ms[i] > 0 ? "+" : "") + Number(r.offset_ms[i]).toFixed(2) + " ms" }], { floor: 1, axis: msAxis }),
-            tsChart("Failed probes", dd, [{ label: "Failed probes", cls: "t6", values: r.loss, text: (i) => r.loss[i].toFixed(2) + "% of the probes" }], { floor: 1, axis: pctAxis })];
-        }
-        sum.hidden = true;   // the graphs say it all; the line is only for "loading", "nothing recorded" and errors
-        clear(body).append(...charts);
-      } catch (e) { if (dlg === d) { sum.hidden = false; sum.textContent = "Could not load the statistics: " + (e.message || e); } }
-    }
-    const serverStats = (g, addr) => statsDialog({ key: addr, title: srvTitle(g, addr), kind: "server" });
-    const gatewayStats = (g) => statsDialog({ key: "gw:" + g.group_id, title: "gateway " + gwLabel(g), kind: "gateway" });
-
     // "Pause ▸ This node / All nodes" and "Resume ▸ …": a menu that opens beside this one while the pointer is on the item.
     // `scopeOn(scope)` says whether the thing is paused in that scope; only the scopes that can still change are offered.
     const pauseItems = (noun, scopeOn, act, whyNot) => {
@@ -1502,75 +1366,195 @@
       else items.push(["Pause" + (noun ? " " + noun : ""), null, "", subs(true), whyNot || ""]);
       return items;
     };
-    // Copy a server (right-click it) and paste it on a gateway (right-click the circle or the empty drawing), this one or another.  An address
-    // that is not on that gateway yet is added as it is, with its name; one that is already there needs its own, so the Add NTP server form
-    // opens.  A pause is not copied.
-    let srvClip = null;
-    const serverClip = (g, addr) => ({ addr, label: srvName(g, addr) });
-    const copyServer = (g, addr) => { srvClip = serverClip(g, addr); };
-    const pasteServerWhy = () => (srvClip ? "" : "Nothing copied yet: right-click a server ▸ Copy ▸ Server");
-    const pushServer = (g, c) => {
-      g.ntp.servers.push(c.addr);
-      if (c.label) { g.ntp.server_names = g.ntp.server_names || {}; g.ntp.server_names[c.addr] = c.label; }
+    // ── the gateway's devices (the squares under the circle) ──
+    // The inventory and the logins are the cluster's (settings.devices, settings.device_credentials); a gateway lists the devices it is
+    // for by name (its devices list).  The same device may be on several gateways: copy it on one, paste it on another.
+    const inventory = () => (cv.cfg.settings = cv.cfg.settings || {}, cv.cfg.settings.devices = cv.cfg.settings.devices || []);
+    const logins = () => (cv.cfg.settings.device_credentials = cv.cfg.settings.device_credentials || []);
+    const devByName = (n) => (cv.cfg.settings && cv.cfg.settings.devices || []).find((d) => d.name === n) || null;
+    const devTip = (d, info) => {
+      const h = (info && info.health) || {}, f = h.facts || {};
+      return [d.name + " — " + platformName(d.platform) + ", " + d.address + (d.port ? ":" + d.port : ""), info ? info.detail : "Not checked yet",
+        f.model || f.os_version ? [f.vendor, f.model, f.os_version].filter(Boolean).join(" ") : "", f.serial ? "Serial " + f.serial : "",
+        f.uptime_s ? "Up " + spanText(f.uptime_s) : "", h.by ? "Checked by " + h.by : "", h.last_ok ? "Last answered " + spanText(Date.now() / 1000 - h.last_ok) + " ago" : "",
+        (d.tags || []).length ? "Tags: " + d.tags.join(" ") : "", d.disabled ? "Disabled: never contacted" : devPausedHere(d.name) ? "Paused on this node: not contacted from here" : ""].filter(Boolean).join("\n");
     };
-    function pasteServer(g) {
-      if (pasteServerWhy()) return;
-      const c = srvClip;
-      ensureNTP(g);
-      if (g.ntp.servers.includes(c.addr)) { serverForm(g, null, true); return; }
-      quick(() => { pushServer(g, c); cv.sel = { kind: "srv", addr: c.addr }; });
+    // Entra: sign in with a browser (the device code flow); the daemon stores the result in the device's login, so the page loads the config again
+    function signinDialog(name) {
+      const link = h("a", { class: "btn", href: "#", target: "_blank", rel: "noopener noreferrer", hidden: true }, "Open sign-in page");
+      textPopup("Sign in with Microsoft — " + name, async (put, live) => {
+        link.hidden = true;
+        const s = (await api("POST", "/api/devices/signin", { device: name })).data;
+        link.href = s.verification_uri; link.hidden = false;
+        put("Open " + s.verification_uri.replace(/^https:\/\//, "") + " and enter the code\n\n    " + s.user_code + "\n\nWaiting for the sign-in…");
+        const end = Date.now() + s.expires_in * 1000;
+        while (live() && Date.now() < end) {
+          await new Promise((r) => setTimeout(r, Math.max(1, s.interval) * 1000));
+          if (!live()) return;
+          const p = (await api("POST", "/api/devices/signin/poll", { id: s.id })).data;
+          if (p.state === "done") { link.hidden = true; await load(); refresh(); put("Signed in. " + name + " now asks Microsoft Entra as that account."); return; }
+        }
+        if (live()) put("The code expired. Run again.");
+      }, link);
     }
-    // Copy ▸ All servers (every server of the gateway) and Paste ▸ All servers on another gateway: the ones it does not have yet are added
-    // with their names (the ones it has are left alone, so no form opens); a pause is not copied.
-    let srvsClip = null;
-    const copyAllServers = (g) => { srvsClip = { gid: g.group_id, list: ((g.ntp && g.ntp.servers) || []).map((a) => serverClip(g, a)) }; };
-    const serversToAdd = (g) => (srvsClip ? srvsClip.list.filter((c) => !((g.ntp && g.ntp.servers) || []).includes(c.addr)) : []);
-    const pasteServersWhy = (g) => {
-      if (!srvsClip) return "No servers copied yet: right-click a server ▸ Copy ▸ All servers";
-      if (!serversToAdd(g).length) return srvsClip.gid === g.group_id ? "Those are on this gateway: paste them on another gateway" : "This gateway already has all of them";
-      return "";
+    // Observium, IP Fabric, Centreon: add the devices the server knows to the inventory, disabled and with no login (the daemon saves it, so the page loads the config again)
+    const importText = (r) => (r.dry_run ? "Would import " : "Imported ") + r.added.length + " devices (disabled, no login: give each a login, then enable it)\n\n" +
+      r.added.map((d) => "  " + d.name.padEnd(24) + d.platform.padEnd(9) + d.address).join("\n") +
+      (r.skipped.length ? "\n\nSkipped " + r.skipped.length + ":\n" + r.skipped.map((s) => "  " + s.name.padEnd(30) + s.reason).join("\n") : "");
+    function importPreview(name) {
+      textPopup("Import devices from " + name, async (put) => { put(importText((await api("POST", "/api/devices/import", { device: name, dry_run: true })).data)); });
+    }
+    function importDevices(name) {
+      confirmDialog("Import devices from " + name + "?", "Every device the server knows that has a driver here and is not in the inventory yet is added, disabled and with no login. Nothing is contacted until you give it a login and enable it. Use Preview to see the list first.", "Import", () => {
+        textPopup("Import devices from " + name, async (put) => { const r = (await api("POST", "/api/devices/import", { device: name })).data; put(importText(r)); await load(); refresh(); });
+      }, "btn");
+    }
+    // a user's most recently used device, or a host and its last user: Entra and the firewall's logs say which machine and
+    // who, the machine is followed on the Meraki network for the last hours, and the firewall's logs for its addresses are added.
+    // key is the parameter that names the device the form was opened on (entra, or panorama for a Panorama or a firewall)
+    function troubleForm(name, key) {
+      form("Troubleshoot — " + name, [{ k: "user", l: "User", v: state.lastUser || "", ph: "joe.smith@contoso.com" }, { k: "host", l: "Host", v: "", ph: "PC-123" }, { k: "hours", l: "Hours back", v: "6", ph: "6" }], (v) => {
+        if (!v.user === !v.host) return "Give a user or a host, one of the two.";
+        if (!/^\d{1,3}$/.test(v.hours || "6") || Number(v.hours || 6) < 1 || Number(v.hours || 6) > 168) return "Hours back: 1 to 168.";
+        if (v.user) state.lastUser = v.user;
+        setTimeout(() => textPopup("Troubleshoot " + (v.user || v.host), async (put) => {
+          const q = new URLSearchParams({ ...(v.user ? { user: v.user } : { host: v.host }), hours: v.hours || "6", [key]: name });
+          put(plainText((await api("GET", "/api/devices/troubleshoot?" + q.toString())).data));
+        }), 0);
+        return "";
+      }, "Run", true);
+    }
+    // Copy a device (right-click it), or every device of a gateway (right-click the gateway), and paste them on another gateway (right-click the circle, or the empty drawing)
+    let devClip = [];
+    const clipNew = (g) => devClip.filter((n) => devByName(n) && !(g.devices || []).includes(n));
+    const pasteWhy = (g) => (!devClip.length ? "Nothing copied yet: right-click a device ▸ Copy, or a gateway ▸ Copy ▸ All devices" : !devClip.some((n) => devByName(n)) ? "The copied devices are no longer in the inventory" : !clipNew(g).length ? (devClip.length > 1 ? "Every copied device is already on this gateway" : devClip[0] + " is already on this gateway") : "");
+    const pasteDevice = (g) => quick(() => { const add = clipNew(g); g.devices = (g.devices || []).concat(add); cv.sel = { kind: "dev", addr: add[add.length - 1] }; });
+    const pasteItem = (g) => [devClip.length > 1 ? "Paste " + devClip.length + " devices" : "Paste device" + (devClip.length ? " " + devClip[0] : ""), () => pasteDevice(g), "", null, pasteWhy(g)];
+    const devItems = (g, name) => {
+      const d = devByName(name);
+      return [
+        ["Network tools", null, "", toolItems(d.address, name).filter((x) => x !== "-")],
+        ...(["observium", "ipfabric", "centreon", "panorama", "pdm", "afc", "unimus", "device42", "proxmox", "vcenter"].includes(d.platform) && !(d.options && d.options.device) ? [["Import", null, "", [["Devices", () => importDevices(name)], ["Preview", () => importPreview(name)]]]] : []),
+        ...(d.platform === "entra" ? [["Troubleshoot user or host", () => troubleForm(name, "entra")], ["Sign in with Microsoft", () => signinDialog(name)]] : []),
+        ...(d.platform === "panorama" || d.platform === "panos" ? [["Troubleshoot user or host", () => troubleForm(name, "panorama")]] : []),
+        "-", ["Edit", () => deviceForm(g, name)], ["Copy", () => { devClip = [name]; }], ["Paste", () => pasteDevice(g), "", null, pasteWhy(g)],
+        ...pauseItems("", (sc) => (sc === "all" ? !!d.disabled : devPausedHere(name)), (sc, p) => pauseDevice(d, sc, p)),
+        "-", ["Delete", delSel, "danger"]];
     };
-    function pasteServers(g) {
-      if (pasteServersWhy(g)) return;
-      const add = serversToAdd(g);
-      ensureNTP(g);
-      quick(() => { for (const c of add) pushServer(g, c); cv.sel = { kind: "srv", addr: add[0].addr }; });
+    // Add a device to the gateway: one already in the inventory, or a new one (with a new login, or one that exists).  Edit changes
+    // the device everywhere it is drawn.
+    const NEW_DEV = "＋ new device", FROM_INV = "Devices from inventory", NEW_LOGIN = "＋ new login";
+    function deviceForm(g, edit) {
+      const d = edit ? devByName(edit) : null;
+      const others = inventory().filter((x) => (x.credential || x.platform === "tools") && !(g.devices || []).includes(x.name)).map((x) => x.name);   // only devices that have a login (the network tools need none)
+      const ls = logins().map((c) => c.name);
+      const show = (els) => {
+        const fresh = !els.pick || els.pick.value === NEW_DEV, newLogin = els.login.value === NEW_LOGIN;
+        for (const k of ["many", "enable"]) if (els[k]) els[k].closest("label").style.display = fresh ? "none" : "";
+        for (const k of ["name", "platform", "address", "port", "opts", "tags", "cert", "login"]) els[k].closest("label").style.display = fresh ? "" : "none";
+        for (const k of ["user", "pass", "token"]) els[k].closest("label").style.display = fresh && newLogin ? "" : "none";
+      };
+      form(edit ? "Edit device " + edit : "Add device", [
+        ...(edit || !others.length ? [] : [{ k: "pick", l: "Add", options: [NEW_DEV, FROM_INV], v: NEW_DEV, on: show, initOn: true },
+          { k: "many", l: "Devices", options: others, multi: true, wide: true, hint: "Shift-click or Ctrl-click to pick several." },
+          { k: "enable", l: "Enable", check: true, v: false }]),
+        { k: "name", l: "Name", v: d ? d.name : "", ph: "core-sw1" },
+        // a cloud service has one API address: choosing it fills the address in (an address typed by hand is left alone)
+        { k: "platform", l: "Platform", options: PLATFORMS, v: d ? d.platform : PLATFORMS[0], initOn: true, on: (els) => {
+          const def = SERVICE_ADDR[els.platform.value] || "", cur = els.address.value.trim();
+          if (!cur || Object.values(SERVICE_ADDR).includes(cur)) els.address.value = def;
+          els.address.placeholder = def || "10.0.0.2";
+          // the port follows the platform only while it is still the default of the platform the form had before (or empty): a port the
+          // device really has (8443 on a switch, say, which is another platform's default) is kept when the form opens
+          const pd = portDef(els.platform.value), pc = els.port.value.trim(), before = els.platform._was || (d ? d.platform : PLATFORMS[0]);
+          if (!pc || pc === portDef(before)) els.port.value = pd;   // a port typed by hand is kept
+          els.platform._was = els.platform.value;
+        } },
+        { k: "address", l: "Address", v: d ? d.address : "", ph: "10.0.0.2" },
+        { k: "port", l: "Port (optional)", v: d && d.port ? String(d.port) : portDef(d ? d.platform : PLATFORMS[0]), ph: "443" },
+        { k: "opts", l: "Options (optional)", v: d ? Object.entries(d.options || {}).map(([a, b]) => a + "=" + b).join(" ") : "", ph: "serial=Q2XX-XXXX-XXXX org=123456" },
+        { k: "tags", l: "Tags (optional)", v: d ? (d.tags || []).join(" ") : "", ph: "site=dc1 role=core", hint: "Type a tag, then a space or Enter.", suggest: () => inventory().flatMap((x) => x.tags || []) },
+        { k: "cert", l: "Certificate", options: ["skip check", "check"], v: d && !d.insecure && d.ca_pem ? "check" : d && !d.insecure ? "check" : "skip check", hint: "Skip: self-signed certificate." },
+        { k: "login", l: "Login", options: [...ls, NEW_LOGIN], v: d ? d.credential : ls.length ? ls[0] : NEW_LOGIN, on: show, initOn: true },
+        { k: "user", l: "User name", v: "", ph: "netdir" },
+        { k: "pass", l: "Password", v: "", secret: true },
+        { k: "token", l: "Token", v: "", secret: true },
+      ], (v) => {
+        if (v.pick === FROM_INV) {
+          const picked = (v.many || "").split("\n").filter(Boolean);
+          if (!picked.length) return "Pick one or more devices."; if (v.enable) for (const n of picked) { const x = devByName(n); if (x) delete x.disabled; }
+          g.devices = (g.devices || []).concat(picked.filter((n) => !(g.devices || []).includes(n))); cv.sel = { kind: "dev", addr: picked[picked.length - 1] }; return null;
+        }
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(v.name)) return "A name is up to 64 letters, digits, '.', '-' or '_'.";
+        if (inventory().some((x) => x.name.toLowerCase() === v.name.toLowerCase() && x !== d)) return "There is a device called " + v.name + " already.";
+        if (!v.address && v.platform === "meraki") v.address = "api.meraki.com";
+        if (!v.address && v.platform === "entra") v.address = "graph.microsoft.com";
+        if (!v.address && v.platform === "tools") v.address = "localhost";
+        if (!v.address || /[\s/:@]/.test(v.address) && !v.address.includes("::") && v.address.split(":").length < 3) return "Give the address or host name, without a port or a scheme.";
+        if (v.port && !(Number(v.port) >= 1 && Number(v.port) <= 65535)) return "The port is 1 to 65535 (default 443).";
+        let cred = v.platform === "tools" ? "" : v.login;   // the tools need no login
+        if (cred === NEW_LOGIN) {
+          if (!v.pass && !v.token && v.platform !== "entra") return "A new login needs a password or a token.";
+          if (!v.pass && !v.token) v.token = "rt:";   // Entra: a login with nothing filled in is signed in with a browser (right-click the device)
+          cred = v.name;
+          for (let i = 2; logins().some((c) => c.name === cred); i++) cred = v.name + "-" + i;
+          logins().push({ name: cred, ...(v.user ? { username: v.user } : {}), ...(v.pass ? { password: v.pass } : {}), ...(v.token ? { token: v.token } : {}) });
+        }
+        const x = { ...(d || {}), name: v.name, platform: v.platform, address: v.address, credential: cred };
+        if (v.port && v.port !== portDef(v.platform)) x.port = Number(v.port); else delete x.port;   // 443 is the default and is not written
+        const opts = {};
+        for (const p of v.opts.split(/[\s,]+/).filter(Boolean)) {
+          const m = /^([a-z_]{1,32})=(\S{1,100})$/.exec(p);
+          if (!m) return "Options are key=value pairs, e.g. serial=Q2XX-XXXX-XXXX.";
+          opts[m[1]] = m[2];
+        }
+        if (Object.keys(opts).length) x.options = opts; else delete x.options;
+        const tags = v.tags.split(/[\s,]+/).filter(Boolean);
+        if (tags.length) x.tags = tags; else delete x.tags;
+        if (v.cert === "skip check") { x.insecure = true; delete x.ca_pem; } else delete x.insecure;
+        if (d) {
+          inventory()[inventory().indexOf(d)] = x;
+          if (x.name !== d.name) for (const gg of groups()) gg.devices = (gg.devices || []).map((n) => (n === d.name ? x.name : n));   // a rename follows the device onto every gateway
+        } else {
+          inventory().push(x);
+          g.devices = (g.devices || []).concat(x.name);
+        }
+        cv.sel = { kind: "dev", addr: x.name };
+        return null;
+      }, edit ? "Save" : "Add device");
     }
-    const pasteItem = (g) => ["Paste", null, "", [["Server", () => pasteServer(g), pasteServerWhy()], ["All servers", () => pasteServers(g), pasteServersWhy(g)], ...(g.piggyback ? [] : pasteAnySubs(g))]];
-    // Add ▸ Anycast address / DNS server (or NTP server) / Node (one item per node that was removed from the gateway) / AnyName address (ntpdir, with AnyName on the host)
-    const addGwItem = (g) => ["Add", null, "", [
-      ...(g.piggyback ? [] : [["Anycast address", () => anycastForm(g)]]),
-      ["NTP server", () => serverForm(g)],
-      ...(!g.piggyback && cv.dnsdir && cv.dnsdir.present ? [["AnyName address", () => dnsdirForm(g)]] : []),
-      ...(g.piggyback ? [] : addNodeSubs(g))]];
-    const gwItems = (g) => g.piggyback ? [["Statistics", () => gatewayStats(g)], addGwItem(g), pasteItem(g),
-      ] : [["Statistics", () => gatewayStats(g)], "-", ["Edit", () => gatewayForm(g)], addGwItem(g), pasteItem(g),
+    // Pause ▸ All nodes is the inventory's switch (a disabled device is contacted by no node); This node keeps the name in this node's own list
+    const devPausedHere = (name) => (cv.cfg.paused_devices_here || []).includes(name);
+    function pauseDevice(d, scope, pause) {
+      quick(() => {
+        if (scope === "all") { if (pause) d.disabled = true; else delete d.disabled; }
+        else toggleIn(cv.cfg, "paused_devices_here", d.name, pause);
+      });
+    }
+    // several devices picked on the map: delete them from the inventory
+    function deleteDevices(names) {
+      const set = new Set(names);
+      confirmDialog("Delete " + names.length + " devices?", "This takes " + names.join(", ") + " out of the inventory and off every gateway they are on. Their logins stay. You can restore them later from History.", "Delete " + names.length + " devices", () => {
+        cv.cfg.settings.devices = inventory().filter((x) => !set.has(x.name));
+        for (const gg of groups()) if (gg.devices) { gg.devices = gg.devices.filter((n) => !set.has(n)); if (!gg.devices.length) delete gg.devices; }
+        cv.sel = null; cv.multi = null; commit();
+      });
+    }
+    // Copy ▸ To all gateways: add the devices of this gateway that another gateway lacks to every other gateway (nothing is removed)
+    const copyPlan = (g) => groups().filter((o) => o !== g).map((o) => [o, (g.devices || []).filter((n) => devByName(n) && !(o.devices || []).includes(n))]).filter(([, add]) => add.length);
+    const copyWhy = (g) => (!(g.devices || []).length ? "This gateway has no devices" : groups().length < 2 ? "There is no other gateway" : !copyPlan(g).length ? "Every other gateway has these devices already" : "");
+    const copyToAll = (g) => {
+      const plan = copyPlan(g);
+      confirmDialog("Copy the devices to every other gateway?", "Adds the devices of " + gwLabel(g) + " that are missing there: " + plan.map(([o, add]) => gwLabel(o) + " " + add.length).join(", ") + ". Nothing is removed from any gateway.", "Copy to " + plan.length + " gateway" + (plan.length > 1 ? "s" : ""), () => quick(() => { for (const [o, add] of plan) o.devices = (o.devices || []).concat(add); }));
+    };
+    const pasteSub = (g) => [[devClip.length > 1 ? devClip.length + " devices" : "Device" + (devClip.length ? " " + devClip[0] : ""), () => pasteDevice(g), pasteWhy(g)], ...pasteAnySubs(g)];
+    const gwItems = (g) => [["Statistics", () => selectTab("mcpusage")],
+      "-",
+      ["Edit", null, "", [["Gateway", () => gatewayForm(g)], ["MCP", () => selectTab("cfg_mcp")]]],
+      ["Add", null, "", [["Device", () => deviceForm(g)], nodeAddItem(g), ["Anycast address", () => anycastForm(g)]]],
+      ["Copy", null, "", [["All devices", () => { devClip = [...(g.devices || [])]; }, (g.devices || []).length ? "" : "This gateway has no devices"], ["To all gateways", () => copyToAll(g), copyWhy(g)]]],
+      ["Paste", null, "", pasteSub(g)],
       ...pauseItems("", (sc) => !!g[sc === "all" ? "paused_all" : "paused"], (sc, p) => pauseGateway(g, sc, p)), "-", ["Delete", delSel, "danger"]];
-    // a server's address as the packet filter and the log search want it: the host, and the port its queries go to
-    const srvTarget = (addr) => {
-      let a = String(addr).trim(), port = 123;
-      const m = /^(tls|https):\/\//i.exec(a);
-      if (m) { port = m[1].toLowerCase() === "tls" ? 853 : 443; a = a.slice(m[0].length); }
-      a = a.replace(/\/.*$/, "");
-      let host = a;
-      const b = /^\[([^\]]+)\](?::(\d+))?$/.exec(a);
-      if (b) { host = b[1]; if (b[2]) port = Number(b[2]); }
-      else if ((a.match(/:/g) || []).length === 1) { const i = a.indexOf(":"); host = a.slice(0, i); port = Number(a.slice(i + 1)) || port; }
-      return { host, port, ip: /^[0-9.]+$/.test(host) || host.includes(":") };
-    };
-    // Monitor ▸ Capture with the filter for this server filled in, ready for Start.  The packet filter works on addresses, so a server
-    // given by host name is looked up first (the node does it; IPv4 preferred); if that fails, only the port is filtered on
-    const goCapture = async (addr) => {
-      const t = srvTarget(addr);
-      let ip = t.ip ? t.host : "";
-      if (!ip) { try { const r = (await api("GET", "/api/hostlookup?lookup=" + encodeURIComponent(t.host))).data; if (r && r.found && r.addr) ip = r.addr; } catch (_) { /* no address: filter on the port */ } }
-      state.prefill.capture = (ip ? "host " + ip + " and " : "") + "port " + t.port;
-      selectTab("capture");
-    };
-    // Monitor ▸ Log searched for this server
-    const goLog = (addr) => { state.prefill.log = srvTarget(addr).host; selectTab("log"); };
-    const srvItems = (g, addr) => [["Statistics", () => serverStats(g, addr)], ["Capture", () => goCapture(addr)], ["Logs", () => goLog(addr)], "-", ["Edit", () => serverForm(g, addr)], ["Copy", null, "", [["Server", () => copyServer(g, addr)], ["All servers", () => copyAllServers(g), ((g.ntp && g.ntp.servers) || []).length > 1 ? "" : "This gateway has only this server"]]],
-      ...pauseItems("", (sc) => ((sc === "all" ? (g.ntp || cv.cfg.ntp || {}).paused_servers : cv.cfg.paused_servers_here) || []).includes(addr), (sc, p) => pauseServer(g, addr, sc, p), lastServerWhy(g, addr)), "-", ["Delete", delSel, "danger"]];
     // Pause / resume announcing one anycast address: on this node only (kept in this node's own settings) or on every node (shared)
     const anyPauseList = (g, scope) => (scope === "all" ? "paused_vips" : "paused_vips_here");
     const anyPaused = (g, addr, scope) => (g[anyPauseList(g, scope)] || []).includes(addr);
@@ -1581,11 +1565,10 @@
         if (!g[k].length) delete g[k];
       });
     }
-    const ddItems = (g, addr) => [["Delete", delSel, "danger"]];
-    // Right-click an anycast address ▸ Copy ▸ Anycast address / All anycast addresses (every one on its gateway), then right-click ANOTHER
-    // gateway ▸ Paste ▸ the same.  They are added to that gateway's own list (a pause stays where it was).  Copy also puts them on the
-    // system clipboard as plain text.  Pasting on the gateway they came from is refused; an address the gateway already has, or that is
-    // any gateway's shared address, is left out.
+    // Anycast addresses: right-click one ▸ Copy ▸ Anycast address / All anycast addresses; right-click another gateway ▸ Paste ▸ the same.
+    // They are added to that gateway's own list (a pause stays where it was).  Copy also puts them on the system clipboard as plain
+    // text.  Pasting on the gateway they came from is refused; an address the gateway already has, or that is any gateway's shared
+    // address, is left out.
     let anyClip = null, anysClip = null;
     const copyAnycast = (g, addr) => { anyClip = { list: [addr], gid: g.group_id }; try { navigator.clipboard.writeText(addr); } catch (_) { /* the page keeps it for Paste */ } };
     const copyAllAnycast = (g) => { anysClip = { list: (g.extra_vips || []).slice(), gid: g.group_id }; try { navigator.clipboard.writeText(anysClip.list.join("\n")); } catch (_) { /* the page keeps it for Paste */ } };
@@ -1700,10 +1683,10 @@
       const left = (statusOf(g).nodes || []).filter((x) => x.node_id && x.node_id !== n.node_id && !(g.excluded_nodes || []).includes(x.node_id)).length;
       if (!left) return;
       confirmDialog("Remove " + (n.self ? "this node" : n.name) + " from gateway " + gwLabel(g) + "?",
-        "It stops serving the gateway — it gives up the address and stops answering NTP — and the other nodes carry on. Other gateways are not affected. Add it back from the same menu.",
+        "It stops serving the gateway — it gives up the address and stops answering on it — and the other nodes carry on. Other gateways are not affected. Add it back from the same menu.",
         "Remove node", () => quick(() => toggleIn(g, "excluded_nodes", n.node_id, true)), "btn primary");
     }
-    const memberItem = (n) => (curGroup() && !curGroup().piggyback && n.node_id ? [["Remove from this gateway…", () => nodeMember(n)]] : []);
+    const memberItem = (n) => (curGroup() && n.node_id ? [["Remove from this gateway", () => nodeMember(n)]] : []);
     // the nodes removed from a gateway, by name (an entry for a node that has left the cluster can still be cleared)
     const removedNodes = (g) => {
       const nodes = statusOf(g).nodes || [];
@@ -1721,7 +1704,7 @@
         ...live.map((r) => [r.label, () => quick(() => toggleIn(g, "excluded_nodes", r.id, false))]),
         ...(gone.length ? [["Forget " + gone.length + " node" + (gone.length > 1 ? "s" : "") + " that left the cluster", () => quick(() => { g.excluded_nodes = (g.excluded_nodes || []).filter((id) => !gone.some((r) => r.id === id)); if (!g.excluded_nodes.length) delete g.excluded_nodes; })]] : [])]];
     };
-    const addNodeSubs = (g) => [nodeSubs(g)];
+    const nodeAddItem = nodeSubs;
     // The last node in service cannot be paused: the item is greyed out, with the reason as its tooltip.  A node that is not answering or
     // is paused is out of service.
     const lastNodeWhy = (n) => {
@@ -1773,28 +1756,32 @@
     }
     const nodeMenu = (n) => (e) => {
       const pause = [n.node_paused ? "Resume" : "Pause", () => pauseNode(n), "", null, n.node_paused ? "" : lastNodeWhy(n)];
-      const noPause = !n.node_paused && ((curGroup() && curGroup().piggyback) || (cv.dnsdir && cv.dnsdir.present));   // AnyName decides where the addresses answer: a pause here would stop nothing
       const rm = memberItem(n).map(([, f]) => ["Remove", f]);
       openMenu(e, n.self || n.reachable
-        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename…", () => renameNode(n)], "-", ...(curGroup() && curGroup().piggyback ? [] : [["Controller", () => makeController(n), "", null, controllerWhy(n)]]), ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), ...(noPause ? [] : [pause]), ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
+        ? [["Statistics", () => (n.self ? selectTab("host") : openNode(n, "host"))], ["Rename", () => renameNode(n)], "-", ["Controller", () => makeController(n), "", null, controllerWhy(n)], ["Primary", () => makePrimary(n), "", null, n.node_paused ? "Paused: resume it first" : n.role === "primary" ? "Already the primary" : ""], "-", ...(n.self ? [] : [["Open", () => openNode(n)]]), pause, ["Restart", () => powerNode(n, "restart")], "-", ["Shut down", () => powerNode(n, "shutdown")], ...rm]
         : [["Cluster page", () => selectTab("cluster")], ...rm]);
     };
     // right-click on a shape: select it, then show what can be done with it
     const rightClick = (kind, addr) => (e) => {
-      cv.sel = { kind, addr }; refresh();
       const g = curGroup();
-      openMenu(e, kind === "gw" ? gwItems(g) : kind === "srv" ? srvItems(g, addr) : kind === "dd" ? ddItems(g, addr) : anyItems(g, addr));
+      if (kind === "dev" && cv.multi && cv.multi.size > 1 && cv.multi.has(addr)) {   // several devices picked: what can be done with all of them
+        const list = [...cv.multi].map(devByName).filter(Boolean);
+        refresh();
+        openMenu(e, [[list.length + " devices", () => {}, "", null, "Shift-click or Ctrl-click picks more"], "-",
+          ["Enable", () => { for (const d of list) delete d.disabled; commit(); }, "", null, list.some((d) => d.disabled) ? "" : "None of them is disabled"],
+          ["Disable", () => { for (const d of list) d.disabled = true; commit(); }, "", null, list.every((d) => d.disabled) ? "All of them are disabled" : ""],
+          ["Copy devices", () => { devClip = list.map((d) => d.name); }], "-",
+          ["Remove from this gateway", delSel], ["Delete devices", () => deleteDevices(list.map((d) => d.name)), "danger"]]);
+        return;
+      }
+      cv.multi = null; cv.sel = { kind, addr }; refresh();
+      openMenu(e, kind === "gw" ? gwItems(g) : kind === "dev" ? devItems(g, addr) : anyItems(g, addr));
     };
 
-    function nextGroupId() { const used = new Set(groups().map((g) => g.group_id)); for (let i = 100; i < 256; i++) if (!used.has(i)) return i; return 0; }
+    function nextGroupId() { const used = new Set(groups().map((g) => g.group_id)); for (let i = 161; i < 256; i++) if (!used.has(i)) return i; return 0; }
 
-    // the gateway's own load-balancing values only show while "own values" is chosen
-    function showLB(els) {
-      const own = els.lbmode.value === LB_OWN;
-      for (const k of ["lb_stratum", "lb_rootdist", "lb_offset", "lb_fail"]) els[k].closest("label").style.display = own ? "" : "none";
-    }
     function renameGateway(g) {
-      form("Rename gateway", [{ k: "name", l: "Name (optional)", v: g.name || "", ph: "e.g. Office NTP" }], (v) => {
+      form("Rename gateway", [{ k: "name", l: "Name (optional)", v: g.name || "", ph: "e.g. Core" }], (v) => {
         if ((v.name || "").length > 40) return "The name can be at most 40 characters.";
         if (v.name.trim()) g.name = v.name.trim(); else delete g.name;
         return null;
@@ -1810,28 +1797,7 @@
         { k: "more4", l: "More IPv4 addresses", v: g ? (g.more_vip4 || []).join(", ") : "", ph: "optional, same subnet: 10.0.0.2, 10.0.0.3" },
         { k: "more6", l: "More IPv6 addresses", v: g ? (g.more_vip6 || []).join(", ") : "", ph: "optional, same subnet: 2001:db8::2" },
         { k: "iface", l: "Listening interface", v: g ? g.interface : (base ? base.interface : "eth0") },
-        { k: "fb", l: "Fallback NTP servers (optional)", v: fallbackOf(g).join(", "), ph: "e.g. 1.1.1.1, 9.9.9.9" },
-        { k: "lbmode", l: "Health checks", v: lbNow(g).own ? LB_OWN : LB_FOLLOW, options: [LB_FOLLOW, LB_OWN], initOn: true, on: (els) => showLB(els) },
-        { k: "lb_stratum", l: "Highest stratum", v: String(lbNow(g).lb.max_stratum) },
-        { k: "lb_rootdist", l: "Largest root distance (ms)", v: String(lbNow(g).lb.max_root_distance_ms) },
-        { k: "lb_offset", l: "Falseticker offset (ms, 0 = off)", v: String(lbNow(g).lb.max_offset_ms) },
-        { k: "lb_fail", l: "Failures before down", v: String(lbNow(g).lb.fail_threshold) },
       ], (v) => {
-        let lbOwn = null;
-        if (v.lbmode === LB_OWN) {
-          lbOwn = { ...lbShared(), max_stratum: Number(v.lb_stratum), max_root_distance_ms: Number(v.lb_rootdist), max_offset_ms: Number(v.lb_offset), fail_threshold: Number(v.lb_fail) };
-          const intIn = (n, lo, hi) => Number.isInteger(n) && n >= lo && n <= hi;
-          if (!intIn(lbOwn.max_stratum, 1, 15)) return "The highest stratum is a whole number from 1 to 15.";
-          if (!intIn(lbOwn.max_root_distance_ms, 0, 60000)) return "The root distance is a whole number of milliseconds, 0 to 60000.";
-          if (!intIn(lbOwn.max_offset_ms, 0, 3600000)) return "The falseticker offset is a whole number of milliseconds, 0 to 3600000.";
-          if (!intIn(lbOwn.fail_threshold, 1, 1000000)) return "Failures before down is a whole number, at least 1.";
-        }
-        const fb = (v.fb || "").split(/[\s,;]+/).filter(Boolean);
-        if (fb.some((a) => !/^[A-Za-z0-9_.\-:\[\]\/]+$/.test(a))) return "A fallback server needs to be an IP address or host name.";
-        if (new Set(fb).size !== fb.length) return "A fallback server is listed twice.";
-        const own = new Set(((g && g.ntp && g.ntp.servers) || (g ? [] : DEFAULT_SERVERS.map(normAddr))).map(shortAddr));
-        const dup = fb.find((a) => own.has(shortAddr(normAddr(a))) || own.has(a));
-        if (dup) return dup + " is already one of this gateway's servers.";
         if ((v.name || "").length > 40) return "The name can be at most 40 characters.";
         if (!v.vip4 && !v.vip6) return "Give the gateway an IPv4 or IPv6 address, e.g. 10.0.0.1/24.";
         if (v.vip4 && !/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(v.vip4)) return "The IPv4 address needs a prefix length, e.g. 10.0.0.1/24.";
@@ -1850,127 +1816,22 @@
           if (more4.length) g.more_vip4 = more4; else delete g.more_vip4;
           if (more6.length) g.more_vip6 = more6; else delete g.more_vip6;
           if (v.name.trim()) g.name = v.name.trim(); else delete g.name;
-          if (fb.join(",") !== fallbackOf(g).join(",")) { ensureNTP(g); if (fb.length) g.ntp.fallback_servers = fb; else delete g.ntp.fallback_servers; }
-          if (lbOwn) { ensureNTP(g); g.ntp.lb = lbOwn; }
-          else if (g.ntp) { delete g.ntp.lb; Object.assign(g.ntp, LB_DEFAULTS); }   // back to following Settings
           return null;
         }
         const id = Number(v.id);
         if (!(id >= 1 && id <= 255) || groups().some((x) => x.group_id === id)) return "Pick an unused group number between 1 and 255.";
-        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, ntp: { servers: DEFAULT_SERVERS.map(normAddr), ...(fb.length ? { fallback_servers: fb } : {}), ...(lbOwn ? { lb: lbOwn } : {}) } });
+        const gkey = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, "0")).join("");   // a new gateway starts with a random key, as the daemon's own add does
+        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, key: gkey });
         setGid(id); cv.sel = { kind: "gw" };
+        // the first gateway also gets the one MCP key (Configure ▸ MCP shows it)
+        const st = (cv.cfg.settings = cv.cfg.settings || {});
+        if (!(st.mcp_keys || []).length) {
+          const mk = randomKey();
+          st.mcp_keys = [{ name: "default", access: "ro", key: mk, created: Math.floor(Date.now() / 1000) }];
+          mcpBaseURL = vipBase(cv.cfg);
+        }
         return null;
       }, g ? "Save" : "Add gateway");
-    }
-
-    const fallbackOf = (g) => ((g ? (g.ntp || cv.cfg.ntp || {}) : {}).fallback_servers || []);
-
-    // The load-balancing settings a gateway's own pool starts from, so that it follows Settings until it is given its own
-    // (the daemon treats a pool at other values as the gateway's own).
-    const LB_DEFAULTS = { spread: true, spread_band: 20, max_stratum: 15, max_root_distance_ms: 1500, max_offset_ms: 128, fail_threshold: 2, max_attempts: 2, latency_alpha: 0.3 };
-    const LB_FOLLOW = "follow Settings", LB_OWN = "own values";
-    const lbShared = () => { const d = cv.cfg.ntp || {}; return { spread: d.spread !== false, spread_band: d.spread_band, max_stratum: d.max_stratum, max_root_distance_ms: d.max_root_distance_ms, max_offset_ms: d.max_offset_ms, fail_threshold: d.fail_threshold, max_attempts: d.max_attempts, latency_alpha: d.latency_alpha }; };
-    // what a gateway runs with now (the daemon works it out: cv.view) and whether that is its own
-    const lbNow = (g) => {
-      const v = g && (cv.view || []).find((x) => x.group_id === g.group_id);
-      return v && v.lb ? { lb: v.lb, own: !!v.lb_own } : { lb: lbShared(), own: false };
-    };
-
-    function ensureNTP(g) {
-      if (!g.ntp) {
-        const d = cv.cfg.ntp || {};
-        g.ntp = JSON.parse(JSON.stringify(d));
-        delete g.ntp.lb;
-        Object.assign(g.ntp, LB_DEFAULTS);
-      }
-    }
-
-    // Fill in one of the address and the name and the other follows: an address is looked up in reverse (PTR) for its
-    // name, a name for its address (both asked of the node being configured).  Only a field that is empty, or still
-    // holds what a lookup put there, is ever filled; once you type your own name or address it is left alone.
-    const IPISH = /^(\[[0-9A-Fa-f:.]+\](:\d+)?|[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*|\d{1,3}(\.\d{1,3}){3}(:\d+)?)$/;
-    function lookupHooks() {
-      const auto = { addr: "", label: "" };
-      const ask = async (q) => (await api("GET", "/api/hostlookup?lookup=" + encodeURIComponent(q))).data;
-      const canFill = (el, k) => !el.value.trim() || el.value.trim() === auto[k];
-      const hooks = {
-        addr: async (els, note) => {
-          const q = els.addr.value.trim();
-          if (!q) { note("label", ""); if (els.label.value.trim()) await hooks.label(els, note); return; }   // the address was erased: a name that is there gives it back
-          if (!IPISH.test(q) || !canFill(els.label, "label")) { note("label", ""); return; }
-          note("label", "Looking up the name…");
-          try {
-            const r = await ask(q);
-            if (els.addr.value.trim() !== q || !canFill(els.label, "label")) return;
-            if (r.found) { els.label.value = r.name; auto.label = r.name; note("label", "Name found by reverse lookup; change it if you like."); }
-            else {
-              if (els.label.value.trim() === auto.label) { els.label.value = ""; auto.label = ""; }   // the old fill belongs to the old address
-              note("label", r.error + " — type a name if you want one.");
-            }
-          } catch (e) { note("label", "Lookup failed: " + (e.message || e)); }
-        },
-        label: async (els, note) => {
-          const n = els.label.value.trim();
-          if (n === auto.label) return;                       // our own fill, not something typed
-          if (!n) { note("addr", ""); if (els.addr.value.trim()) await hooks.addr(els, note); return; }   // the name was erased: the address that is there gives it back
-          if (!/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*$/.test(n) || IPISH.test(n) || !canFill(els.addr, "addr")) { note("addr", ""); return; }
-          note("addr", "Looking up the address…");
-          try {
-            const r = await ask(n);
-            if (els.label.value.trim() !== n || !canFill(els.addr, "addr")) return;
-            if (r.found) { els.addr.value = r.addr; auto.addr = r.addr; note("addr", "Address found for " + n + "."); }
-            else note("addr", r.error + ".");
-          } catch (e) { note("addr", "Lookup failed: " + (e.message || e)); }
-        },
-      };
-      return hooks;
-    }
-    function serverForm(g, edit, pasted) {   // pasted: a copied server whose address this gateway already has: the copy needs its own
-      const lk = lookupHooks();
-      form(edit ? "Edit NTP server" : pasted ? "Paste server" : "Add NTP server", [
-        { k: "addr", l: "IP address or host name", v: edit ? shortAddr(edit) : "", ph: "10.0.0.123", hint: pasted ? "That server is already on this gateway: give the copy its own address." : "Add :port for a port other than 123.", on: lk.addr },
-        { k: "label", l: "Name (optional)", v: edit ? srvName(g, edit) : "", ph: "e.g. ntp-a", hint: "Shown under the address.", on: lk.label },
-      ], (v) => {
-        if (!v.addr) return "Enter an IP address or host name.";
-        if (!/^[A-Za-z0-9_.\-:\[\]]+$/.test(v.addr)) return "That doesn't look like an IP address or host name.";
-        const nm = (v.label || "").trim();
-        if ([...nm].length > 40) return "The name can be at most 40 characters.";
-        if (/[\u0000-\u001f\u007f]/.test(nm)) return "The name must not contain control characters.";
-        ensureNTP(g);
-        const a = normAddr(v.addr);
-        if (g.ntp.servers.includes(a) && a !== edit) return "That server is already on this gateway.";
-        if (edit) {
-          const i = g.ntp.servers.indexOf(edit);
-          g.ntp.servers[i] = a;
-          if (a !== edit) {
-            if (g.ntp.server_names) delete g.ntp.server_names[edit];
-            if ((g.ntp.paused_servers || []).includes(edit)) g.ntp.paused_servers = g.ntp.paused_servers.map((x) => (x === edit ? a : x));
-          }
-          cv.sel = { kind: "srv", addr: a };
-        } else {
-          g.ntp.servers.push(a);
-          cv.sel = { kind: "srv", addr: a };
-        }
-        if (nm) { g.ntp.server_names = g.ntp.server_names || {}; g.ntp.server_names[a] = nm; }
-        else if (g.ntp.server_names) { delete g.ntp.server_names[a]; if (!Object.keys(g.ntp.server_names).length) delete g.ntp.server_names; }
-        return null;
-      }, edit ? "Save" : "Add server");
-    }
-
-    // answer NTP on one of the anycast addresses the Anyname DNS Director on this host announces (it holds them; we only listen)
-    function dnsdirForm(g) {
-      const have = new Set(groups().flatMap((x) => [...(x.dnsdir_vips || []), ...(x.extra_vips || [])]));
-      const choices = ((cv.dnsdir && cv.dnsdir.offered) || []).filter((a) => !have.has(a));
-      form("Add AnyName address", [
-        choices.length ? { k: "addr", l: "AnyName anycast address", options: choices, v: choices[0], hint: "Answered while held." }
-          : { k: "addr", l: "AnyName anycast address", v: "", disabled: true, hint: "None left." },
-      ], (v) => {
-        if (!v.addr) return "AnyName announces no address that is free.";
-        g.dnsdir_vips = g.dnsdir_vips || [];
-        g.dnsdir_vips.push(v.addr);
-        cv.sel = { kind: "dd", addr: v.addr };
-        return null;
-      }, "Add address");
     }
 
     function anycastForm(g, edit) {
@@ -1996,28 +1857,22 @@
     function delSel() {
       const g = curGroup(), s = cv.sel;
       if (!g || !s) return;
-      const finish = () => { cv.sel = null; closeEditor(); commit(); };
+      const finish = () => { cv.sel = null; cv.multi = null; closeEditor(); commit(); };
       if (s.kind === "gw") {
-        const servers = (g.ntp && g.ntp.servers) || [];
         confirmDialog("Delete gateway " + gwLabel(g) + "?",
-          "This removes its shared address" + (servers.length ? " and its " + servers.length + " NTP server(s)" : "") +
-          " from the configuration. You can restore it later from History.", "Delete gateway", () => {
+          "This removes its shared address from the configuration. You can restore it later from History.", "Delete gateway", () => {
             cv.cfg.groups = groups().filter((x) => x !== g);
             setGid(cv.cfg.groups.length ? cv.cfg.groups[0].group_id : null);
             finish();
           });
-      } else if (s.kind === "srv") {
-        g.ntp.servers = g.ntp.servers.filter((a) => a !== s.addr);
-        if (g.ntp.server_names) { delete g.ntp.server_names[s.addr]; if (!Object.keys(g.ntp.server_names).length) delete g.ntp.server_names; }
-        if (g.ntp.paused_servers) g.ntp.paused_servers = g.ntp.paused_servers.filter((a) => a !== s.addr);
+      } else if (s.kind === "dev") {   // off this gateway only; the device stays in the inventory (Delete device… removes it)
+        const gone = cv.multi && cv.multi.has(s.addr) ? cv.multi : new Set([s.addr]);   // the Delete key takes off every picked device
+        g.devices = (g.devices || []).filter((n) => !gone.has(n));
+        if (!g.devices.length) delete g.devices;
         finish();
       } else if (s.kind === "any") {
         g.extra_vips = (g.extra_vips || []).filter((a) => a !== s.addr);
         if (!g.extra_vips.length) delete g.extra_vips;
-        finish();
-      } else if (s.kind === "dd") {
-        g.dnsdir_vips = (g.dnsdir_vips || []).filter((a) => a !== s.addr);
-        if (!g.dnsdir_vips.length) delete g.dnsdir_vips;
         finish();
       }
     }
@@ -2026,7 +1881,8 @@
     // Every change is saved as soon as it is made.  If the daemon refuses it, the
     // picture goes back to what is saved and the reason is shown.
     function setGid(id) { cv.gid = id; state.topo.gid = id; }
-    const fresh = (cfg) => {
+    const fresh = (cfg, base) => {
+      cv.base = base || cv.base;   // what the daemon says the saved configuration is: a save made from an older one is refused
       cv.orig = JSON.parse(JSON.stringify(cfg));
       if (pending === 0) { cv.cfg = cfg; cv.sel = cv.sel && curGroup() ? cv.sel : null; }
       if (!groups().some((g) => g.group_id === cv.gid)) setGid(groups().length ? groups()[0].group_id : null);
@@ -2034,12 +1890,14 @@
     async function save() {
       const sent = JSON.stringify(groups().map((g) => g.group_id));
       try {
-        const r = await api("PUT", "/api/config", { config: cv.cfg, note: "Topology" });
-        pending--; fresh(r.config);
+        const r = await api("PUT", "/api/config", { config: cv.cfg, note: "Topology", base: cv.base });
+        pending--; fresh(r.config, r.base);
       } catch (ex) {
         pending--;
         if (ex.message === "unauthenticated") return;
-        if (ex.status) { // refused: show what is really saved
+        if (ex.status === 409) { // the saved configuration is newer than this page's copy (an import, another page, another node): take it, nothing was overwritten
+          try { const r = await api("GET", "/api/config"); cv.cfg = r.config; cv.orig = JSON.parse(JSON.stringify(r.config)); cv.base = r.base; cv.sel = null; cv.multi = null; if (!curGroup()) setGid(groups().length ? groups()[0].group_id : null); } catch (_) { /* the next load reads it */ }
+        } else if (ex.status) { // refused: show what is really saved
           if (pending === 0) { cv.cfg = JSON.parse(JSON.stringify(cv.orig)); cv.sel = null; if (!curGroup()) setGid(groups().length ? groups()[0].group_id : null); }
         } else {
           // The connection dropped (a gateway change can briefly reset the network).
@@ -2061,7 +1919,7 @@
 
     async function load() {
       const r = await api("GET", "/api/config");
-      cv.cfg = r.config; cv.orig = JSON.parse(JSON.stringify(r.config));
+      cv.cfg = r.config; cv.orig = JSON.parse(JSON.stringify(r.config)); cv.base = r.base;
       cv.loaded = true;
       cv.gid = state.topo.gid;
       if (!groups().some((g) => g.group_id === cv.gid)) setGid(groups().length ? groups()[0].group_id : null);
@@ -2072,7 +1930,6 @@
       try {
         const r = await api("GET", "/api/canvas");
         cv.view = r.data || [];
-        cv.dnsdir = r.dnsdir || { present: false, offered: [] };
       } catch (ex) { if (ex.message === "unauthenticated") throw ex; }
       // Redrawing replaces every shape, and the browser's tooltip (the shape's <title>) only appears after the
       // pointer has rested on the same element for about a second: a redraw every poll while the pointer is on a
@@ -2094,7 +1951,8 @@
           // right-click on empty canvas: no menu (the shapes and tabs have their own); it only clears the selection
           oncontextmenu: (e) => { e.preventDefault(); cv.sel = null; refresh(); } });
         const legend = legendEl = h("div", { class: "cv-legend muted small hidden" },
-          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused ", h("span", { class: "dot line-spread" }), "used for time");
+          h("span", { class: "dot st-ok" }), "working ", h("span", { class: "dot st-warn" }), "degraded ", h("span", { class: "dot st-bad" }), "down ", h("span", { class: "dot st-idle" }), "not yet known ", h("span", { class: "dot st-paused" }), "paused");
+        state.onTopoFilter = () => { if (cv.loaded) refresh(); };
         main.append(svgHost, legend);
         cv.loaded = false;
         load().then(() => {
@@ -2110,43 +1968,6 @@
   })();
 
   // Gateways  (CLI: --show-gateways, --show-neighbors)
-  // Virtual MACs (Monitor ▸ Gateways ▸ Test): asks this node to check that replies addressed to a virtual MAC reach it, and shows what
-  // it found.  Nothing changes unless the person presses "Use real MAC addresses", which is offered only when the test says they are not delivered.
-  const vmacWords = { delivered: "delivered", "not-delivered": "NOT delivered", inconclusive: "inconclusive" };
-  const vmacLine = (r) => "Virtual MACs: " + (vmacWords[r.verdict] || r.verdict) + " — " + r.detail;
-  function vmacTestPopup(gid, label) {
-    const out = h("div", { class: "vmac-out", "aria-live": "polite" }, h("p", {}, "Testing… this takes a few seconds."));
-    const useReal = h("button", { class: "btn primary", type: "button", hidden: true, onclick: async () => {
-      useReal.disabled = true;
-      try {
-        const r = await api("GET", "/api/config");
-        const g = (r.config.groups || []).find((x) => x.group_id === gid);
-        if (!g) throw new Error("the gateway is not in the saved configuration");
-        g.real_macs = true;
-        await api("PUT", "/api/config", { config: r.config, note: "Use real MAC addresses" });
-        useReal.textContent = "Real MAC addresses are on";
-      } catch (e) { if (e.message !== "unauthenticated") { useReal.disabled = false; useReal.textContent = "Could not save: " + e.message; } }
-    } }, "Use real MAC addresses");
-    const d = h("dialog", { class: "cv-dialog nt-dialog", "aria-label": "Virtual MACs: " + label });
-    const close = () => { try { d.close(); } catch (_) { /* closed */ } d.remove(); };
-    d.addEventListener("close", () => d.remove());
-    d.append(h("h2", {}, "Virtual MACs: " + label), out,
-      h("div", { class: "toolbar vmac-bar" }, useReal, h("button", { class: "btn", type: "button", onclick: close }, "Close")));
-    root.append(d);
-    d.showModal();
-    (async () => {
-      try {
-        const r = await api("POST", "/api/vmactest", { group: gid });
-        const x = (r.data || [])[0];
-        if (!x) throw new Error("no result");
-        // real MAC addresses on: just say so (the daemon's words, capitalised); otherwise the verdict, then a line per address family
-        const lines = x.verdict === "off" ? [x.detail.charAt(0).toUpperCase() + x.detail.slice(1)] : [vmacLine(x), ...(x.families || []).map((f) => f.af + ": " + f.detail)];
-        clear(out).append(...lines.map((t) => h("p", {}, t)));
-        useReal.hidden = x.verdict !== "not-delivered";
-      } catch (e) { if (e.message !== "unauthenticated") clear(out).append(h("p", {}, "The test could not run: " + e.message)); }
-    })();
-  }
-
   VIEWS.gateways = (() => {
     let body;
     return {
@@ -2174,7 +1995,7 @@
               m.preempt ? " " : null, m.preempt ? pill("preempt") : null),
             h("td", { class: "num", title: "average gap between this node's hellos / the largest gap in the last 30 to 60 seconds, counting a silence in progress" }, m.local || !m.hello_avg_ms ? "–" : m.hello_avg_ms + " / " + m.hello_max_ms),
             h("td", { class: "mono" }, m.vmac || "–"),
-            h("td", {}, pill(m.ntp_listening ? "answering" : "not answering", m.ntp_listening ? "ok" : "warn"))));
+            h("td", {}, pill(m.service_up ? "answering" : "not answering", m.service_up ? "ok" : "warn"))));
           out.append(h("div", { class: "card" },
             h("header", { class: "bar" }, h("h2", {}, g.name ? g.name + " · Group " + g.group_id : "Group " + g.group_id),
               h("span", { class: "muted gw-vip" }, "VIP ", h("span", { class: "mono" }, g.vip)),
@@ -2183,7 +2004,7 @@
               g.members.some((m) => m.local && m.real_macs) ? null
                 : h("button", { class: "btn hdr", type: "button", title: "Check that replies addressed to this gateway's virtual MAC reach this node", onclick: () => vmacTestPopup(g.group_id, g.name || "Group " + g.group_id) }, "Test")),
             h("div", { class: "scroll" }, h("table", { class: "tight" },
-              h("thead", {}, h("tr", {}, ["Node name", "Node IP", "Pri", "Slot", "Weight", "Role", "State", "Hello avg / max (ms)", "vMAC", "NTP"].map((t, i) => h("th", { class: [2, 3, 4, 7].includes(i) ? "num" : "" }, t)))),
+              h("thead", {}, h("tr", {}, ["Node name", "Node IP", "Pri", "Slot", "Weight", "Role", "State", "Hello avg / max (ms)", "vMAC", "Service"].map((t, i) => h("th", { class: [2, 3, 4, 7].includes(i) ? "num" : "" }, t)))),
               h("tbody", {}, rows)))));
         }
         morph(body, out);
@@ -2211,122 +2032,260 @@
     };
   })();
 
-  // NTP  (CLI: --show-ntp)
-  VIEWS.ntp = (() => {
-    let body;
-    const stat = (k, v, small) => h("div", { class: "stat" }, h("div", { class: "k" }, k), h("div", { class: "v" + (small ? " small" : "") }, v));
-    const sgn = (v) => (v > 0 ? "+" : "") + Number(v).toFixed(1);
+  // ── network tools of an address, run on the picked node (CLI: --ping, --traceroute, --scan, --host-lookup, --whois) ──
+  const whoisText = (w) => {
+    if (w.kind === "ip") {
+      if (!w.found) return w.domain + " — " + w.note;
+      return [w.domain, w.network && "Network: " + w.network, w.netname && "Name: " + w.netname, w.org && "Organization: " + w.org, w.country && "Country: " + w.country,
+        w.origin && "Origin AS: " + w.origin, "From: " + w.server].filter(Boolean).join("\n");
+    }
+    const addrs = w.name ? [w.name, w.ipv4 && "IPv4: " + w.ipv4, w.ipv6 && "IPv6: " + w.ipv6, !w.ipv4 && !w.ipv6 && "No address found", ""].filter((x) => x !== false && x !== undefined && x !== null && x !== 0).join("\n") + "\n" : "";
+    if (!w.found) return addrs + w.domain + " — " + w.note;
+    return addrs + [w.domain, w.registrar && "Registrar: " + w.registrar, w.registrant && "Registrant: " + w.registrant, w.registered && "Registered: " + w.registered,
+      w.updated && "Updated: " + w.updated, w.expires && "Expires: " + w.expires, (w.name_servers || []).length && "Name servers: " + w.name_servers.join(", "), "From: " + w.server].filter(Boolean).join("\n");
+  };
+  // Scan: an nmap of an address, run on the picked node; a popup with the report when it is done
+  function scanPopup(addr) {
+    textPopup("Scan " + addr, async (put, live) => {
+      let j = (await api("POST", "/api/scan", { client: addr })).data;
+      while (j.state === "running") {
+        await new Promise((r) => setTimeout(r, 3000));
+        if (!live()) return;
+        j = (await api("GET", "/api/scan?client=" + encodeURIComponent(addr))).data;
+      }
+      put(j.text || "nmap printed nothing");
+    });
+  }
+
+  // Virtual MACs: what the test found, in words (Monitor ▸ Gateways ▸ [Test]).
+  const vmacWords = { delivered: "delivered", "not-delivered": "NOT delivered", inconclusive: "inconclusive" };
+  const vmacLine = (r) => "Virtual MACs: " + (vmacWords[r.verdict] || r.verdict) + " — " + r.detail;
+  // Asks this node to check that replies addressed to a virtual MAC reach it, and shows what it found.  Nothing changes unless
+  // the person presses "Use real MAC addresses" (offered only when the test says they are not delivered).
+  function vmacTestPopup(gid, label) {
+    const out = h("div", { class: "vmac-out", "aria-live": "polite" }, h("p", {}, "Testing… this takes a few seconds."));
+    const useReal = h("button", { class: "btn primary", type: "button", hidden: true, onclick: async () => {
+      useReal.disabled = true;
+      try {
+        const r = await api("GET", "/api/config");
+        const g = (r.config.groups || []).find((x) => x.group_id === gid);
+        if (!g) throw new Error("the gateway is not in the saved configuration");
+        g.real_macs = true;
+        await api("PUT", "/api/config", { config: r.config, note: "Use real MAC addresses", base: r.base });
+        useReal.textContent = "Real MAC addresses are on";
+      } catch (e) { if (e.message !== "unauthenticated") { useReal.disabled = false; useReal.textContent = "Could not save: " + e.message; } }
+    } }, "Use real MAC addresses");
+    const d = h("dialog", { class: "cv-dialog nt-dialog", "aria-label": "Virtual MACs: " + label });
+    const close = () => { try { d.close(); } catch (_) { /* closed */ } d.remove(); };
+    d.addEventListener("close", () => d.remove());
+    d.append(h("h2", {}, "Virtual MACs: " + label), out,
+      h("div", { class: "toolbar vmac-bar" }, useReal, h("button", { class: "btn", type: "button", onclick: close }, "Close")));
+    root.append(d);
+    d.showModal();
+    (async () => {
+      try {
+        const r = await api("POST", "/api/vmactest", { group: gid });
+        const x = (r.data || [])[0];
+        if (!x) throw new Error("no result");
+        // real MAC addresses on: just say so (the daemon's words, capitalised); otherwise the verdict, then a line per address family
+        const lines = x.verdict === "off" ? [x.detail.charAt(0).toUpperCase() + x.detail.slice(1)] : [vmacLine(x), ...(x.families || []).map((f) => f.af + ": " + f.detail)];
+        clear(out).append(...lines.map((t) => h("p", {}, t)));
+        useReal.hidden = x.verdict !== "not-delivered";
+      } catch (e) { if (e.message !== "unauthenticated") clear(out).append(h("p", {}, "The test could not run: " + e.message)); }
+    })();
+  }
+
+  // A popup with text in it that a function fills in (and can fill in again: Run again): Whois, Ping, Traceroute.
+  // run(put, live) calls put(text) as often as it likes and returns when done; live() says whether the popup still wants it.
+  function textPopup(title, run, extra) {
+    const out = h("pre", { class: "nt-out", tabindex: "0", "aria-live": "off" }, "…");
+    const again = h("button", { class: "btn", type: "button", disabled: true }, "Run again");
+    const d = h("dialog", { class: "cv-dialog nt-dialog", "aria-label": title });
+    let alive = true, round = 0;
+    const close = () => { alive = false; try { d.close(); } catch (_) { /* closed */ } d.remove(); };
+    d.addEventListener("close", () => { alive = false; d.remove(); });
+    d.append(h("button", { class: "dlg-x", type: "button", "aria-label": "Close", title: "Close", onclick: close }, "✕"), h("h2", {}, title), out,
+      h("div", { class: "toolbar" }, extra || null, again, h("button", { class: "btn", type: "button", onclick: close }, "Close")));
+    root.append(d);
+    d.showModal();
+    const go = async () => {
+      const me = ++round;
+      const live = () => alive && me === round;
+      again.disabled = true;
+      out.textContent = "…";
+      const put = (text) => { if (!live()) return; const end = out.scrollTop + out.clientHeight >= out.scrollHeight - 4; out.textContent = text; if (end) out.scrollTop = out.scrollHeight; };
+      try { await run(put, live); } catch (e) { if (live() && e.message !== "unauthenticated") out.textContent = e.message; }
+      if (live()) again.disabled = false;
+    };
+    again.addEventListener("click", go);
+    go();
+  }
+  // Ping / Traceroute of an address: ping or mtr run on the picked node, shown as it comes in
+  // a traceroute as a table, with the host names or the addresses (the daemon looks the names up as the hops appear, so the box can be ticked at any time)
+  let traceNames = false;
+  try { traceNames = localStorage.getItem("nt_trace_names") === "1"; } catch (_) { /* no storage */ }
+  const traceText = (j, names) => {
+    if (!j.hops || !j.hops.length) return j.text || "";
+    const who = (x) => (names && x.name ? x.name : x.addr) || "???";
+    const w = Math.max(7, ...j.hops.map((x) => who(x).length));
+    const f = (v) => v.toFixed(1).padStart(7);
+    return (j.text || "").split("\n")[0] + "\n" + "".padEnd(w + 4) + "  " + "Loss%".padStart(6) + " " + "Snt".padStart(4) + " " + ["Last", "Avg", "Best", "Wrst"].map((x) => x.padStart(7)).join(" ") + "\n" +
+      j.hops.map((x, i) => String(i + 1).padStart(2) + ". " + who(x).padEnd(w) + "  " + (x.loss.toFixed(1) + "%").padStart(6) + " " + String(x.sent).padStart(4) + " " + [x.last, x.avg, x.best, x.worst].map(f).join(" ")).join("\n") + "\n";
+  };
+  function netTool(kind, name) {
+    let putFn = null, last = null;
+    const box = h("input", { type: "checkbox", checked: traceNames });
+    const show = () => { if (putFn && last) putFn(kind === "trace" ? traceText(last, box.checked) : last.text); };
+    box.addEventListener("change", () => { traceNames = box.checked; try { localStorage.setItem("nt_trace_names", traceNames ? "1" : "0"); } catch (_) { /* no storage */ } show(); });
+    const extra = kind === "trace" ? h("label", { class: "nt-opt", title: "Show the host name of each hop where it has one; untick for the addresses" }, box, " Resolve names") : null;
+    textPopup((kind === "ping" ? "Ping " : "Traceroute ") + name, async (put, live) => {
+      putFn = put;
+      let j = (await api("POST", "/api/nettool", { kind, client: name })).data;
+      for (;;) {
+        last = j;
+        if (j.text) show();
+        if (j.state !== "running") return;
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!live()) return;
+        j = (await api("GET", "/api/nettool?kind=" + kind + "&client=" + encodeURIComponent(name))).data;
+      }
+    }, extra);
+  }
+  // Lookup: what this node's resolver says about an address (its reverse names) or a name (addresses, CNAME, MX, NS, TXT)
+  function lookupPopup(name) {
+    textPopup("Lookup " + name, async (put) => put((await api("GET", "/api/dnslookup/full?lookup=" + encodeURIComponent(name))).data.text));
+  }
+  // Recheck: the device is asked again now, whatever its state (a login or a firewall rule was corrected); Run again asks once more
+  function recheckPopup(name) {
+    const WORDS = { ok: "answering", warn: "refusing", bad: "unreachable", paused: "disabled" };
+    textPopup("Recheck " + name, async (put) => {
+      const hl = (await api("POST", "/api/devices/recheck", { name })).data.health;
+      const word = WORDS[hl.status] || hl.status;
+      put(name + ": " + word + (hl.detail && hl.detail !== word ? "\n" + hl.detail : ""));   // "answering" needs no second line
+      if (state.tab === "devices") VIEWS.devices.refresh().catch(() => {});   // the Monitor page shows it at once
+    });
+  }
+  function whoisPopup(name) {
+    textPopup("Whois " + name, async (put) => put(whoisText((await api("GET", "/api/whois?lookup=" + encodeURIComponent(name))).data)));
+  }
+
+
+  const toolItems = (addr, device) => [["Ping", () => netTool("ping", addr)], ["Traceroute", () => netTool("trace", addr)], ["Scan", () => scanPopup(addr)], "-", ["Lookup", () => lookupPopup(addr)], ["Whois", () => whoisPopup(addr)],
+    ...(device ? ["-", ["Recheck", () => recheckPopup(device)]] : [])];   // device: the inventory name of a device of this gateway (not one below another Network Director)
+
+  // Devices  (MCP: list_devices, device_facts, …; API: /api/devices, /api/devices/query)
+  // The inventory, and a form that asks the devices a target picks for one thing at once.  Every device answers on its own row:
+  // what it said, or why not, and how long it took.  Nothing is polled: a device is asked only when Ask is pressed.
+  VIEWS.devices = (() => {
+    let tiles, inv, bar, list, filter, count, sizeSel, pager, pageIn, pages, first, prev, next, last;
+    let lastAt = 0, page = 0, size = 50, cur = { all: [], below: {}, hl: () => ({}) };
+    const STATE = { ok: ["answering", "ok tiny"], warn: ["refusing", "warn tiny"], bad: ["unreachable", "bad tiny"], paused: ["disabled", "tiny"] };
+    // the table: the devices that hold every word typed in the filter box (any column, the state and the tags too), one page of them
+    function draw() {
+      const { all, below, hl } = cur;
+      bar.classList.toggle("hidden", !all.length);
+      if (!all.length) { clear(list).append(h("div", { class: "empty" }, "No devices yet. Add them under Configure ▸ Devices.")); return; }
+      const flt = parseFilter(filter.value), words = { length: flt.empty ? 0 : 1 };
+      const hay = (x) => [x.name, (STATE[hl(x).status] || ["not checked"])[0], platformName(x.platform), x.address + (x.port ? ":" + x.port : ""), (x.via || []).join(" "), (x.tags || []).join(" "), x.unattached ? "no gateway" : x.disabled ? "disabled" : ""].join(" ").toLowerCase();
+      const vis = words.length ? all.filter((x) => { const t = hay(x); return flt.match((w) => t.includes(w)); }) : all;
+      const n = Math.max(1, Math.ceil(vis.length / size));
+      page = Math.min(Math.max(page, 0), n - 1);
+      const from = page * size, shown = vis.slice(from, from + size);
+      count.textContent = vis.length ? `${from + 1}\u2013${from + shown.length} of ${vis.length}${words.length ? ` (filtered from ${all.length})` : ""}` : (words.length ? `0 of ${all.length}` : "0 rows");
+      pager.hidden = n < 2;
+      pageIn.value = String(page + 1);
+      pageIn.max = String(n);
+      pages.textContent = "of " + n;
+      first.disabled = prev.disabled = page === 0;
+      next.disabled = last.disabled = page >= n - 1;
+      clear(list).append(shown.length ? h("div", { class: "scroll" }, h("table", { class: "tight", onmouseover: cutTip },
+        h("thead", {}, h("tr", {}, ["Device", "State", "Platform", "Address", "Via", "Tags", ""].map((t) => h("th", {}, t)))),
+        h("tbody", {}, shown.map((x) => h("tr", { class: x.disabled ? "muted" : "", tabindex: "0", title: "Right-click for the network tools",
+          oncontextmenu: rowMenu(toolItems(x.address, x.remote ? "" : x.name)) },
+          h("td", { class: "nname" }, x.name), h("td", { title: [hl(x).detail || "not checked yet", hl(x).by ? "Checked by " + hl(x).by : "", below[x.name] ? "Below it: " + below[x.name] : ""].filter(Boolean).join(". ") },
+            pill(...(STATE[hl(x).status] || ["not checked", "tiny"]))),
+          h("td", {}, platformName(x.platform)), h("td", { class: "mono" }, x.address + (x.port ? ":" + x.port : "")),
+          h("td", {}, (x.via || []).join(" \u25b8 ")),
+          h("td", {}, (x.tags || []).map((t) => [pill(t, "info tiny"), " "])), h("td", {}, x.unattached ? pill("no gateway") : x.disabled ? pill("disabled") : ""))))))
+        : h("div", { class: "empty" }, "No devices match the filter."));
+    }
+    async function load() {
+      const d = (await api("GET", "/api/devices")).data;
+      lastAt = Date.now();
+      // the devices below the Network Directors that are devices here come with their own health (Via: the directors between)
+      const all = d.devices.concat((d.remote || []).map((r) => Object.assign({}, r, { remote: true })));
+      const hl = (x) => (x.remote ? { status: x.status, detail: x.detail } : (d.health || {})[x.name] || {});
+      const st = (x) => (x.disabled ? "paused" : hl(x).status || "");
+      const n = (k) => all.filter((x) => st(x) === k).length;
+      const tile = (cls, label, value, sub) => h("div", { class: "qtile " + cls }, h("div", { class: "qv" }, value), h("div", { class: "qs" }, sub || "\u00a0"), h("div", { class: "ql" }, label));
+      const plats = new Set(all.map((x) => x.platform));
+      clear(tiles).append(
+        tile("t1", "Devices", String(all.length), plats.size + (plats.size === 1 ? " platform" : " platforms")),
+        tile("t3", "Answering", String(n("ok")), "asked and answered"),
+        tile("t5", "Refusing", String(n("warn")), "answered with an error"),
+        tile("t6", "Unreachable", String(n("bad")), "no answer"),
+        tile("t2", "Disabled", String(n("paused")), "never contacted"));
+      cur = { all, below: d.remote_errors || {}, hl };
+      draw();   // only the table: the filter box keeps what was typed and the focus
+    }
     return {
-      mount(main) { body = h("div", {}); main.append(body); },
-      async poll() {
-        const r = await api("GET", "/api/ntp");
-        const out = h("div", {});
-        if (!r.ok) { out.append(h("div", { class: "notice bad", role: "alert" }, r.error)); morph(body, out); return; }
-        const d = r.data;
-        const pools = d.pools && d.pools.length ? d.pools : [{ key: 0, groups: [], servers: d.servers }];
-        const c = d.chrony || {}, ss = d.server_stats || {};
-        const cState = !c.running ? "not running" : c.synced ? "synchronised" : "not synchronised";
-        out.append(h("div", { class: "stats" },
-          stat("chrony", d.chrony_roll ? h("span", { class: "pill warn" }, d.chrony_roll) : h("span", { class: "pill " + (c.synced ? "ok" : "bad") }, cState)),
-          stat("Stratum", c.synced ? c.stratum : "–"),
-          stat("System clock offset", c.synced ? sgn(c.offset_ms) + " ms" : "–"),
-          stat("Time source", c.synced ? c.ref || "–" : "–", true),
-          stat("Requests", ss.received == null ? "–" : ss.received),
-          stat("Dropped", ss.dropped == null ? "–" : ss.dropped)));
-        // "group 1 192.168.0.5:123" -> where each gateway answers, shown on its own card
-        const addrsOf = {};
-        for (const l of d.listeners || []) { const m = /^group (\d+) (.+)$/.exec(l); if (m) (addrsOf[m[1]] = addrsOf[m[1]] || []).push(m[2]); }
-        const fills = [];
-        const IN_CHRONY = { "*": ["selected", "ok"], "+": ["combined", "ok"], "-": ["not combined", "info"], "?": ["not reachable", "warn"], "x": ["falseticker", "bad"], "~": ["too variable", "warn"] };
-        // one card per server: its name, address and state on the left, its numbers in a row beside them, the last error under them
-        const cell = (k, v, tip) => h("div", { class: "m", title: tip || null }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
-        const srvCard = (s) => h("div", { class: "srv" },
-          h("div", { class: "who" },
-            h("div", { class: "nm", title: s.name || null }, s.name || "–"),
-            h("div", { class: "mono addr" }, s.addr, s.fallback ? [h("span", { class: "muted small fb-tag", title: "Used only while every other server is down" }, "fallback")] : null,
-              // a server named by host is probed over IPv4 and over IPv6; the one whose numbers count is marked
-              (s.families || []).length > 1 || s.via === "IPv6" ? (s.families || []).map((f) => h("span", { class: "fam-tag " + (!f.ok ? "bad" : f.family === s.via ? "use" : ""),
-                title: f.family + " " + f.addr + ": " + (f.ok ? (f.ewma_ms ? fmtMs(f.ewma_ms) + " ms" : "answers") : f.error || "no answer") + (f.ok && f.family === s.via ? " (the numbers shown are from this family)" : "") }, f.family === "IPv4" ? "v4" : "v6")) : null,
-              // authenticated with NTS or a key: green when it works, red when it does not, grey while chrony has yet to restart with it
-              s.auth ? h("span", { class: "fam-tag " + (s.auth.status === "ok" ? "use" : s.auth.status === "failing" ? "bad" : ""), title: s.auth.detail }, (s.auth.mode === "nts" ? "NTS" : "key") + (s.auth.status === "failing" ? " ✗" : s.auth.status === "pending" ? " …" : "")) : null),
-            h("div", { class: "pills" },
-              s.falseticker ? pill("falseticker", "bad") : s.fallback && s.answering === false ? pill("no answer", "warn") : pill(s.healthy ? "up" : "down", s.healthy ? "ok" : "bad"),
-              s.chrony && IN_CHRONY[s.chrony] ? pill(IN_CHRONY[s.chrony][0], IN_CHRONY[s.chrony][1]) : h("span", { class: "muted small" }, "not in chrony"))),
-          cell("Stratum", s.time ? s.time.stratum : "–", s.time ? "Reference: " + s.time.refid : null),
-          cell("Offset", s.time ? sgn(s.time.offset_ms) + " ms" : "–"),
-          cell("Root dist.", s.time ? fmtMs(s.time.root_distance_ms) + " ms" : "–"),
-          cell("Round trip", s.healthy && s.ewma_ms > 0 ? [h("span", { class: "bar-wrap" }, h("span", { class: "bar-fill" })), fmtMs(s.ewma_ms) + " ms"] : "–"),
-          cell("Last", s.last_ms > 0 ? fmtMs(s.last_ms) + " ms" : "–"),
-          cell("OK / fail", s.successes + " / " + s.failures),
-          s.last_error ? h("div", { class: "err muted small" }, s.last_error) : null);
-        for (const p of pools) {
-          const maxE = Math.max(1, ...p.servers.filter((s) => s.healthy).map((s) => s.ewma_ms));
-          out.append(h("div", { class: "card" },
-            h("header", {}, h("h2", {}, p.key ? "Gateway " + p.key + (p.name ? " · " + p.name : "") : "Shared Servers" + (p.groups.length ? " (Group " + p.groups.join(", ") + ")" : "")),
-              p.using_fallback ? pill("every server is down: using the fallback servers", "warn") : null,
-              (p.groups.length ? p.groups : [p.key]).some((g) => (addrsOf[g] || []).length) ? null : pill("not answering on this node", "warn")),
-            h("div", { class: "srv-list" }, p.servers.map((s) => srvCard(s)))));
-          for (const s of p.servers) if (s.healthy && s.ewma_ms > 0) fills.push([s, maxE]);
-        }
-        morph(body, out);
-        // widths are set via the CSSOM (allowed under the page's CSP)
-        const els = body.querySelectorAll(".bar-fill");
-        fills.forEach(([s, maxE], i) => { els[i].style.width = Math.max(4, (s.ewma_ms / maxE) * 100) + "%"; });
+      mount(main) {
+        page = 0;
+        size = 50;
+        tiles = h("div", { class: "qtiles" });
+        // the filter box and the pager are those of the tables under Configure ▸ Devices
+        filter = h("input", { type: "text", class: "policy-filter", placeholder: "Filter devices", "aria-label": "Filter devices", autocomplete: "off", spellcheck: "false" });
+        count = h("span", { class: "policy-count muted" }, "");
+        sizeSel = h("select", { "aria-label": "Rows per page" }, [25, 50, 100, 250, 500].map((n) => h("option", { value: String(n) }, n + " per page")));
+        sizeSel.value = String(size);
+        const mkBtn = (label, title) => h("button", { type: "button", class: "btn small", title, "aria-label": title }, label);
+        first = mkBtn("\u00ab", "First page"); prev = mkBtn("\u2039", "Previous page"); next = mkBtn("\u203a", "Next page"); last = mkBtn("\u00bb", "Last page");
+        pageIn = h("input", { type: "number", min: "1", class: "policy-page", "aria-label": "Page number" });
+        pages = h("span", { class: "muted" }, "");
+        pager = h("span", { class: "policy-pager" }, first, prev, pageIn, pages, next, last);
+        bar = h("div", { class: "policy-bar" }, filter, count, h("span", { class: "grow" }), pager, sizeSel);
+        filter.addEventListener("input", () => { page = 0; draw(); });
+        filter.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+        sizeSel.addEventListener("change", () => { size = +sizeSel.value || 50; page = 0; draw(); });
+        first.addEventListener("click", () => { page = 0; draw(); });
+        prev.addEventListener("click", () => { page--; draw(); });
+        next.addEventListener("click", () => { page++; draw(); });
+        last.addEventListener("click", () => { page = 1e9; draw(); });
+        pageIn.addEventListener("change", () => { page = (parseInt(pageIn.value, 10) || 1) - 1; draw(); });
+        pageIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); pageIn.blur(); } });
+        list = h("div", {}, "Loading\u2026");
+        inv = h("div", { class: "body" }, bar, list);
+        bar.classList.add("hidden");   // until the devices are known
+        main.append(tiles, h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, "Devices")), inv));
+        load().catch((e) => { if (e.message !== "unauthenticated") clear(list).append(h("p", { class: "bad-text" }, e.message)); });
       },
+      async poll() { if (Date.now() - lastAt >= 10000) await load(); },   // the tiles and the table follow the devices, as the Node page follows the machine
+      refresh: () => load(),   // now, not in 10 s (a recheck just changed a device's state)
     };
   })();
 
-  // ── configuration  (CLI: --show-config, --configure) ──────────────────────
+  // ── configuration  (CLI: --show-config, --configure) ──  // ── configuration  (CLI: --show-config, --configure) ──────────────────────
+  const PORT_DEF = { ad: "636", ios: "161", proxmox: "8006", pbs: "8007", pdm: "8443", junos: "3443", linux: "22", windows: "22", technitium: "53443", dnsdir: "53853", ntpdir: "12380", netdir: "22161", mediaencoder: "8765" };   // the API port of a platform that is not 443
+  const portDef = (platform) => PORT_DEF[platform] || "443";
   const LB = ["roundrobin", "weighted", "hostpinned", "failover"];
   const GROUP_FIELDS = [
     { shared: true, k: "name", l: "Name", t: "text", hint: "Optional label." },
-    { shared: true, k: "group_id", l: "Group ID", t: "int", def: 100, min: 1, max: 255 },
+    { shared: true, k: "group_id", l: "Group ID", t: "int", min: 1, max: 255, def: 1 },
     { k: "interface", l: "Interface", t: "text" },
     { shared: true, k: "vip4", l: "IPv4 VIP/prefix", t: "text", hint: "e.g. 10.0.0.1/24 — empty to disable" },
     { shared: true, k: "vip6", l: "IPv6 VIP/prefix", t: "text", hint: "e.g. 2001:db8::1/64 — empty to disable" },
     { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet, one per row." },
     { shared: true, k: "more_vip6", l: "More IPv6 addresses", t: "rows", rows: "morevip6", wide: true, hint: "Same subnet, one per row." },
-    { k: "priority", l: "Priority", t: "int", def: 100, min: 0, max: 255 },
+    { k: "priority", l: "Priority", t: "int", min: 0, max: 255, def: 100 },
     { shared: true, k: "lb_method", l: "LB method", t: "select", options: LB },
-    { k: "weight", l: "Weight", t: "int", def: 100, min: 0, max: 255 },
-    { shared: true, k: "hello_ms", l: "Hello interval (ms)", t: "int", max: 65535, def: 150, min: 1 },
-    { shared: true, k: "hold_ms", l: "Hold time (ms)", t: "int", max: 65535, def: 750, min: 1 },
-    { shared: true, k: "max_afns", l: "Max forwarders", t: "int", def: 128, min: 1, max: 255 },
+    { k: "weight", l: "Weight", t: "int", min: 0, max: 255, def: 100 },
+    { shared: true, k: "hello_ms", l: "Hello interval (ms)", t: "int", min: 1, max: 65535, def: 150 },
+    { shared: true, k: "hold_ms", l: "Hold time (ms)", t: "int", min: 1, max: 65535, def: 750 },
+    { shared: true, k: "max_afns", l: "Max forwarders", t: "int", min: 1, max: 255, def: 128 },
     { shared: true, k: "key", l: "HMAC shared key", t: "text", weakKey: true },
     { k: "preempt", l: "Preemption", t: "bool" },
     { shared: true, k: "real_macs", l: "Use real MAC addresses (no virtual MACs)", t: "bool" },
     { shared: true, k: "neighbors", l: "Neighbors (unicast mode)", t: "rows", rows: "neighbors", wide: true, hint: "Empty: multicast." },
-  ];
-  const NTP_FIELDS = [
-    { section: "Upstream servers" },
-    { shared: true, k: "servers", l: "Servers", t: "rows", rows: "servers", wide: true, hint: "One per row: IP, IP:port or name." },
-    { shared: true, k: "fallback_servers", l: "Fallback servers", t: "rows", rows: "fallback", wide: true, hint: "Used only while none above is up." },
-    { section: "Health", cols: 3, note: "Failing servers are dropped." },
-    { shared: true, k: "max_stratum", l: "Highest stratum", t: "int", def: 15, min: 1, max: 15 },
-    { shared: true, k: "max_root_distance_ms", l: "Largest root distance (ms)", t: "int", def: 1500, min: 0, max: 60000 },
-    { shared: true, k: "max_rtt_ms", l: "Slowest round trip (ms, 0 = off)", t: "int", def: 500, min: 0, max: 60000 },
-    { shared: true, k: "serve_offset_ms", l: "Serve only within (ms, 0 = off)", t: "int", def: 50, min: 0, max: 3600000 },
-    { shared: true, k: "max_offset_ms", l: "Falseticker offset (ms, 0 = off)", t: "int", def: 128, min: 0, max: 3600000 },
-    { shared: true, k: "fail_threshold", l: "Failures before down", t: "int", def: 2, min: 1 },
-    { section: "Serving" },
-    { shared: true, k: "listen_port", l: "NTP port (UDP, chrony)", t: "int", def: 123, min: 1, max: 65535 },
-    { section: "Client Rate Limiting", note: "Written to chrony." },
-    { shared: true, k: "allowed_clients", l: "Allowed clients", t: "rows", rows: "allowedclients", wide: true, hint: "One per row. Empty: everyone." },
-    { shared: true, k: "blocked_clients", l: "Blocked clients", t: "rows", rows: "blockedclients", wide: true, hint: "One per row. Blocking wins." },
-    { shared: true, k: "client_rate", l: "Requests per second", t: "int", min: 0, max: 10000000, hint: "0 = no limit." },
-    { shared: true, k: "client_burst", l: "Burst (requests at once)", t: "int", min: 0, max: 100000000, hint: "0 = twice the rate, at least 10." },
-    { shared: true, k: "client_action", l: "Over the limit", t: "select", options: ["drop", "kod"] },
-    { section: "Authentication", note: "Keys and NTS. Restarts chrony." },
-    { shared: true, k: "keys", l: "Keys", t: "rows", rows: "keys", wide: true },
-    { shared: true, k: "server_auth", l: "Authenticated servers", t: "rows", rows: "serverauth", wide: true },
-    { shared: true, k: "nts_server", l: "Serve NTS to clients", t: "bool" },
-    { section: "Leap seconds", note: "Written to chrony. Restarts chrony." },
-    { shared: true, k: "leap_tz", l: "Leap second table", t: "text" },
-    { shared: true, k: "leap_mode", l: "Leap second mode", t: "select", options: ["system", "step", "slew", "ignore"] },
-    { shared: true, k: "leap_smear", l: "Smear leap seconds", t: "bool" },
-    { section: "Timing" },
-    { shared: true, k: "probe_interval_ms", l: "Probe interval (ms)", t: "int", def: 16000, min: 1 },
-    { shared: true, k: "probe_timeout_ms", l: "Probe timeout (ms)", t: "int", def: 1000, min: 1 },
   ];
   const SSO_FIELDS = [
     { shared: true, k: "sso_base_url", brk: true, l: "Address of this console", t: "text" },
@@ -2413,15 +2372,15 @@
   }
 
   const WEB_FIELDS = [
-    { k: "listen", l: "Listen address", t: "port", def: "12380", hint: "Port, or address:port." },
+    { k: "listen", l: "Listen address", t: "port", def: "22161", hint: "Port, or address:port." },
     { shared: true, k: "group", l: "Login groups", t: "text", hint: "Separated by commas." },
     { shared: true, k: "read_group", l: "Read-only groups", t: "text", hint: "Same form. Empty: nobody." },
     { k: "pam_service", l: "PAM service", t: "text" },
-    { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", def: 30, min: 1 },
-    { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", max: 1000, def: 3, min: 1 },
-    { shared: true, k: "failed_login_window_minutes", l: "…within this many minutes", t: "int", max: 10080, def: 1, min: 1 },
-    { shared: true, k: "lockout_minutes", l: "Lockout lasts (minutes)", t: "int", max: 10080, def: 15, min: 1 },
-    { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", zeroDef: true, def: 8, min: 0, max: 128 },
+    { k: "session_idle_minutes", l: "Session idle timeout (min)", t: "int", min: 1, def: 30 },
+    { shared: true, k: "max_failed_logins", l: "Failed logins before lockout", t: "int", min: 1, max: 1000, def: 3 },
+    { shared: true, k: "failed_login_window_minutes", l: "…within this many minutes", t: "int", min: 1, max: 10080, def: 1 },
+    { shared: true, k: "lockout_minutes", l: "Lockout lasts (minutes)", t: "int", min: 1, max: 10080, def: 15 },
+    { shared: true, k: "min_password_length", l: "Minimum password length", t: "int", min: 0, max: 128, def: 8, zeroDef: true },
   ];
   const SNMP_FIELDS = [
     { k: "location", l: "Location", t: "text" },
@@ -2433,17 +2392,39 @@
     { shared: true, k: "metrics_acl", l: "Allowed sources", t: "rows", rows: "metricsacl", wide: true },
   ];
   // Configure ▸ Settings ▸ General ▸ Neighbor discovery (lldp.go)
+  // Configure ▸ Settings ▸ General ▸ Topology (settings.topology_squares_above): how many devices a gateway may have before the drawing turns each into a small square
+  const TOPO_FIELDS = [
+    { shared: true, k: "topology_squares_above", l: "Draw devices as small squares above", unit: "devices", t: "int", min: 1, max: 5000, def: 36, hint: "1 to 5000. Hover shows the full box." },
+  ];
   const LLDP_FIELDS = [
     { shared: true, k: "lldp", l: "Run LLDP on every node", t: "bool" },
   ];
+  // Configure ▸ Devices (devices.go): the inventory and the logins, shared by the cluster
+  const DEVICE_FIELDS = [
+    { shared: true, k: "devices", l: "Devices", t: "rows", rows: "devices", wide: true, hint: "Tags: tag:site=dc1." },
+  ];
+  const DEVCHECK_FIELDS = [
+    { shared: true, k: "device_live_check_s", unit: "s", l: "Active checks", t: "int", min: 10, max: 600, def: 30 },
+    { shared: true, k: "device_live_facts_min", unit: "min", l: "Active facts", t: "int", min: 1, max: 60, def: 5 },
+    { shared: true, k: "device_check_s", unit: "s", l: "Idle checks", t: "int", min: 30, max: 3600, def: 180 },
+    { shared: true, k: "device_facts_min", unit: "min", l: "Idle facts", t: "int", min: 5, max: 1440, def: 360 },
+  ];
+  const DEVCRED_FIELDS = [
+    { shared: true, k: "device_credentials", l: "Logins", t: "rows", rows: "devcreds", wide: true, hint: "Password or API token." },
+  ];
   const MCP_FIELDS = [
+    { shared: true, k: "mcp_port", l: "Port", t: "int", min: 1, max: 65535, def: 443 },
+    { shared: true, k: "mcp_max_result_mb", l: "Largest answer (MB)", t: "int", min: 1, max: 8, def: 1 },
+    { shared: true, k: "mcp_log", l: "Log all MCP requests and replies", t: "bool" },
+    { shared: true, k: "mcp_log_mb", unit: "MB", l: "Log size limit", t: "int", min: 1, max: 1000, def: 50 },
+    { shared: true, k: "mcp_log_entry_kb", unit: "KB", l: "Entry size limit", t: "int", min: 1, max: 8192, def: 256 },
     { shared: true, k: "mcp_acl", l: "Allowed sources", t: "rows", rows: "mcpacl", wide: true },
     { shared: true, k: "mcp_keys", l: "Keys", t: "mcpkeys", wide: true },
   ];
   const CLUSTER_FIELDS = [
-    { k: "listen", l: "Binding address", t: "port", def: "12381", hint: "Port, or address:port." },
+    { k: "listen", l: "Binding address", t: "port", def: "22162", hint: "Port, or address:port." },
     { k: "self", l: "Advertised address", t: "text" },
-    { k: "sync_interval_sec", l: "Sync interval (s)", t: "int", def: 5, min: 1, max: 3600 },
+    { k: "sync_interval_sec", l: "Sync interval (s)", t: "int", min: 1, max: 3600, def: 5 },
   ];
   // Configure ▸ Settings ▸ Logs: where this node sends its log (per node, never replicated)
   const SYSLOG_FIELDS = [
@@ -2456,7 +2437,6 @@
     { k: "tls_insecure", l: "Do not check the server's certificate (tls)", t: "bool" },
   ];
   const LOG_FIELDS = [{ k: "log_level", l: "Log level", t: "select", options: ["debug", "info", "warning", "error"] }];
-  const SELF_FIELDS = [{ k: "self_check", l: "Pause this node when its own NTP stops answering", t: "bool" }];
 
   // Shown only when this node is part of a multi-node cluster.
   const sharedTag = (f) => (f.shared && state.clustered
@@ -2468,14 +2448,199 @@
   // not complete (outlined and not saved), empty: text for no rows}.
   const rowClips = {};
   // the short lists (a handful of rows) have no filter box and no paging; the long ones (clients, domains, users) do
-  const SMALL_TABLES = new Set(["ldapservers", "servers", "fallback", "neighbors", "morevip4", "morevip6", "community", "snmpacl", "metricsacl", "mcpacl", "keys", "serverauth"]);
+  const SMALL_TABLES = new Set(["ldapservers", "neighbors", "morevip4", "morevip6", "community", "snmpacl", "metricsacl", "mcpacl"]);
+  // The devices a key or an allowed source may use: a pill for each device name or tag:TAG, and the two special ones, all (no pills) and none.
+  // The choices are the devices of the inventory and their tags; any other name can be typed (a device added later).
+  let devChoices = { names: [], tags: [], gateways: [] };   // gateways: [{id, name}]
+  const gwPillLabel = (x) => { const m = /^gateway:(\d+)$/.exec(x); if (!m) return x; const g = devChoices.gateways.find((y) => String(y.id) === m[1]); return "gateway:" + (g && g.name ? g.name : m[1]); };
+  let devPickSeq = 0;
+  function devicePicker(list, onChange) {
+    let items = (list || []).filter(Boolean);
+    const ENTRY = /^(tag:[^\s,"]{1,80}|gateway:\d{1,9}|[A-Za-z0-9._-]{1,80})$/;
+    const el = h("div", { class: "devpick", role: "group", "aria-label": "Devices" });
+    const dl = h("datalist", { id: "devpick-" + (++devPickSeq) });
+    const input = h("input", { type: "text", list: dl.id, autocomplete: "off", spellcheck: "false", placeholder: "add device or tag", "aria-label": "Add a device or tag",
+      title: "A device name, tag:TAG (every device with the tag, now and later), all or none. Pick from the list or type, then Enter." });
+    function draw() {
+      const have = new Set(items.map((x) => x.toLowerCase()));
+      dl.replaceChildren(...["all", "none", ...devChoices.names, ...devChoices.tags.map((t) => "tag:" + t), ...devChoices.gateways.map((g) => "gateway:" + g.id)].filter((o) => !have.has(o.toLowerCase())).map((o) => h("option", { value: o, label: gwPillLabel(o) })));
+      clear(el).append(...(items.length ? items : ["all"]).map((x) => {
+        const special = !items.length || x === "none";
+        const p = h("span", { class: "pill " + (special ? "special" : x.startsWith("tag:") ? "warn" : x.startsWith("gateway:") ? "ok" : "info"), title: x.startsWith("gateway:") ? "The gateway and every device on it, now and later" : "" }, gwPillLabel(x));
+        if (items.length) p.append(h("button", { type: "button", "aria-label": "Remove " + x, title: "Remove " + x, onclick: () => set(items.filter((y) => y !== x)) }, "\u00d7"));
+        return p;
+      }), input, dl);
+    }
+    function set(next) {
+      items = next;
+      draw();
+      onChange(items);
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      input.focus();
+    }
+    function add() {
+      let v = input.value.trim(), low = v.toLowerCase();
+      if (!v) return;
+      const gn = low.startsWith("gateway:") ? low.slice(8) : low;   // a gateway typed by its name (or by its number)
+      const gw = devChoices.gateways.find((g) => (g.name && g.name.toLowerCase() === gn) || String(g.id) === gn && low.startsWith("gateway:"));
+      if (gw && !devChoices.names.some((n) => n.toLowerCase() === low)) { v = "gateway:" + gw.id; low = v; }
+      if (low === "all") { input.value = ""; return set([]); }
+      if (low === "none") { input.value = ""; return set(["none"]); }
+      if (!ENTRY.test(v)) { input.classList.add("bad"); return; }
+      input.value = "";
+      if (items.some((x) => x.toLowerCase() === low)) return;
+      set([...items.filter((x) => x !== "none"), v]);
+    }
+    input.addEventListener("input", (e) => { input.classList.remove("bad"); if (!e.inputType || e.inputType === "insertReplacementText") add(); });   // a choice from the list
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === ",") { e.preventDefault(); e.stopPropagation(); add(); }
+      else if (e.key === "Backspace" && !input.value && items.length) set(items.slice(0, -1));
+    });
+    input.addEventListener("change", (e) => { e.stopPropagation(); add(); });
+    draw();
+    return el;
+  }
+
+  // A box of tags as pills: type a tag, then a space, a comma or Enter to make it a pill; the x on a pill removes it; Backspace in the empty box takes the last one back.
+  // The tags already in use are offered while typing (tagsNow()).  `.value` is the tags separated by spaces (what the daemon's lists are saved from).
+  function tagPicker(list, onChange, tagsNow, label) {
+    let items = [...new Set((list || []).filter(Boolean))];
+    const el = h("div", { class: "devpick tagpick", role: "group", "aria-label": label || "Tags" });
+    const input = h("input", { type: "text", autocomplete: "off", spellcheck: "false", "aria-label": "Add a tag", title: "Type a tag such as site=dc1, then a space or Enter. Tags in use are offered." });
+    tagSuggest(input, () => (tagsNow ? tagsNow() : []).filter((t) => !items.includes(t)));
+    function draw() {
+      clear(el).append(...items.map((x) => h("span", { class: "pill info" }, x, h("button", { type: "button", "aria-label": "Remove " + x, title: "Remove " + x, onclick: () => set(items.filter((y) => y !== x), true) }, "\u00d7"))), input);
+      input.placeholder = items.length ? "" : "add tag";
+    }
+    function set(next, focus) {
+      items = next;
+      draw();
+      onChange(items);
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      if (focus) input.focus();
+    }
+    function add(focus) {
+      const w = input.value.split(/[\s,]+/).filter(Boolean);
+      input.value = "";
+      if (!w.length) return false;
+      const next = [...items];
+      for (const x of w) if (!next.includes(x)) next.push(x);
+      set(next, focus);
+      return true;
+    }
+    input.addEventListener("input", () => { if (/[\s,]/.test(input.value)) add(true); });   // a space or a comma, a paste, or a choice from the list
+    input.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented) return;
+      if (e.key === "Enter" && input.value.trim()) { e.preventDefault(); e.stopPropagation(); add(true); }
+      else if (e.key === "Backspace" && !input.value && items.length) set(items.slice(0, -1), true);
+    });
+    input.addEventListener("change", (e) => { e.stopPropagation(); add(false); });
+    Object.defineProperty(el, "value", { get: () => items.concat(input.value.split(/[\s,]+/).filter(Boolean)).join(" "), configurable: true });
+    draw();
+    return el;
+  }
+
+  // A table cell whose text is cut by its box (an ellipsis) shows the whole text as a tooltip when the pointer reaches it; a cell with a tooltip of its own keeps it.
+  function cutTip(e) {
+    const td = e.target.closest && e.target.closest("td");
+    if (td && !td.title && td.scrollWidth > td.clientWidth) td.title = td.textContent.trim();
+  }
+
+  // A field of a table whose text does not fit its box shows the whole text as a tooltip.  It is checked when the pointer arrives, the box gets
+  // the focus or its text changes, so a box that is wide enough has none.  A secret is never put in a tooltip.
+  const tipCtx = document.createElement("canvas").getContext("2d");
+  function tipWhenCut(el, text) {
+    const set = () => {
+      const t = text();
+      let cut = false;
+      if (t && el.tagName === "SELECT") {   // a select's text is not scrollable: measure it against the room inside the box (less the arrow)
+        const cs = getComputedStyle(el);
+        tipCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        cut = tipCtx.measureText(t).width > el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+      } else if (t) cut = el.scrollWidth > el.clientWidth;
+      if (cut) el.title = t; else el.removeAttribute("title");
+    };
+    for (const ev of ["mouseenter", "focus", "input", "change"]) el.addEventListener(ev, set);
+  }
+
+  // Configure ▸ Devices ▸ Tags: one row to each tag in the Tags column of the devices table, built the same way as the other tables
+  // (filter, pages, right-click).  Changing a tag's text renames it on every device that has it; Remove takes it off every device.
+  // devTable() is the devices table, col its Tags column, showDevices() brings its tab forward.
+  function tagTable(devTable, col, showDevices) {
+    let page = 0, size = 50;
+    const tbody = h("tbody", {});
+    const tbl = h("table", { class: "policy zones rows tagtable" }, h("thead", {}, h("tr", {}, h("th", { "aria-label": "Row number" }, "#"), h("th", {}, "Tag"), h("th", { class: "num" }, "Devices"))), tbody);
+    const empty = h("div", { class: "policy-empty" }, "");
+    const wrap = h("div", { class: "policy-wrap" }, tbl, empty);
+    const filter = h("input", { type: "text", class: "policy-filter", placeholder: "Filter tags", "aria-label": "Filter tags", autocomplete: "off", spellcheck: "false" });
+    const count = h("span", { class: "policy-count muted" }, "");
+    const sizeSel = h("select", { "aria-label": "Rows per page" }, [25, 50, 100, 250, 500].map((n) => h("option", { value: String(n) }, n + " per page")));
+    sizeSel.value = String(size);
+    const mkBtn = (label, title) => h("button", { type: "button", class: "btn small", title, "aria-label": title }, label);
+    const first = mkBtn("«", "First page"), prev = mkBtn("‹", "Previous page"), next = mkBtn("›", "Next page"), last = mkBtn("»", "Last page");
+    const pageIn = h("input", { type: "number", min: "1", class: "policy-page", "aria-label": "Page number" });
+    const pages = h("span", { class: "muted" }, "");
+    const pager = h("span", { class: "policy-pager" }, first, prev, pageIn, pages, next, last);
+    const bar = h("div", { class: "policy-bar" }, filter, count, h("span", { class: "grow" }), pager, sizeSel);
+    const box = h("div", { class: "policy-box rows wide" }, bar, wrap);
+    bar.addEventListener("change", (e) => e.stopPropagation());   // the filter and paging controls are not settings
+    const tally = () => { const m = new Map(); for (const w of devTable().words(col)) m.set(w, (m.get(w) || 0) + 1); return m; };
+    const rename = (t, n, k) => {
+      n = n.trim().replace(/[\s,]+/g, "");
+      if (!n || n === t) return false;
+      if (tally().has(n) && !confirm("There is a tag " + n + " already. Merge " + t + " into it?")) return false;
+      devTable().mapWords(col, (w) => (w === t ? n : w));
+      return true;
+    };
+    const remove = (t, k) => { if (confirm("Remove the tag " + t + " from " + k + " device" + (k === 1 ? "" : "s") + "?")) devTable().mapWords(col, (w) => (w === t ? "" : w)); };
+    const menuFor = (t, k, inp) => [
+      ["Rename", () => { inp.focus(); inp.select(); }],
+      ["Copy", () => { try { navigator.clipboard.writeText(t); } catch (e) { /* no clipboard */ } }],
+      ["Show the devices with this tag", () => { devTable().setFilter(t); showDevices(); }],
+      ["Remove from every device", () => remove(t, k), "danger"],
+    ];
+    function render() {
+      const all = [...tally()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: "base" }));
+      const flt = parseFilter(filter.value), q = !flt.empty, vis = q ? all.filter(([t]) => flt.match((w) => t.toLowerCase().includes(w))) : all;
+      const n = Math.max(1, Math.ceil(vis.length / size));
+      page = Math.min(Math.max(page, 0), n - 1);
+      const from = page * size, shown = vis.slice(from, from + size);
+      clear(tbody).append(...shown.map(([t, k], i) => {
+        const inp = h("input", { type: "text", value: t, "aria-label": "Tag " + t, autocomplete: "off", spellcheck: "false" });
+        inp.addEventListener("change", () => { if (!rename(t, inp.value, k)) inp.value = t; });
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } else if (e.key === "Escape") { inp.value = t; inp.blur(); } });
+        const tr = h("tr", {}, h("td", { class: "grip" }, h("span", { class: "rownum" }, String(from + i + 1))), h("td", {}, inp), h("td", { class: "num" }, String(k)));
+        tr.addEventListener("contextmenu", (e) => rowMenu(menuFor(t, k, inp))(e));
+        return tr;
+      }));
+      const filtered = vis.length !== all.length;
+      count.textContent = vis.length ? `${from + 1}–${Math.min(from + size, vis.length)} of ${vis.length}${filtered ? ` (filtered from ${all.length})` : ""}` : (filtered ? `0 of ${all.length}` : "0 tags");
+      pager.hidden = n < 2;
+      pageIn.value = String(page + 1); pageIn.max = String(n); pages.textContent = "of " + n;
+      first.disabled = prev.disabled = page === 0; next.disabled = last.disabled = page >= n - 1;
+      empty.hidden = vis.length > 0;
+      empty.textContent = all.length ? "No tags match the filter." : "No tags yet. Type tags (site=dc1 role=core) in the Tags column of the Devices tab.";
+    }
+    filter.addEventListener("input", () => { page = 0; render(); });
+    filter.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    sizeSel.addEventListener("change", () => { size = +sizeSel.value || 50; page = 0; render(); });
+    first.addEventListener("click", () => { page = 0; render(); });
+    prev.addEventListener("click", () => { page--; render(); });
+    next.addEventListener("click", () => { page++; render(); });
+    last.addEventListener("click", () => { page = 1e9; render(); });
+    pageIn.addEventListener("change", () => { page = (parseInt(pageIn.value, 10) || 1) - 1; render(); });
+    pageIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); pageIn.blur(); } });
+    render();
+    return { el: box, refresh: render };
+  }
+
   function rowTable(spec, lines) {
     const N = spec.cols.length;
     const small = SMALL_TABLES.has(spec.key);
-    const data = (lines || []).map((l) => ({ v: spec.parse(l) }));
+    const data = (lines || []).map((l) => { const v = spec.parse(l); return { v, off: !!(spec.isOff && spec.isOff(l)), ...(spec.track ? { orig: String(v[0] || "").trim() } : {}) }; });
     let page = 0, size = small ? 1e9 : 50, dragging = null;
     const tbody = h("tbody", {});
-    const tbl = h("table", { class: "policy zones rows" + (N === 1 ? " one" : "") },
+    const tbl = h("table", { class: "policy zones rows t-" + spec.key + (N === 1 ? " one" : "") },
       h("thead", {}, h("tr", {}, h("th", { "aria-label": "Row number and order" }, "#"), ...spec.cols.map((c) => h("th", {}, c.name)))), tbody);
     const empty = h("div", { class: "policy-empty" }, "");
     const wrap = h("div", { class: "policy-wrap" }, tbl, empty);
@@ -2489,13 +2654,15 @@
     const pages = h("span", { class: "muted" }, "");
     const pager = h("span", { class: "policy-pager" }, first, prev, pageIn, pages, next, last);
     const bar = h("div", { class: "policy-bar" }, filter, count, h("span", { class: "grow" }), pager, sizeSel);
-    const box = h("div", { class: "policy-box rows" }, ...(small ? [] : [bar]), wrap);
+    const box = h("div", { class: "policy-box rows" + (spec.wide ? " wide" : "") }, ...(small ? [] : [bar]), wrap);
     bar.addEventListener("change", (e) => e.stopPropagation());   // the filter and paging controls are not settings
     const changed = () => tbl.dispatchEvent(new Event("change", { bubbles: true }));
-    const visible = () => { const flt = parseFilter(filter.value); return flt.empty ? data : data.filter((r) => flt.match((w) => r.v.some((x) => x.toLowerCase().includes(w)))); };
+    const plain = spec.cols.map((c) => !c.secret);   // the filter never looks into a password or a token
+    const visible = () => { const flt = parseFilter(filter.value); return flt.empty ? data : data.filter((r) => flt.match((w) => r.v.some((x, i) => plain[i] && x.toLowerCase().includes(w)))); };
     const clearMarks = () => tbody.querySelectorAll(".drop-above, .drop-below").forEach((x) => x.classList.remove("drop-above", "drop-below"));
     const trOf = (row) => [...tbody.children].find((t) => t._row === row);
     const cells = (row) => row.v.map((x) => x.trim());
+    const names = () => { const n = {}; for (const r of data) { const x = r.v[0].trim(); if (x) n[x] = (n[x] || 0) + 1; } return n; };   // how many rows carry each first-cell name
     const mark = (tr, row) => { tr.classList.toggle("incomplete", !!spec.mark(cells(row))); };
 
     function render(follow) {
@@ -2527,7 +2694,7 @@
       changed();
     }
     function mk(row) {
-      const tr = h("tr", {});
+      const tr = h("tr", { class: row.off ? "off" : "" });
       tr._row = row;
       const grip = h("span", { class: "grip-h", draggable: "true", title: "Drag to reorder", "aria-hidden": "true" }, "⋮⋮");
       tr.append(h("td", { class: "grip" }, h("span", { class: "rownum" }, String(data.indexOf(row) + 1)), grip));
@@ -2535,15 +2702,25 @@
         let inp;
         if (c.opts) {
           const opts = c.opts.includes(row.v[i]) || !row.v[i] ? c.opts : [...c.opts, row.v[i]];   // a value this list does not know is kept
-          inp = h("select", { "aria-label": c.name }, opts.map((o) => h("option", { value: o }, o)));
+          inp = h("select", { "aria-label": c.name }, opts.map((o) => h("option", { value: o }, PLATFORM_LABEL[o] || o)));
           if (!row.v[i]) row.v[i] = c.opts[0];
           inp.value = row.v[i];
           inp.addEventListener("change", () => { row.v[i] = inp.value; mark(tr, row); });
+        } else if (c.pills) {
+          inp = devicePicker(row.v[i] ? row.v[i].split(",") : [], (l) => { row.v[i] = l.join(","); mark(tr, row); });
+        } else if (c.tags) {
+          inp = tagPicker((row.v[i] || "").split(/[\s,]+/), (l) => { row.v[i] = l.join(" "); mark(tr, row); }, () => (spec.tagsNow ? spec.tagsNow() : []), c.name);
         } else {
-          inp = h("input", { type: "text", autocomplete: "off", spellcheck: "false", "aria-label": c.name, placeholder: c.ph || "" });
+          inp = h("input", { type: c.secret ? "password" : "text", autocomplete: c.secret ? "new-password" : "off", spellcheck: "false", "aria-label": c.name, placeholder: c.ph || "" });
+          if (!row.v[i] && c.def) row.v[i] = c.def;   // the default shown as the value, not left empty
           inp.value = row.v[i] || "";
           inp.addEventListener("input", () => { row.v[i] = inp.value; mark(tr, row); });
+          if (c.list) {   // a column that offers a list of names while typing (the datalist is filled when the box gets the focus: the names may be unsaved)
+            inp.setAttribute("list", c.list);
+            inp.addEventListener("focus", () => { if (spec.onList) spec.onList(c.list); });
+          }
         }
+        if (!c.pills && !c.tags && !c.secret) tipWhenCut(inp, () => (inp.tagName === "SELECT" ? (inp.selectedOptions[0] ? inp.selectedOptions[0].textContent : "") : inp.value));
         tr.append(h("td", {}, inp));
       });
       grip.addEventListener("dragstart", (e) => {
@@ -2577,7 +2754,7 @@
       return tr;
     }
     // a row added with Add and left empty (Esc, or a click elsewhere) goes away again; a select counts as empty while it shows its first choice
-    const isBlank = (row) => row.v.every((x, i) => (spec.cols[i].opts ? x === spec.cols[i].opts[0] : !x.trim()));
+    const isBlank = (row) => row.v.every((x, i) => (spec.cols[i].opts ? x === spec.cols[i].opts[0] : !x.trim() || x === spec.cols[i].def));
     function dropBlank(row) {
       if (!row.fresh || !data.includes(row) || !isBlank(row)) return false;
       const ae = document.activeElement, atr = ae && ae.closest ? ae.closest("tr") : null;
@@ -2612,9 +2789,10 @@
       const vis = visible(), i = vis.indexOf(row), di = data.indexOf(row);
       return [
         ["Edit", () => focusRow(row, 0)],
-        ["Copy", () => { rowClips[spec.key] = cells(row); try { navigator.clipboard.writeText(cells(row).join("\t")); } catch (e) { /* the row stays in the page's own clipboard */ } }],
+        ["Copy", () => { rowClips[spec.key] = cells(row).map((x, i) => (spec.cols[i].secret ? "" : x)); try { navigator.clipboard.writeText(rowClips[spec.key].join("\t")); } catch (e) { /* the row stays in the page's own clipboard */ } }],
         ["Paste", () => paste(row)],
         ["Add", () => focusRow(insert([], row), 0)],
+        ...(spec.isOff ? [[row.off ? "Enable" : "Disable", () => { row.off = !row.off; render(); changed(); }]] : []),
         ...(i > 0 ? [["Move up", () => moveTo(row, vis[i - 1], false)]] : []),
         ...(i >= 0 && i < vis.length - 1 ? [["Move down", () => moveTo(row, vis[i + 1], true)]] : []),
         ...(di > 0 ? [["Move to top", () => moveTo(row, data[0], false)]] : []),
@@ -2638,8 +2816,18 @@
     render();
     return {
       el: box,
-      get: () => (spec.obj ? data.filter((r) => !spec.mark(cells(r))).map((r) => spec.obj(cells(r)))
-        : data.flatMap((r) => (spec.mark(cells(r)) ? [] : spec.format(cells(r))))),
+      // a tracked table (spec.track): the rows that had one name and now have another (original -> now); a new, deleted, unnamed or doubly named row has none
+      renames: () => { const n = names(); return new Map(data.filter((r) => r.orig && r.v[0].trim() && r.v[0].trim() !== r.orig && n[r.v[0].trim()] === 1).map((r) => [r.orig, r.v[0].trim()])); },
+      // what each row is called now is what it was called: renames start again from here
+      commit: () => { const n = names(); for (const r of data) if (r.v[0].trim() && n[r.v[0].trim()] === 1) r.orig = r.v[0].trim(); },
+      // a column's values that are keys of the map take the map's value (the Login column follows a renamed login)
+      retarget: (col, map) => { let k = 0; for (const r of data) { const x = (r.v[col] || "").trim(); if (map.has(x)) { r.v[col] = map.get(x); k++; } } if (k) render(); return k; },
+      setFilter: (t) => { filter.value = t; page = 0; render(); },   // the filter box, as if typed
+      // the words of a column of words (the Tags column): every word in use, and a way to rename or remove one in every row (fn gives the new word, or "" to drop it)
+      words: (col) => data.flatMap((r) => (r.v[col] || "").split(/[\s,]+/).filter(Boolean)),
+      mapWords: (col, fn) => { let k = 0; for (const r of data) { const w = (r.v[col] || "").split(/[\s,]+/).filter(Boolean), n = [...new Set(w.map(fn).filter(Boolean))]; if (n.join(" ") !== w.join(" ")) { r.v[col] = n.join(" "); k++; } } if (k) { render(); changed(); } return k; },
+      get: () => (spec.obj ? data.filter((r) => !(spec.drop || spec.mark)(cells(r))).map((r) => spec.obj(cells(r)))
+        : data.flatMap((r) => ((spec.drop || spec.mark)(cells(r)) ? [] : spec.format(cells(r)).map((x) => (r.off ? x + " disabled" : x))))),
     };
   }
 
@@ -2651,41 +2839,74 @@
     mark: (c) => !c[0],
   });
   // the lists that are tables
+  // the drivers in device/, alphabetical: a new device starts with the first; the daemon checks the name when the page saves
+  // the API address of the platforms that are a cloud service
+  const SERVICE_ADDR = { meraki: "api.meraki.com", entra: "graph.microsoft.com", nsone: "api.nsone.net", rcode0: "my.rcodezero.at" };
+  // what the list and the tiles say for a platform whose stored name is not what people call it; the stored name stays
+  const PLATFORM_LABEL = {
+    aci: "Cisco ACI", afc: "Aruba Fabric Controller", aoscx: "ArubaOS-CX", aviatrix: "Aviatrix", bigip: "F5 BigIP", centreon: "Centreon", dnsdir: "AnyName DNS Director",
+    ntpdir: "AnyTime NTP Director", entra: "Microsoft Entra ID", eos: "Arista EOS", fortios: "Fortinet FortiOS", ios: "Cisco IOS", iosxe: "Cisco IOS-XE", nsxt: "VMware NSX-T", unimus: "Unimus", device42: "Device42", smax: "Micro Focus SMAX", ad: "Active Directory", tools: "Network tools", sdwan: "Cisco Catalyst SD-WAN",
+    proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", pdm: "Proxmox Datacenter Manager", ipfabric: "IP Fabric", junos: "Juniper Junos", linux: "Linux (SSH)", windows: "Windows (SSH)",
+    meraki: "Cisco Meraki", nios: "Infoblox NIOS", nsone: "NSOne", nxos: "Cisco NX-OS", observium: "Observium", panorama: "Palo Alto Panorama",
+    netdir: "MCP Network Director", mediaencoder: "multi-media[encoder]", panos: "Palo Alto PanOS", rcode0: "RcodeZero", technitium: "Technitium DNS Server", vcenter: "VMware vCenter Server",
+  };
+  const platformName = (p) => PLATFORM_LABEL[p] || p;
+  const PLATFORMS = Object.keys(PLATFORM_LABEL).sort((a, b) => PLATFORM_LABEL[a].localeCompare(PLATFORM_LABEL[b]));   // as the person reads them
   const ROW_TABLES = {
-    servers: oneCol("servers", "Server", "10.0.0.123, 10.0.1.123:1123, [2001:db8::123]:123, ntp.example.com", "No servers."),
-    fallback: oneCol("fallback", "Fallback server", "pool.ntp.org", "No fallback servers."),
     snmpacl: oneCol("snmpacl", "Address or network", "10.1.0.0/24, 192.0.2.5, 2001:db8::/32", "Nobody may ask."),
     metricsacl: oneCol("metricsacl", "Address or network", "10.1.0.0/24, 192.0.2.5, 2001:db8::/32", "Nobody may read /metrics."),
-    // MCP access: "10.1.0.0/24" (read-only) or "10.1.1.50 rw"
+    // MCP access: "10.1.0.0/24" (read-only), "10.1.1.50 rw", "10.1.0.0/24 strict" (an address or network, ro or rw, a privacy level)
     mcpacl: {
-      key: "mcpacl", empty: "No sources allowed without a key.",
-      cols: [{ name: "Address or network", ph: "10.1.1.50, 10.1.0.0/24" }, { name: "Access", opts: ["ro", "rw"] }],
-      parse: (line) => { const f = String(line).trim().split(/\s+/); return [f[0] || "", (f[1] || "").toLowerCase() === "rw" ? "rw" : "ro"]; },
-      format: (c) => c[0].split(/[\s,]+/).filter(Boolean).map((a) => a + (c[1] === "rw" ? " rw" : "")),
+      key: "mcpacl", wide: true, empty: "No sources allowed without a key.",
+      cols: [{ name: "Address or network", ph: "10.1.1.50, 10.1.0.0/24" }, { name: "Access", opts: ["ro", "rw"] }, { name: "Privacy", opts: ["default", "none", "standard", "strict"] }, { name: "Devices", pills: true }, { name: "Expires (UTC)", ph: "never, 2026-12-31 or 2026-12-31 17:00" }, { name: "Notes", ph: "what this source is for", note: true }],
+      parse: (line) => {
+        const [body, ...nt] = String(line).split("#");   // "10.1.1.50 rw # laptop": what it says, and its note
+        const w = body.trim().split(/\s+/), f = w.map((x) => x.toLowerCase());
+        const lv = f.slice(1).find((x) => ["none", "standard", "strict"].includes(x));
+        const dv = w.slice(1).find((x) => x.toLowerCase().startsWith("devices="));
+        const un = w.slice(1).find((x) => x.toLowerCase().startsWith("until="));
+        return [w[0] || "", f.slice(1).includes("rw") ? "rw" : "ro", lv || "default", dv ? dv.slice(8) : "", un ? un.slice(6).replace("T", " ").replace(/Z$/, "") : "", nt.join("#").trim()];
+      },
+      format: (c) => c[0].split(/[\s,]+/).filter(Boolean).map((a) => a + (c[1] === "rw" ? " rw" : "") + (c[2] && c[2] !== "default" ? " " + c[2] : "") + (c[3] ? " devices=" + c[3] : "") + (c[4] && c[4].trim() ? " until=" + c[4].trim().replace(/\s+/, "T") : "") + ((c[5] || "").replace(/[#\r\n]/g, " ").trim() ? " # " + c[5].replace(/[#\r\n]/g, " ").trim() : "")),
       mark: (c) => !c[0],
+      isOff: (l) => /\sdisabled\s*$/i.test(String(l).split("#")[0]),   // a row switched off with right-click ▸ Disable stays in the list but allows nothing
     },
-    allowedclients: oneCol("allowedclients", "Network", "10.0.0.0/8, 192.168.1.5, 2001:db8::/32", "No restriction: every client may ask."),
-    blockedclients: oneCol("blockedclients", "Client or network", "203.0.113.7", "Nobody is blocked."),
     neighbors: oneCol("neighbors", "Neighbor IP address", "10.0.0.2", "No neighbors: multicast."),
     morevip4: oneCol("morevip4", "IPv4 address", "10.0.0.11", "No more IPv4 addresses."),
     morevip6: oneCol("morevip6", "IPv6 address", "2001:db8::11", "No more IPv6 addresses."),
     // a community string may contain commas: one string to a row, never split
     community: { ...oneCol("community", "Community string", "", "No community strings: SNMP is off."), format: (c) => [c[0]] },
-    // symmetric keys, as chrony's key file has them: "7 SHA256 HEX:5e0c..."
-    keys: {
-      key: "keys", empty: "No keys.",
-      cols: [{ name: "Key ID", ph: "7" }, { name: "Hash", opts: ["SHA256", "SHA1", "MD5", "SHA384", "SHA512", "SHA3-224", "SHA3-256", "SHA3-384", "SHA3-512", "RMD160"] }, { name: "Key", ph: "HEX:5e0c... or up to 64 characters" }],
-      parse: (line) => { const f = String(line).trim().split(/\s+/); return [f[0] || "", (f[1] || "SHA256").toUpperCase(), f.slice(2).join(" ")]; },
-      format: (c) => [c[0] + " " + (c[1] || "SHA256") + " " + c[2]],
-      mark: (c) => !c[0] || !c[2],
+    // Configure ▸ Devices: one device to a row.  What the table has no column for (options, ca_pem, disabled) is kept from the saved
+    // device of the same name (devExtra, filled in when the page is drawn).
+    devices: {
+      key: "devices", empty: "No devices.", wide: true,
+      cols: [{ name: "Name", ph: "core-sw1" }, { name: "Platform", opts: PLATFORMS }, { name: "Address", ph: "10.0.0.2" }, { name: "Port", ph: "443", def: "443" },
+        { name: "Login", ph: "a login's name", list: "device-logins" }, { name: "Tags", ph: "site=dc1 role=core", tags: true }, { name: "Certificate", opts: ["skip check", "check"] }, { name: "Options", ph: "serial=Q2XX-XXXX-XXXX" }],
+      parse: (d) => {
+        if (typeof d === "string") { const f = d.split(/\s+/); return [f[0] || "", f[1] || PLATFORMS[0], f[2] || "", f[3] || "", f[4] || "", "", "skip check", ""]; }
+        return [d.name || "", d.platform || PLATFORMS[0], d.address || "", d.port ? String(d.port) : portDef(d.platform), d.credential || "", (d.tags || []).join(" "), d.insecure || !d.ca_pem ? "skip check" : "check", Object.entries(d.options || {}).map(([a, b]) => a + "=" + b).join(" ")];
+      },
+      format: (c) => {
+        const x = { ...(devExtra[c[0]] || {}), name: c[0], platform: c[1], address: c[2], credential: c[4] };
+        if (c[3].trim() && c[3].trim() !== portDef(c[1])) x.port = Number(c[3]); else delete x.port;   // 443 is the default and is not written
+        const tags = c[5].split(/[\s,]+/).filter(Boolean);
+        if (tags.length) x.tags = tags; else delete x.tags;
+        if (c[6] === "skip check") { x.insecure = true; delete x.ca_pem; } else delete x.insecure;
+        const opts = {};
+        for (const p of (c[7] || "").split(/[\s,]+/).filter(Boolean)) { const m = /^([a-z_]{1,32})=(\S{1,100})$/.exec(p); if (m) opts[m[1]] = m[2]; }
+        if (Object.keys(opts).length) x.options = opts; else delete x.options;
+        return [x];
+      },
+      mark: (c) => !c[0] || (!c[2] && !SERVICE_ADDR[c[1]]) || !c[4],
+      drop: (c) => !c[0] || (!c[2] && !SERVICE_ADDR[c[1]]),   // a device with no login is marked, but it is saved (an imported one has none yet)
     },
-    // how chrony reaches an upstream server: "ntp.example.com nts" or "10.0.0.5 key 7"
-    serverauth: {
-      key: "serverauth", empty: "No authenticated servers.",
-      cols: [{ name: "Server", ph: "ntp.example.com" }, { name: "Method", opts: ["nts", "key"] }, { name: "Key ID (for key)", ph: "7" }],
-      parse: (line) => { const f = String(line).trim().split(/\s+/); return [f[0] || "", (f[1] || "nts").toLowerCase() === "key" ? "key" : "nts", f[1] && f[1].toLowerCase() === "key" ? (f[2] || "") : ""]; },
-      format: (c) => [c[0] + (c[1] === "key" ? " key " + c[2] : " nts")],
-      mark: (c) => !c[0] || (c[1] === "key" && !c[2]),
+    // the logins the devices use: a user name and password, or an API token (FortiOS, PAN-OS, Technitium, Observium, IP Fabric, Centreon)
+    devcreds: {
+      key: "devcreds", empty: "No logins.", wide: true, track: true,   // track: a renamed login is followed by the devices that use it (see devicesOut)
+      cols: [{ name: "Name", ph: "lab" }, { name: "User name", ph: "netdir" }, { name: "Password", secret: true }, { name: "Token", secret: true, ph: "FortiOS, PAN-OS, Meraki, MCP key" }],
+      parse: (c) => (typeof c === "string" ? [c.split(/\s+/)[0] || "", "", "", ""] : [c.name || "", c.username || "", c.password || "", c.token || ""]),
+      format: (c) => [{ name: c[0], ...(c[1] ? { username: c[1] } : {}), ...(c[2] ? { password: c[2] } : {}), ...(c[3] ? { token: c[3] } : {}) }],
+      mark: (c) => !c[0] || (!c[2] && !c[3]),
     },
     // single sign-on users: "alice@example.com rw"
     ldapservers: oneCol("ldapservers", "Server", "ldaps://dc1.example.lan:636", "No directory servers yet."),
@@ -2710,46 +2931,31 @@
     },
   };
 
+  // the parts of each saved device the Devices table has no column for, by name (see ROW_TABLES.devices)
+  let devExtra = {};
   // Build inputs for one object; returns {el, get()} where get() reads values back with types.
   // With asCards, every {section} spec starts a card of its own (title in the header, optional note above the fields).
   // the gateway keys everybody knows, and the shortest key not called short (keep in step with gkey.go)
-  const WELL_KNOWN_KEYS = ["", "dnsdir", "ntpdir", "dgw", "ddgw", "change-me", "changeme", "secret", "password", "key", "test", "default"];
+  const WELL_KNOWN_KEYS = ["", "dnsdir", "ntpdir", "netdir", "dgw", "ddgw", "change-me", "changeme", "secret", "password", "key", "test", "default"];
   const isWeakKey = (k) => k.length < 12 || WELL_KNOWN_KEYS.includes(k.trim().toLowerCase());
 
-  // A small eye (struck through while the value is shown), drawn with DOM calls: no innerHTML.
-  function eyeIcon(struck) {
-    const NS = "http://www.w3.org/2000/svg";
-    const el = (n, a) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
-    const svg = el("svg", { viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
-    svg.append(el("path", { d: "M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z" }), el("circle", { cx: "12", cy: "12", r: "3" }));
-    if (struck) svg.append(el("path", { d: "M3 3l18 18" }));
-    return svg;
-  }
-  // a password box with an eye beside it: click to read the value, click again to hide it
-  function revealBox(inp) {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "reveal"; b.title = "Show";
-    b.append(eyeIcon(false));
-    b.setAttribute("aria-pressed", "false");
-    b.setAttribute("aria-label", "Show " + (inp.getAttribute("aria-label") || "value"));
-    b.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const on = inp.type === "password";
-      inp.type = on ? "text" : "password";
-      b.title = on ? "Hide" : "Show";
-      b.replaceChildren(eyeIcon(on));
-      b.setAttribute("aria-pressed", String(on));
-    });
-    const wrap = document.createElement("span");
-    wrap.className = "reveal-wrap";
-    wrap.append(inp, b);
-    return wrap;
+  // The address an MCP client connects to: the first gateway's shared (VIP) address on the MCP port (443 unless set), not the
+  // address of the node the page was opened on.  Set when a page that knows the configuration is drawn.
+  let mcpBaseURL = "";
+  const mcpURL = () => (mcpBaseURL || location.origin) + "/mcp";
+  function vipBase(cfg) {
+    const gs = ((cfg && cfg.groups) || []).slice().sort((a, b) => a.group_id - b.group_id);
+    const g = gs.find((x) => x.vip4) || gs.find((x) => x.vip6);
+    if (!g) return "";
+    const ip = (g.vip4 || g.vip6).split("/")[0];
+    const port = (cfg.settings && cfg.settings.mcp_port) || 443;   // the MCP listener on the gateway address, not the GUI's port
+    return "https://" + (ip.includes(":") ? "[" + ip + "]" : ip) + (port === 443 ? "" : ":" + port);
   }
   const MCP_NAME_RE = /^[A-Za-z0-9._-]{1,40}$/;
   function randomKey() {
     const b = new Uint8Array(32);
     crypto.getRandomValues(b);
-    return "ntpdir_" + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return "netdir_" + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
   function dialog(title, body) {
     const d = h("dialog", { class: "cv-dialog", "aria-label": title });
@@ -2760,7 +2966,60 @@
     d.showModal();
     return d;
   }
-  // The MCP keys (Configure ▸ Monitoring ▸ MCP): a name, ro or rw, and the key (kept, so Show can display it again; an old key has
+  // Configure ▸ Privacy: what an MCP caller is not told (mcpprivacy.go).  The default level, and what the standard and the
+  // strict level each hide.  Only what differs from the built-in rules is saved, so an untouched page leaves nothing in the file.
+  const PRIV_STD = { public_ips: true, private_ips: false, ip_keep: 0, public_asns: true, private_asns: false, serials: "tail", macs: "show", emails: true, contacts: true, words: [] };
+  const PRIV_STRICT = { public_ips: true, private_ips: true, ip_keep: 0, public_asns: true, private_asns: true, serials: "hide", macs: "hide", emails: true, contacts: true, words: [] };
+  function privacyForm(cur) {
+    cur = cur || {};
+    const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, tc(title))), h("div", { class: "body" }, ...kids));
+    const defSel = h("select", { "aria-label": "Default privacy level" }, [["standard", "standard"], ["none", "none — nothing is hidden"], ["strict", "strict"]].map(([v, l]) => h("option", { value: v }, l)));
+    defSel.value = cur.default || "standard";
+    const card = (title, base, saved) => {
+      const r = { ...base, ...(saved || {}), words: (saved && saved.words) || [] };
+      const box = (k, label) => { const i = h("input", { type: "checkbox", checked: !!r[k] }); i.addEventListener("change", () => { r[k] = i.checked; }); return h("label", { class: "f check" }, i, label); };
+      const sel = (k, label, opts, hint) => {
+        const i = h("select", { "aria-label": label }, opts.map(([v, l]) => h("option", { value: String(v) }, l)));
+        i.value = String(r[k]);
+        i.addEventListener("change", () => { r[k] = typeof base[k] === "number" ? Number(i.value) : i.value; });
+        return h("label", { class: "f" }, h("span", {}, label), i, hint ? h("span", { class: "hint" }, hint) : null);
+      };
+      const words = h("textarea", { rows: 4, spellcheck: "false", autocomplete: "off", "aria-label": "Words always hidden", placeholder: "one per line, e.g. your company or site names" });
+      words.value = r.words.join("\n");
+      words.addEventListener("change", () => { r.words = words.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean); });
+      const el = section(title,
+        h("div", { class: "grid" },
+          box("public_ips", "Public IP addresses"), box("private_ips", "Private IP addresses (10.x, 172.16-31.x, 192.168.x, fc00::/7 …)"),
+          box("public_asns", "Public AS numbers"), box("private_asns", "Private AS numbers"),
+          box("emails", "E-mail addresses"), box("contacts", "SNMP contact and location")),
+        h("div", { class: "grid gap-top" },
+          sel("ip_keep", "IP addresses", [[0, "hidden (x.x.x.x)"], [1, "first 1 (203.x.x.x)"], [2, "first 2 (203.0.x.x)"], [3, "first 3 (203.0.114.x)"], [-1, "last 1 (x.x.x.7)"], [-2, "last 2 (x.x.114.7)"], [-3, "last 3 (x.0.114.7)"]]),
+          sel("serials", "Serial numbers", [["show", "shown"], ["tail", "last four characters (****1234)"], ["hide", "hidden"]]),
+          sel("macs", "MAC addresses", [["show", "shown"], ["oui", "OUI part shown (00:1a:2b:xx:xx:xx)"], ["nic", "NIC part shown (xx:xx:xx:3c:4d:5e)"], ["hide", "hidden"]])),
+        h("label", { class: "f wide gap-top" }, h("span", {}, "Words always hidden"), words));
+      return { el, get: () => ({ ...r, words: r.words.slice() }) };
+    };
+    const std = card("Standard level hides", PRIV_STD, cur.standard), strict = card("Strict level hides", PRIV_STRICT, cur.strict);
+    const same = (a, b) => JSON.stringify(Object.keys(b).sort().map((k) => [k, a[k]])) === JSON.stringify(Object.keys(b).sort().map((k) => [k, b[k]]));
+    // words that mark a secret, for every filter and every level (device/secretwords.go): a key name, a line or a path that holds one is hidden or refused
+    const secretBox = h("textarea", { rows: 4, spellcheck: "false", autocomplete: "off", "aria-label": "Secret words", placeholder: "one per line, e.g. passkey, vault, token-id" });
+    secretBox.value = (cur.secret_words || []).join("\n");
+    const secrets = section("Secret words", h("label", { class: "f wide" }, h("span", {}, "Words that mark a secret"), secretBox, h("span", { class: "hint" }, "On top of the built-in ones; at every level, none included.")));
+    const intro = section("Default level", h("label", { class: "f" }, h("span", {}, "Level for a source or key that has none of its own"), defSel));
+    return {
+      el: h("div", {}, intro, std.el, strict.el, secrets),
+      get() {
+        const o = {};
+        if (defSel.value !== "standard") o.default = defSel.value;
+        if (!same(std.get(), PRIV_STD)) o.standard = std.get();
+        if (!same(strict.get(), PRIV_STRICT)) o.strict = strict.get();
+        const sw = secretBox.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        if (sw.length) o.secret_words = sw;
+        return Object.keys(o).length ? o : undefined;
+      },
+    };
+  }
+  // The MCP keys (Configure ▸ MCP): a name, ro or rw, and the key (kept, so Show can display it again; an old key has
   // only its hash).  Add key makes a random key here, shows it, and sends it with the next save.  A change is a "change" event,
   // so the page saves it like any other field.
   function mcpKeysEditor(list) {
@@ -2769,6 +3028,17 @@
     const changed = () => { draw(); el.dispatchEvent(new Event("change", { bubbles: true })); };
     const NAME_RE = MCP_NAME_RE;
     const day = (t) => (t ? new Date(t * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "");
+    const when = (t) => (t ? new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") : "");   // UTC
+    const expired = (k) => !!k.expires && k.expires * 1000 <= Date.now();
+    // "2026-12-31" is the end of that day, "2026-12-31 17:00" that minute; all UTC; "" is never; null is not a time
+    const readWhen = (s) => {
+      s = s.trim();
+      if (!s || /^never$/i.test(s)) return 0;
+      const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?Z?$/.exec(s);
+      if (!m) return null;
+      const t = m[4] ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : Date.UTC(+m[1], m[2] - 1, +m[3], 23, 59);
+      return Number.isNaN(t) ? null : Math.floor(t / 1000);
+    };
     const shown = (k) => !!k.key && k.key !== "(hidden)";   // a key made before keys were kept has a hash only; a read-only account is not given it
     // a new key under the same name and access: whatever used the old one is refused from the next save
     function replaceKey(k) {
@@ -2790,25 +3060,45 @@
         const acc = h("select", { "aria-label": "Access of " + k.name }, ["ro", "rw"].map((a) => h("option", { value: a }, a)));
         acc.value = k.access || "ro";
         acc.addEventListener("change", () => { k.access = acc.value; });
-        // the key in a password box like every other secret with an eye beside it; an old key has none to show
+        const priv = h("select", { "aria-label": "Privacy of " + k.name }, ["default", "none", "standard", "strict"].map((a) => h("option", { value: a }, a)));
+        priv.value = k.privacy || "default";
+        priv.addEventListener("change", () => { if (priv.value === "default") delete k.privacy; else k.privacy = priv.value; });
+        // the key in a password box like every other secret (the eye is added to it like to the others); an old key has none to show
         const keyIn = h("input", { type: shown(k) ? "password" : "text", readonly: true, autocomplete: "off", spellcheck: "false", "aria-label": "Key of " + k.name, class: "mono",
           value: shown(k) ? k.key : k.key || "", placeholder: "not kept: Replace key" });
-        const tr = h("tr", {},
+        const exp = h("input", { type: "text", autocomplete: "off", spellcheck: "false", maxlength: "20", "aria-label": "Expires (UTC) of " + k.name, value: when(k.expires), placeholder: "never",
+          title: "UTC. Empty: never. 2026-12-31 is the end of that day; 2026-12-31 17:00 that minute. After it the key is refused; the row stays." });
+        exp.addEventListener("change", (ev) => {
+          const t = readWhen(exp.value);
+          if (t === null) { ev.stopPropagation(); exp.value = when(k.expires); return; }   // not a time: the old one comes back
+          if (t) k.expires = t; else delete k.expires;
+          changed();
+        });
+        const notes = h("input", { type: "text", autocomplete: "off", spellcheck: "false", maxlength: "200", "aria-label": "Notes for " + k.name, value: k.notes || "", placeholder: "what this key is for",
+          title: "A note for yourself: what the key is for. It changes nothing." });
+        notes.addEventListener("input", () => { const n = notes.value.replace(/[\r\n]+/g, " ").trim(); if (n) k.notes = n; else delete k.notes; });
+        const devs = devicePicker(k.devices, (l) => { if (l.length) k.devices = l; else delete k.devices; });
+        const tr = h("tr", { class: k.disabled || expired(k) ? "off" : "", title: expired(k) ? "Expired " + when(k.expires) + " UTC: refused" : "" },
           h("td", { class: "grip" }, h("span", { class: "rownum" }, String(i + 1))),
           h("td", {}, name),
           h("td", {}, acc),
+          h("td", {}, priv),
+          h("td", {}, devs),
           h("td", { class: "ctext" }, day(k.created)),
-          h("td", {}, shown(k) ? revealBox(keyIn) : keyIn));
+          h("td", {}, exp),
+          h("td", {}, notes),
+          h("td", {}, keyIn));
         tr.addEventListener("contextmenu", rowMenu([
           ["Add key", addKey],
           ["Copy key", () => { try { navigator.clipboard.writeText(k.key); } catch (_) { /* nothing to copy to */ } }, "", null, shown(k) ? "" : "No key is kept for this row: Replace key"],
           ["Replace key", () => replaceKey(k)],
+          [k.disabled ? "Enable" : "Disable", () => { if (k.disabled) delete k.disabled; else k.disabled = true; changed(); }],
           ["Delete", () => { if (confirm("Delete the key " + k.name + "?\n\nWhatever uses it can no longer connect to /mcp.")) { keys.splice(keys.indexOf(k), 1); changed(); } }, "danger"],
         ]));
         return tr;
       }));
       const tbl = h("table", { class: "policy zones rows mcpkeytab" },
-        h("thead", {}, h("tr", {}, h("th", { "aria-label": "Row number" }, "#"), h("th", {}, "Name"), h("th", {}, "Access"), h("th", {}, "Added"), h("th", {}, "Key"))), tbody);
+        h("thead", {}, h("tr", {}, h("th", { "aria-label": "Row number" }, "#"), h("th", {}, "Name"), h("th", {}, "Access"), h("th", {}, "Privacy"), h("th", {}, "Devices"), h("th", {}, "Added"), h("th", {}, "Expires (UTC)"), h("th", {}, "Notes"), h("th", {}, "Key"))), tbody);
       const empty = h("div", { class: "policy-empty" }, "No keys: only the sources above may use /mcp. Right-click here ▸ Add key.");
       empty.hidden = keys.length > 0;
       const wrap = h("div", { class: "policy-wrap" }, tbl, empty);
@@ -2837,7 +3127,7 @@
       name.focus();
     }
     draw();
-    return { el, get: () => keys.map((k) => (k.key ? { name: k.name, access: k.access || "ro", key: k.key, created: k.created } : { name: k.name, access: k.access || "ro", hash: k.hash, created: k.created })) };
+    return { el, get: () => keys.map((k) => ({ name: k.name, access: k.access || "ro", ...(k.privacy ? { privacy: k.privacy } : {}), ...(k.devices && k.devices.length ? { devices: k.devices } : {}), ...(k.disabled ? { disabled: true } : {}), ...(k.expires ? { expires: k.expires } : {}), ...(k.notes ? { notes: k.notes } : {}), ...(k.key ? { key: k.key } : { hash: k.hash }), created: k.created })) };
   }
 
   // the range under a number field, with its default, on one line: "10 to 600 s. Default 30."
@@ -2849,7 +3139,7 @@
     return [r ? r + "." : "", d].filter(Boolean).join(" ");
   }
   function fieldset(specs, obj, asCards) {
-    const getters = {};
+    const getters = {}, tables = {};
     let grid = h("div", { class: "grid" });
     const wrap = asCards ? h("div", {}) : grid;
     for (const f of specs) {
@@ -2881,6 +3171,7 @@
       if (f.t === "rows") {
         const rt = rowTable(ROW_TABLES[f.rows], v || []);
         getters[f.k] = rt.get;
+        tables[f.k] = rt;
         grid.append(h("div", { class: "f wide" }, h("span", {}, f.l, sharedTag(f)), rt.el, f.hint ? h("span", { class: "hint" }, f.hint) : null));
         continue;
       }
@@ -2892,7 +3183,7 @@
         input.value = (v || []).join("\n");
         get = () => input.value.split("\n").map((s) => s.trim()).filter(Boolean);
       } else if (f.t === "port") {
-        // a listen address kept as ":12380" in the file is shown as the port alone; one with a host in front is shown as it is
+        // a listen address kept as ":22161" in the file is shown as the port alone; one with a host in front is shown as it is
         input = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false" });
         input.value = v == null || v === "" ? (f.def || "") : String(v).replace(/^:(\d+)$/, "$1");
         get = () => { const t = input.value.trim(); return /^\d+$/.test(t) ? ":" + t : t; };
@@ -2918,14 +3209,14 @@
       }
       grid.append(h("label", { class: "f" + (f.wide ? " wide" : "") + (f.brk ? " brk" : "") }, h("span", {}, f.l, sharedTag(f)), input, (f.hint || rangeText(f)) ? h("span", { class: "hint" }, [f.hint, rangeText(f)].filter(Boolean).join(" ")) : null, weak));
     }
-    return { el: wrap, get: () => Object.fromEntries(Object.entries(getters).map(([k, g]) => [k, g()])) };
+    return { el: wrap, table: (k) => tables[k], get: () => Object.fromEntries(Object.entries(getters).map(([k, g]) => [k, g()])) };
   }
 
-  // Configure ▸ General, Gateway groups, NTP relay, Web GUI and Cluster: one page each, all made from the one form
+  // Configure ▸ Settings, Gateways, MCP, Devices, Web GUI, Monitoring, Alerts and Backup: one page each, all made from the one form
   // (every page shows its own panel and saves through the same call).
   // Configure ▸ Alerts: where alerts are sent, and the rules.  The rules come from the node (its catalog), the settings go back
-  // in the ntp.alerts block; only a rule that was touched is written out in full, so the others keep following the defaults.
-  const ALERT_FIX = { recheck: "Check the upstream servers now", restart_chrony: "Restart chrony" };
+  // in the settings.alerts block; only a rule that was touched is written out in full, so the others keep following the defaults.
+  const ALERT_FIX = {};
   const alertsForm = (acfg) => {
     acfg = acfg || {};
     const saved = acfg.rules || {}, dirty = new Set(), rows = {};
@@ -2943,7 +3234,7 @@
       let rules;
       try { rules = (await api("GET", "/api/alerts")).data.rules; } catch (e) { clear(rulesBox).append(h("div", { class: "hint" }, "The rules could not be read from this node: " + e.message)); return; }
       const tbody = h("tbody", {});
-      const GROUPS = [["dns", "DNS servers"], ["ntp", "NTP"], ["gateways", "Gateways"], ["stats", "Traffic"], ["cfg", "Certificates and backups"], ["host", "Host"]];
+      const GROUPS = [["gateways", "Gateways"], ["devices", "Devices"], ["cfg", "Certificates and backups"], ["host", "Host"]];
       const groupOf = (r) => (r.go === "cfg_web" || r.go === "cfg_backup" ? "cfg" : r.go || "host");
       const unitSpan = (t) => h("span", { class: "arule-u" }, t);
       const cell = (...k) => h("td", {}, h("div", { class: "arule-c" }, ...k));
@@ -3021,7 +3312,7 @@
     };
   };
 
-  // Configure ▸ Backup: three cards.  The servers are the shared settings (the ntp.backup block); when backups run is a
+  // Configure ▸ Backup: three cards.  The servers are the shared settings (the settings.backup block); when backups run is a
   // Scheduler task (action "backup"), shown and created from the first card.  There is no archive password (since v188):
   // an old one in the settings is kept as it is, to open the archives it made.  The status and the restore
   // are those of the node picked in the top bar.  Every explanation is in the help.
@@ -3030,7 +3321,7 @@
   // the columns of the table of backup servers (the server entries are part of the same shared block)
   const BACKUP_COLS = [
     ["name", "Name", "text", "Backup 1"], ["host", "Server", "text", "backup.example.com"], ["port", "Port", "int", "22"],
-    ["user", "User", "text", "ntpdir"], ["dir", "Directory", "text", "backups/ntp"], ["keep", "Keep", "int", "14"],
+    ["user", "User", "text", "netdir"], ["dir", "Directory", "text", "backups/netdir"], ["keep", "Keep", "int", "14"],
   ];
   // setSchedule(list) tells the config page the Scheduler's task list changed, so its next save carries the new one
   const backupForm = (bcfg, setSchedule) => {
@@ -3081,7 +3372,7 @@
     let sel = null;   // the picked row
     const addBtn = h("button", { type: "button", class: "btn" }, "Add a server");
     const testBtn = h("button", { type: "button", class: "btn" }, "Test");
-    const keyBtn = h("button", { type: "button", class: "btn", "aria-expanded": "false" }, "Install key…");
+    const keyBtn = h("button", { type: "button", class: "btn", "aria-expanded": "false" }, "Install key");
     const delBtn = h("button", { type: "button", class: "btn" }, "Remove");
     // Install key: the account's password, used once and kept nowhere
     const pw = h("input", { type: "password", autocomplete: "new-password", "aria-label": "Password of the account on the server" });
@@ -3195,7 +3486,7 @@
         (r.targets || []).forEach(addRow);
         if (!rows().length) addRow();
         pickRow(null);
-        if (state.cfg && state.cfg.ntp) state.cfg.ntp.backup = { ...(state.cfg.ntp.backup || {}), targets: r.targets || [] };
+        if (state.cfg && state.cfg.settings) state.cfg.settings.backup = { ...(state.cfg.settings.backup || {}), targets: r.targets || [] };
         const bad = (r.nodes || []).filter((n) => n.error).map((n) => n.node + ": " + n.error);
         if (r.full) bad.push(r.full + " node(s) not added: at most 8 servers");
         clusterOut.textContent = bad.join(" · ");
@@ -3243,14 +3534,14 @@
       const rerr = h("span", {});
       const lerr = h("span", {});
       const errLine = h("div", { class: "bad-text small bk-err" }, lerr, rerr);
-      const otherOpt = h("option", { value: "other" }, "Another server…");
+      const otherOpt = h("option", { value: "other" }, "Another server");
       const src = h("select", { "aria-label": "Where the backup is" }, otherOpt, h("option", { value: "upload" }, "A file from this computer"));
       let chosen = false;   // the person picked a source: do not move it
       const o = { host: h("input", { type: "text", placeholder: "Server", spellcheck: "false", "aria-label": "Server" }), port: h("input", { type: "number", placeholder: "22", class: "arule-n", "aria-label": "SSH port" }),
         user: h("input", { type: "text", placeholder: "User", spellcheck: "false", "aria-label": "User" }), dir: h("input", { type: "text", placeholder: "Directory", spellcheck: "false", "aria-label": "Directory" }),
         pw: h("input", { type: "password", autocomplete: "new-password", placeholder: "Account password", "aria-label": "Password of the account on that server" }) };
       const otherBox = h("div", { class: "toolbar tight", hidden: true }, o.host, o.port, o.user, o.dir, o.pw);
-      const fileIn = h("input", { type: "file", accept: ".ntpbak", hidden: true, "aria-label": "Backup file" });
+      const fileIn = h("input", { type: "file", accept: ".netbak", hidden: true, "aria-label": "Backup file" });
       const list = h("select", { "aria-label": "Backup to restore", hidden: true });
       const listBtn = h("button", { type: "button", class: "btn" }, "List backups");
       // the list shows this node's backups; "All nodes" adds the other nodes' (to rebuild a lost node on this one)
@@ -3375,17 +3666,43 @@
 
     function renderForm(cfg) {
       const logs = fieldset(LOG_FIELDS, cfg);
-      const selfCheck = fieldset(SELF_FIELDS, { self_check: cfg.self_check !== false });   // on unless the file says false
+      const set = cfg.settings = cfg.settings || {};
+      mcpBaseURL = vipBase(cfg);
       const syslog = fieldset(SYSLOG_FIELDS, cfg.syslog || {});
       const web = fieldset(WEB_FIELDS, cfg.web);
       const sso = ssoTabs(cfg.web);
       const ldap = ldapTab(cfg.web);
-      const ntp = fieldset(NTP_FIELDS, cfg.ntp, true);
+      devChoices = { names: (set.devices || []).map((d) => d.name).filter(Boolean).sort(), tags: [...new Set((set.devices || []).flatMap((d) => d.tags || []))].sort(), gateways: (cfg.groups || []).map((g) => ({ id: g.group_id, name: g.name || "" })) };
+      devExtra = Object.fromEntries((set.devices || []).map((d) => { const { options, ca_pem, disabled } = d; return [d.name, { ...(options ? { options } : {}), ...(ca_pem ? { ca_pem } : {}), ...(disabled ? { disabled } : {}) }]; }));
+      const devices = fieldset(DEVICE_FIELDS, { devices: set.devices });
+      const devcreds = fieldset(DEVCRED_FIELDS, { device_credentials: set.device_credentials });
+      // the Login column of the devices table offers the names in the Logins table below it, as they stand now (unsaved rows too)
+      const loginList = h("datalist", { id: "device-logins" });
+      ROW_TABLES.devices.onList = () => { let names = []; try { names = (devcreds.get().device_credentials || []).map((c) => c.name).filter(Boolean); } catch (_) { /* a row that is not finished */ } loginList.replaceChildren(...[...new Set(names)].sort().map((n) => h("option", { value: n }))); };
+      // a login renamed in the Logins table: every device that used it under its old name takes the new one (this runs before the form saves)
+      devcreds.el.addEventListener("change", () => {
+        const lt = devcreds.table("device_credentials"), dt = devices.table("devices"), ren = lt.renames();
+        if (ren.size) dt.retarget(ROW_TABLES.devices.cols.findIndex((c) => c.name === "Login"), ren);
+        lt.commit();
+      });
+      // the tags of the devices table as it stands now (rows not saved yet too): offered while a Tags box is typed in, and listed on the Tags tab
+      const tagCol = ROW_TABLES.devices.cols.findIndex((c) => c.name === "Tags");
+      ROW_TABLES.devices.tagsNow = () => devices.table("devices").words(tagCol);
+      // the Tags tab: a table like the others (filter, pages, right-click), one row to a tag, made from the Tags column of the devices table
+      let tabsShow = () => {};
+      const tagsTab = tagTable(() => devices.table("devices"), tagCol, () => { tabsShow(0); });
+      devices.el.addEventListener("change", tagsTab.refresh);
+      const devcheck = fieldset(DEVCHECK_FIELDS, { device_check_s: set.device_check_s, device_facts_min: set.device_facts_min, device_live_check_s: set.device_live_check_s, device_live_facts_min: set.device_live_facts_min });
+      const devcheckShared = () => { const c = devcheck.get(), o = {}; for (const k of ["device_live_check_s", "device_live_facts_min", "device_check_s", "device_facts_min"]) if (c[k] > 0) o[k] = c[k]; return o; };
       const cluster = fieldset(CLUSTER_FIELDS, cfg.cluster || {});
-      const snmp = fieldset(SNMP_FIELDS, { snmp_communities: cfg.ntp.snmp_communities, snmp_acl: cfg.ntp.snmp_acl, snmp_contact: cfg.ntp.snmp_contact, location: (cfg.snmp || {}).location });
-      const prom = fieldset(PROM_FIELDS, { metrics_acl: cfg.ntp.metrics_acl });
-      const mcp = fieldset(MCP_FIELDS, { mcp_acl: cfg.ntp.mcp_acl, mcp_keys: cfg.ntp.mcp_keys });
-      const lldp = fieldset(LLDP_FIELDS, { lldp: !!cfg.ntp.lldp });
+      const snmp = fieldset(SNMP_FIELDS, { snmp_communities: set.snmp_communities, snmp_acl: set.snmp_acl, snmp_contact: set.snmp_contact, location: (cfg.snmp || {}).location });
+      const prom = fieldset(PROM_FIELDS, { metrics_acl: set.metrics_acl });
+      const mcp = fieldset(MCP_FIELDS, { mcp_port: set.mcp_port, mcp_max_result_mb: set.mcp_max_result_mb, mcp_log: !!set.mcp_log, mcp_log_mb: set.mcp_log_mb, mcp_log_entry_kb: set.mcp_log_entry_kb, mcp_acl: set.mcp_acl, mcp_keys: set.mcp_keys });
+      const topo = fieldset(TOPO_FIELDS, { topology_squares_above: set.topology_squares_above });
+      const topoShared = () => { const n = topo.get().topology_squares_above; return n > 0 && n !== 36 ? { topology_squares_above: n } : {}; };
+      const lldp = fieldset(LLDP_FIELDS, { lldp: !!set.lldp });
+      const priv = privacyForm(set.privacy);
+      const privShared = () => { const p = priv.get(); return p ? { privacy: p } : {}; };
       const lldpShared = () => ({ lldp: lldp.get().lldp });
       // what lldpd is doing on this node, beside the box (refreshed after every save); a few words, never a banner
       const lldpState = h("span", { class: "muted small" });
@@ -3395,7 +3712,7 @@
           const st = (await api("GET", "/api/lldp")).data;
           const words = lldpWords(st);
           clear(lldpState).append(...(st.running ? [pill("ACTIVE", "ok tiny")] : []), words === "Running" ? "" : " " + words);
-          lldpBox.disabled = !!st.deferred;   // AnyName (dnsdir) is on this host and decides
+          lldpBox.disabled = !!st.deferred;   // another program on this host decides
         } catch (_) { clear(lldpState); }
       };
       refreshLLDP();
@@ -3405,12 +3722,12 @@
         if (!lldpState.isConnected) { clearInterval(lldpTimer); return; }
         if (lldpState.offsetParent !== null && !document.hidden) refreshLLDP();
       }, 3000);
-      const alerts = alertsForm(cfg.ntp.alerts);
+      const alerts = alertsForm(set.alerts);
       const alertsShared = () => { const a = alerts.get(); return a ? { alerts: a } : {}; };
-      const backup = backupForm(cfg.ntp.backup, (sch) => { cfg.ntp.schedule = sch; if (state.cfg && state.cfg.ntp) state.cfg.ntp.schedule = sch; });
+      const backup = backupForm(set.backup, (sch) => { set.schedule = sch; if (state.cfg && state.cfg.settings) state.cfg.settings.schedule = sch; });
       const backupShared = () => { const b = backup.get(); return b ? { backup: b } : {}; };
       // what snmpd is doing, under the form (refreshed after every save)
-      const snmpShared = () => { const v = snmp.get(), m = prom.get(); return { snmp_communities: v.snmp_communities, snmp_acl: v.snmp_acl, snmp_contact: v.snmp_contact, metrics_acl: m.metrics_acl, mcp_acl: mcp.get().mcp_acl, mcp_keys: mcp.get().mcp_keys }; };
+      const snmpShared = () => { const v = snmp.get(), m = prom.get(); return { snmp_communities: v.snmp_communities, snmp_acl: v.snmp_acl, snmp_contact: v.snmp_contact, metrics_acl: m.metrics_acl, mcp_acl: mcp.get().mcp_acl, mcp_keys: mcp.get().mcp_keys, ...(mcp.get().mcp_port ? { mcp_port: mcp.get().mcp_port } : {}), ...(mcp.get().mcp_max_result_mb > 1 ? { mcp_max_result_mb: mcp.get().mcp_max_result_mb } : {}), ...(mcp.get().mcp_log ? { mcp_log: true } : {}), ...(mcp.get().mcp_log_mb > 0 ? { mcp_log_mb: mcp.get().mcp_log_mb } : {}), ...(mcp.get().mcp_log_entry_kb > 0 ? { mcp_log_entry_kb: mcp.get().mcp_log_entry_kb } : {}) }; };
       const snmpLocal = () => { const v = snmp.get(); return { location: v.location }; };
       const snmpPill = h("span");   // ACTIVE beside the heading while snmpd is running
       refreshSNMP = async () => {
@@ -3421,57 +3738,15 @@
         } catch (_) { clear(snmpPill); }  // no tag when the node cannot be asked
       };
       refreshSNMP();
-      // the NTP page is five tabs; every card stays in the page (a hidden one is still read when saving)
-      const ntpTabs = () => {
-        const TABS = [
-          ["Servers", ["Upstream servers"]],
-          ["Health", ["Health", "Timing"]],
-          ["Clients", ["Serving", "Client Rate Limiting"]],
-          ["Security", ["Authentication"]],
-          ["Leap seconds", ["Leap seconds"]],
-        ];
-        const titleOf = (c) => ((c.querySelector("header h2") || {}).textContent || "");
-        const panes = TABS.map(() => h("div", { role: "tabpanel" }));
-        for (const c of [...ntp.el.children]) {
-          const i = TABS.findIndex(([, names]) => names.some((n) => n.toLowerCase() === titleOf(c).toLowerCase()));   // the headings are in title case ("Upstream Servers"), the lists here are not
-          panes[i < 0 ? TABS.length - 1 : i].append(c);
-        }
-        const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
-        function show(i, focus) {
-          state.ntpTab = i;
-          panes.forEach((p, j) => { p.hidden = j !== i; });
-          buttons.forEach((b, j) => { b.setAttribute("aria-selected", j === i ? "true" : "false"); b.tabIndex = j === i ? 0 : -1; b.classList.toggle("on", j === i); });
-          if (focus) buttons[i].focus();
-          if (document.getElementById("help-panel") && document.getElementById("help-panel").classList.contains("open")) fillHelp();
-        }
-        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "NTP settings" }, buttons);
-        strip.addEventListener("keydown", (e) => {
-          const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-          if (!d) return;
-          e.preventDefault();
-          show((state.ntpTab + d + TABS.length) % TABS.length, true);
-        });
-        show(state.ntpTab >= 0 && state.ntpTab < TABS.length ? state.ntpTab : 0);
-        return h("div", {}, strip, ...panes);
-      };
       const groupsEl = h("div", {});
       const groups = []; // {el, get}
       const addGroup = (g) => {
-        if (g.piggyback) {   // imported from AnyName: nothing here is ntpdir's to edit; kept as it is when the page saves
-          const card = h("div", { class: "card" }, h("header", {}, h("h3", {}, "Group " + g.group_id + (g.name ? " — " + g.name : ""))),
-            h("div", { class: "body" }, h("p", { class: "hint" }, "Imported from AnyName (gateway " + g.piggyback_of + "): its name, addresses and nodes are managed there. Its NTP servers are edited on the Topology page.")));
-          groups.push({ fs: { get: () => ({ ...g }) }, orig: g, card });
-          groupsEl.append(card);
-          return;
-        }
         const fs = fieldset(GROUP_FIELDS, g);
         const entry = { fs, orig: g };
         const title = h("h3", {}, "Group");
         const card = h("div", { class: "card" },
           h("header", {}, title),
-          h("div", { class: "body" },
-            g.ntp ? h("p", { class: "hint" }, "This gateway has its own NTP servers — edit them on the Topology page.") : null,
-            fs.el));
+          h("div", { class: "body" }, fs.el));
         entry.card = card;
         const gid = fs.el.querySelector("input[type=number]");
         const retitle = () => { title.textContent = "Group " + gid.value; };
@@ -3481,11 +3756,17 @@
       };
       cfg.groups.forEach(addGroup);
       const section = (title, ...kids) => h("div", { class: "card" }, h("header", {}, h("h2", {}, tc(title))), h("div", { class: "body" }, ...kids));
+      // the devices a gateway has (Topology) are not a field of this page: keep them, less any the Devices table no longer lists
+      const keptDevices = (orig) => {
+        const have = new Set((devices.get().devices || []).map((d) => d.name));
+        const l = (orig.devices || []).filter((n) => have.has(n));
+        return l.length ? { devices: l } : {};
+      };
       collect = () => ({
         ...logs.get(),
-        // keep what this form has no fields for (a gateway's own NTP pool)
-        groups: groups.map((g) => ({ ...(g.orig.ntp ? { ntp: g.orig.ntp } : {}), ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...(g.orig.dnsdir_vips ? { dnsdir_vips: g.orig.dnsdir_vips } : {}), ...(g.orig.piggyback ? { piggyback: true, piggyback_of: g.orig.piggyback_of, dnsdir_shared: g.orig.dnsdir_shared } : {}), ...g.fs.get() })),
-        ntp: { ...(cfg.ntp.schedule ? { schedule: cfg.ntp.schedule } : {}), ...(cfg.ntp.server_names ? { server_names: cfg.ntp.server_names } : {}), ...(cfg.ntp.paused_servers ? { paused_servers: cfg.ntp.paused_servers } : {}), ...ntp.get(), ...snmpShared(), ...lldpShared(), ...alertsShared(), ...backupShared() },
+        // keep what this form has no fields for (pauses, removed nodes, the order of the nodes, anycast addresses)
+        groups: groups.map((g) => ({ ...(g.orig.paused ? { paused: true } : {}), ...(g.orig.paused_all ? { paused_all: true } : {}), ...(g.orig.excluded_nodes ? { excluded_nodes: g.orig.excluded_nodes } : {}), ...(g.orig.node_order ? { node_order: g.orig.node_order } : {}), ...(g.orig.paused_vips ? { paused_vips: g.orig.paused_vips } : {}), ...(g.orig.paused_vips_here ? { paused_vips_here: g.orig.paused_vips_here } : {}), ...(g.orig.extra_vips ? { extra_vips: g.orig.extra_vips } : {}), ...keptDevices(g.orig), ...g.fs.get() })),
+        settings: { ...(set.schedule ? { schedule: set.schedule } : {}), ...devices.get(), ...devcreds.get(), ...devcheckShared(), ...snmpShared(), ...lldpShared(), ...topoShared(), ...privShared(), ...alertsShared(), ...backupShared() },
         // the certificate is managed under Web GUI; keep any file paths already in the config
         web: { cert_file: cfg.web.cert_file || "", key_file: cfg.web.key_file || "", ...web.get(), ...sso.get(), ...ldap.get() },
         cluster: cluster.get(),
@@ -3494,8 +3775,6 @@
         ...(cfg.bgp ? { bgp: cfg.bgp } : {}), // edited on the Anycast page
         ...(cfg.ospf ? { ospf: cfg.ospf } : {}), // likewise
         ...(cfg.node_paused ? { node_paused: true } : {}), // set on the Node page
-        ...(selfCheck.get().self_check ? {} : { self_check: false }), // on is the default and is not written
-        ...(cfg.paused_servers_here ? { paused_servers_here: cfg.paused_servers_here } : {}), // set on the Topology page
       });
       // every committed edit (leaving a field, picking an option, ticking a box) is saved and applied
       // Automatic updates are not part of the config file: switching them is its own call, made at once
@@ -3510,10 +3789,8 @@
           catch (e) { cb.checked = !on; say("bad", "Not changed: " + (e.message || e)); }
         });
         // the repository "Fetch from online" downloads from: shared, saved when the field is left; empty goes back to the default
-        const DEFAULT_REPO = "https://github.com/micush/ntpdir";
-        // a read-only account is sent "(hidden)" for the repository and sees its host name only
-        const repoHidden = state.updateRepo === "(hidden)";
-        const repoIn = h("input", { type: "text", value: repoHidden ? "https://github.com" : state.updateRepo ? "https://github.com/" + state.updateRepo : DEFAULT_REPO, readonly: repoHidden, spellcheck: "false", autocomplete: "off", "aria-label": "Online repository" });
+        const DEFAULT_REPO = "https://github.com/micush/netdir";
+        const repoIn = h("input", { type: "text", value: state.updateRepo ? "https://github.com/" + state.updateRepo : DEFAULT_REPO, spellcheck: "false", autocomplete: "off", "aria-label": "Online repository" });
         const repoErr = h("span", { class: "notice bad", role: "alert" });
         repoIn.addEventListener("change", async (ev) => {
           ev.stopPropagation(); // not a config edit
@@ -3532,14 +3809,13 @@
       const certBox = h("div", {});
       certBox.addEventListener("change", (e) => e.stopPropagation());
       VIEWS.certificate.mount(certBox);
-      // the Monitoring page is three tabs: SNMP, Metrics and MCP (every card stays in the page, so a save reads them all)
+      // the Monitoring page is two tabs: SNMP and Metrics (every card stays in the page, so a save reads them all)
       const monitoringTabs = () => {
         const TABS = [
           ["SNMP", (() => { const c = section("SNMP", snmp.el); c.querySelector("h2").append(snmpPill); return c; })()],
           ["Metrics", section("Metrics", prom.el, h("p", { class: "muted small" },
-            h("a", { href: "/api/metrics/dashboard.json", download: "ntpdir-grafana-dashboard.json" }, "Grafana dashboard example"), "\u00a0\u00a0-\u00a0\u00a0",
-            h("a", { href: "/api/metrics/alerts.yml", download: "ntpdir-prometheus-alerts.yml" }, "Prometheus alert rules example")))],
-          ["MCP", section("MCP", mcp.el, h("p", { class: "muted small mono" }, location.origin + "/mcp"))],
+            h("a", { href: "/api/metrics/dashboard.json", download: "netdir-grafana-dashboard.json" }, "Grafana dashboard example"), "\u00a0\u00a0-\u00a0\u00a0",
+            h("a", { href: "/api/metrics/alerts.yml", download: "netdir-prometheus-alerts.yml" }, "Prometheus alert rules example")))],
         ];
         const panes = TABS.map(([, el]) => h("div", { role: "tabpanel" }, el));
         const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
@@ -3558,6 +3834,29 @@
           show((state.monTab + d + TABS.length) % TABS.length, true);
         });
         show(state.monTab >= 0 && state.monTab < TABS.length ? state.monTab : 0);
+        return h("div", {}, strip, ...panes);
+      };
+      // the Devices page is four tabs: Devices, Logins, Checks and Tags (every table stays in the page, so a save reads them all)
+      const devicesTabs = () => {
+        const TABS = [["Devices", section("Devices", devices.el, loginList)], ["Logins", section("Logins", devcreds.el)], ["Checks", section("Checks", devcheck.el)], ["Tags", section("Tags", tagsTab.el)]];
+        const panes = TABS.map(([, el]) => h("div", { role: "tabpanel" }, el));
+        const buttons = TABS.map(([name], i) => h("button", { type: "button", role: "tab", class: "dtab", onclick: () => show(i) }, name));
+        function show(i, focus) {
+          state.devTab = i;
+          refreshHelp();
+          panes.forEach((p, j) => { p.hidden = j !== i; });
+          buttons.forEach((b, j) => { b.setAttribute("aria-selected", j === i ? "true" : "false"); b.tabIndex = j === i ? 0 : -1; b.classList.toggle("on", j === i); });
+          if (focus) buttons[i].focus();
+        }
+        const strip = h("div", { class: "dtabs", role: "tablist", "aria-label": "Device settings" }, buttons);
+        strip.addEventListener("keydown", (e) => {
+          const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+          if (!d) return;
+          e.preventDefault();
+          show((state.devTab + d + TABS.length) % TABS.length, true);
+        });
+        tabsShow = show;
+        show(state.devTab >= 0 && state.devTab < TABS.length ? state.devTab : 0);
         return h("div", {}, strip, ...panes);
       };
       // Syslog: the state of the connection is shown under the settings, with a button that sends a test message
@@ -3585,7 +3884,7 @@
       // the Settings page is tabs (every card stays in the page, so a save reads all of them)
       const settingsTabs = () => {
         const TABS = [
-          ["general", "General", h("div", {}, section("Self-check", selfCheck.el), section("Neighbor discovery", lldp.el, h("p", { class: "f" }, lldpState)))],
+          ["general", "General", h("div", {}, section("Neighbor discovery", lldp.el, h("p", { class: "f" }, lldpState)), section("Topology", topo.el))],
           ["logs", "Logs", h("div", {}, section("Log level", logs.el),
             section("Syslog", syslog.el, h("div", { class: "toolbar" }, syslogTest, syslogMsg, syslogState),
               h("p", { class: "hint" }, "Every line the log shows is also sent to the server, from this node only: the setting is not copied to the other nodes. A server that is down never holds anything up; the newest messages wait in a queue and the oldest are dropped if it fills.")))],
@@ -3616,11 +3915,13 @@
       const panels = [
         ["general", "Settings", settingsTabs()],
         ["groups", "Gateway groups", h("div", {}, groupsEl)],
-        ["ntp", "NTP", ntpTabs()],
+        ["devices", "Devices", devicesTabs()],
         ["web", "Web GUI", h("div", {}, section("Web GUI", web.el), certBox)],
         ["sso", "SSO", section("Single sign-on",
           sso.el)],
         ["ldap", "LDAP", section("LDAP sign-in", ldap.el)],
+        ["mcp", "MCP", (() => { const c = section("MCP", mcp.el, h("p", { class: "muted small mono" }, mcpURL())); c.classList.add("mcpcard"); return c; })()],
+        ["privacy", "Privacy", priv.el],
         ["monitoring", "Monitoring", monitoringTabs()],
         ["alerts", "Alerts", section("Alerts", alerts.el)],
         ["backup", "Backup", backup.el],
@@ -3644,6 +3945,7 @@
       const r = await api("GET", "/api/config");
       state.cfg = r.config;
       state.cfgInfo = r;
+      state.cfgBase = r.base;
       clear(status);
       if (!r.exists) say("info", "No config file at " + r.path + " yet — the first change creates it.");
       draw();
@@ -3668,14 +3970,21 @@
         return;
       }
       try {
-        const r = await api("PUT", "/api/config", { config: cfg });
+        const r = await api("PUT", "/api/config", { config: cfg, base: state.cfgBase });
         state.cfg = r.config;
+        state.cfgBase = r.base;
         clear(status);
         state.cfgInfo.exists = true;
         setTimeout(() => refreshSNMP(), 1500);   // snmpd was (re)started by the save
         setTimeout(() => refreshSyslog(), 800);  // so was the connection to the syslog server
         setTimeout(() => refreshLLDP(), 1500);   // and lldpd started or stopped
-      } catch (e) { if (e.message !== "unauthenticated") say("bad", "Not saved: " + e.message); }
+      } catch (e) {
+        if (e.message === "unauthenticated") return;
+        if (e.status === 409) {   // the saved configuration is newer than this page's copy: take it (as the message says), or every later save is refused too
+          try { await load(); } catch (_) { /* the message below still tells what happened */ }
+        }
+        say("bad", "Not saved: " + e.message);
+      }
     }
 
     return {
@@ -3687,7 +3996,7 @@
       },
     };
   };
-  for (const id of ["general", "groups", "ntp", "web", "sso", "ldap", "monitoring", "alerts", "backup"]) VIEWS["cfg_" + id] = makeConfigView(id);
+  for (const id of ["general", "groups", "mcp", "privacy", "devices", "web", "sso", "ldap", "monitoring", "alerts", "backup"]) VIEWS["cfg_" + id] = makeConfigView(id);
 
   // ── shared helpers for the management pages ───────────────────────────────
   // Nothing is said when every node answered (the Node menu says "Cluster"); when one could not, which and why, since the
@@ -3765,16 +4074,6 @@
   // The Monitor page (named) has the node's name and its addresses in two columns; the cluster address is the name's tooltip.
   const membersTable = (v, onRemove, named) => {
     const roleOf = (p) => (p.is_primary ? "primary" : (p.role || "replica"));
-    // How far each node's clock is from this node's: both measure against the same servers, so the difference of the two offsets
-    // chrony reports is the difference of the clocks (a magnitude: which one leads is not claimed).
-    const me = v.peers.find((p) => p.self);
-    const clockCell = (p) => {
-      if (!p.reachable || !p.clock) return h("td", { class: "num muted", title: p.reachable ? "this node does not report its clock (an older version, or chrony is not running)" : "" }, "–");
-      if (!p.clock.synced) return h("td", { class: "num" }, pill("not synchronised", "warn"));
-      if (p.self || !me || !me.clock || !me.clock.synced) return h("td", { class: "num muted", title: "offset " + p.clock.offset_ms.toFixed(3) + " ms from chrony's time" }, p.self ? "this node" : "–");
-      const d = Math.abs(p.clock.offset_ms - me.clock.offset_ms);
-      return h("td", { class: "num", title: "offsets from chrony's time: this node " + me.clock.offset_ms.toFixed(3) + " ms, that node " + p.clock.offset_ms.toFixed(3) + " ms" }, d.toFixed(2));
-    };
     const rows = v.peers.map((p) => h("tr", Object.assign({ class: p.self ? "local" : "" }, onRemove && !p.self ? { tabindex: "0", oncontextmenu: rowMenu([["Delete", () => onRemove(p), "danger"]]) } : {}),
       named ? h("td", { class: "nname", title: p.addr }, p.hostname || p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)) : h("td", { class: "mono" }, p.addr, p.self ? " ★" : "", soakMark(p.soak_sec)),
       named ? h("td", { class: "mono" }, (p.ips && p.ips.length) ? p.ips.map((ip) => h("div", {}, ip)) : "–") : null,
@@ -3782,13 +4081,11 @@
       h("td", {}, p.reachable ? pill("yes", "ok") : p.restarting ? pill("restarting", "info") : pill("NO", "bad"), p.updating || p.restarting ? [" ", pill("updating", "warn")] : null),
       h("td", { class: "num" }, p.reachable ? p.epoch : "–"),
       h("td", { class: "num" }, p.version || "–"), h("td", { class: "num" }, p.source_version || "–"),
-      clockCell(p),
       h("td", {}, p.self ? "now" : when(p.last_seen)),
       h("td", { class: "wrap muted" }, p.error || "")));
     return h("div", { class: "scroll" }, h("table", { class: named ? "tight" : null },
-      h("thead", {}, h("tr", {}, (named ? ["Node name", "Node IP"] : ["Node"]).concat(["Role", "Reachable", "Epoch", "Running", "Source", "Clock vs this node (ms)", "Last seen", ""]).map((t, i) => h("th", { class: i >= (named ? 4 : 3) && i <= (named ? 7 : 6) ? "num" : "" }, t)))),
-      h("tbody", {}, rows)),
-      v.clock_spread ? h("p", { class: "hint" }, "Largest difference between nodes: " + v.clock_spread.ms.toFixed(2) + " ms (" + v.clock_spread.apart + "), across " + v.clock_spread.nodes + " synchronised nodes.") : null);
+      h("thead", {}, h("tr", {}, (named ? ["Node name", "Node IP"] : ["Node"]).concat(["Role", "Reachable", "Epoch", "Running", "Source", "Last seen", ""]).map((t, i) => h("th", { class: i >= (named ? 4 : 3) && i <= (named ? 6 : 5) ? "num" : "" }, t)))),
+      h("tbody", {}, rows)));
   };
   const say = (el, kind, ...msg) => kind !== "bad" ? clear(el) : clear(el).append(h("div", { class: "notice " + kind, role: kind === "bad" ? "alert" : "status" }, ...msg));
   const fail = (el) => (e) => { if (e.message !== "unauthenticated") say(el, "bad", e.message); };
@@ -3807,11 +4104,47 @@
       rd.readAsText(f);
     });
   }
+  // Any answer as plain text instead of JSON: a list of flat records is a table, a record is "name  value" lines, a nested one is indented.
+  function plainText(v) {
+    const scalar = (x) => x == null || typeof x !== "object";
+    const word = (k) => { k = String(k).replace(/[_-]+/g, " "); return k.charAt(0).toUpperCase() + k.slice(1); };
+    const cell = (x) => (x == null ? "" : Array.isArray(x) ? x.map(cell).join(", ") : typeof x === "object" ? Object.entries(x).map((e) => e[0] + "=" + cell(e[1])).join(" ") : String(x));
+    const table = (rows, cols) => {
+      const grid = [cols.map(word)].concat(rows.map((r) => cols.map((c) => cell(r[c]))));
+      const w = cols.map((_, i) => Math.max(...grid.map((r) => r[i].length)));
+      return grid.map((r) => r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd()).join("\n");
+    };
+    const flat = (o) => o && typeof o === "object" && !Array.isArray(o) && Object.values(o).every((x) => scalar(x) || (Array.isArray(x) && x.every(scalar)));
+    const ind = (t, p) => t.split("\n").map((l) => (l ? p + l : l)).join("\n");
+    function go(x) {
+      if (x == null) return "";
+      if (scalar(x)) return String(x);
+      if (Array.isArray(x)) {
+        if (!x.length) return "None.";
+        if (x.every(scalar)) return x.join("\n");
+        if (x.every(flat)) {
+          const cols = [];
+          x.forEach((r) => Object.keys(r).forEach((k) => { if (!cols.includes(k)) cols.push(k); }));
+          return table(x, cols);
+        }
+        return x.map(go).join("\n\n");
+      }
+      const keys = Object.keys(x).filter((k) => x[k] != null && x[k] !== "");
+      if (!keys.length) return "None.";
+      const w = Math.max(...keys.filter((k) => scalar(x[k]) || (Array.isArray(x[k]) && x[k].every(scalar))).map((k) => word(k).length), 0) + 2;
+      return keys.map((k) => {
+        const e = x[k];
+        if (scalar(e) || (Array.isArray(e) && e.every(scalar))) return word(k).padEnd(w) + cell(e);
+        return word(k) + "\n" + ind(go(e), "  ");
+      }).join("\n");
+    }
+    return go(v);
+  }
   function saveText(name, text) {
     const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: name });
     document.body.append(a); a.click(); a.remove();
   }
-  // The small download icon on the cards of Monitor ▸ Statistics and Monitor ▸ Node: the card's numbers as a CSV file, built in the
+  // The small download icon on the cards of Monitor ▸ MCP and Monitor ▸ Node: the card's numbers as a CSV file, built in the
   // browser from what the page already holds.  rows() runs at the click (the first row is the header).  A text cell that starts with
   // = + - or @ is written with a leading apostrophe, so a spreadsheet cannot read a name that came from the network as a formula.
   const csvCell = (v) => {
@@ -3822,7 +4155,6 @@
   };
   const csvIso = (sec) => new Date(sec * 1000).toISOString();
   const csvNum = (v) => (typeof v === "number" && isFinite(v) ? Math.round(v * 1000) / 1000 : "");
-  const csvShare = (n, t) => (t > 0 ? Math.round((n / t) * 1e6) / 1e4 : "");
   function saveCsv(name, rows) {
     const url = URL.createObjectURL(new Blob([rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" }));
     const a = h("a", { href: url, download: name });
@@ -3834,7 +4166,7 @@
     for (const [k, v] of Object.entries({ viewBox: "0 0 24 24", "aria-hidden": "true", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" })) svg.setAttribute(k, v);
     p.setAttribute("d", "M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 20h16");
     svg.append(p);
-    const file = "ntpdir-" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".csv";
+    const file = "netdir-" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".csv";
     return h("button", { type: "button", class: "btn small csv", title: "Download as CSV", "aria-label": "Download " + title + " as CSV", onclick: () => saveCsv(file, rows()) }, svg);
   }
   // Expiry warning under the tabs (certificate state is cheap to check once per login).
@@ -3965,7 +4297,7 @@
   // ── Certificate  (CLI: --tls-status/-install/-csr/-revert/-regenerate) ─────
   VIEWS.certificate = (() => {
     let info, status, csrBox, tools;
-    const sourceLabel = { files: "Files set in the configuration file", installed: "Uploaded on this page", cluster: "Copied from the cluster's main node", "self-signed": "Created automatically by ntpdir" };
+    const sourceLabel = { files: "Files set in the configuration file", installed: "Uploaded on this page", cluster: "Copied from the cluster's main node", "self-signed": "Created automatically by netdir" };
     const fold = (title, ...kids) => h("details", { class: "card fold" }, h("summary", {}, title), h("div", { class: "body" }, ...kids));
 
     function drawInfo(c) {
@@ -3990,7 +4322,7 @@
         ta.value = c.pending_csr;
         csrBox.append(
           ta, h("div", { class: "toolbar" }, copyBtn(() => ta.value),
-            h("button", { class: "btn small", type: "button", onclick: () => saveText("ntpdir.csr", ta.value) }, "Download"),
+            h("button", { class: "btn small", type: "button", onclick: () => saveText("netdir.csr", ta.value) }, "Download"),
             h("button", { class: "btn small", type: "button", onclick: async () => {
               if (!confirm("Throw away the pending request?")) return;
               try { await api("POST", "/api/tls/csr/cancel", {}); await load(); } catch (e) { fail(status)(e); }
@@ -4034,7 +4366,7 @@
               try { await api("POST", "/api/tls/csr", { cn: cn.value.trim(), dns: lines(names), ips: lines(ips) }); say(status, "ok", "Request created."); await load(); } catch (e) { fail(status)(e); }
             } }, "Create request")), csrBox),
           fold("Go back to the automatic certificate",
-            h("p", { class: "hint" }, "AnyTime can make its own certificate. Browsers do not trust it, but connections are still encrypted."),
+            h("p", { class: "hint" }, "MCP Network Director can make its own certificate. Browsers do not trust it, but connections are still encrypted."),
             h("div", { class: "toolbar" },
               h("button", { class: "btn warn", type: "button", onclick: async () => {
                 if (!confirm("Stop using the uploaded certificate and go back to the automatic one?")) return;
@@ -4051,7 +4383,7 @@
 
   // ── Cluster  (CLI: --cluster-status/-token/-join/-promote/-remove/-unremove/-leave/-sync) ──
   VIEWS.cluster = (() => {
-    let dyn, status, tokenBox, joinBox;
+    let dyn, status, tokenBox, joinBox, clearBtn;
 
     async function act(path, body, confirmText, okText) {
       if (confirmText && !confirm(confirmText)) return;
@@ -4079,6 +4411,8 @@
       joinBox.classList.toggle("hidden", !v.joinable);
       leaveBtn.classList.toggle("hidden", v.joinable);
       promoteBtn.classList.toggle("hidden", v.role === "primary");
+      clearBtn.disabled = !v.join_codes;
+      clearBtn.title = v.join_codes ? v.join_codes + " unused" : "No unused join codes";
       lastView = v;
     }
     let leaveBtn, promoteBtn, lastView = null;
@@ -4088,9 +4422,9 @@
         status = h("div", { "aria-live": "polite" });
         dyn = h("div", {});
         tokenBox = h("div", {});
-        const code = h("textarea", { rows: 3, spellcheck: "false", class: "pem", placeholder: "ntpdir-join-v1:…", "aria-label": "Join code" });
+        const code = h("textarea", { rows: 3, spellcheck: "false", class: "pem", placeholder: "netdir-join-v1:…", "aria-label": "Join code" });
         joinBox = section("Join an existing cluster",
-          h("p", { class: "hint" }, "Paste a join code created on a member (“Create join code” there). This node's shared settings — NTP block, VIPs, keys and timers — are replaced by the cluster's; its interface, priority, weight, preemption and neighbours stay its own. A snapshot of the current configuration is saved first."),
+          h("p", { class: "hint" }, "Paste a join code created on a member (“Create join code” there). This node's shared settings — the settings block, VIPs, keys and timers — are replaced by the cluster's; its interface, priority, weight, preemption and neighbours stay its own. A snapshot of the current configuration is saved first."),
           code, h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "button", onclick: async (ev) => {
             if (!confirm("Join this node to the cluster? Its shared settings will be replaced by the cluster's.")) return;
             ev.target.disabled = true;
@@ -4098,6 +4432,11 @@
             catch (e) { fail(status)(e); } finally { ev.target.disabled = false; }
           } }, "Join cluster")));
         leaveBtn = h("button", { class: "btn danger", type: "button", onclick: () => act("/api/cluster/leave", {}, "Leave the cluster? This node keeps its settings and becomes its own single-node cluster.", "Left the cluster.") }, "Leave cluster");
+        // withdraws the join codes this node handed out that nobody used (there can be 20 at most); the code shown above goes with them
+        clearBtn = h("button", { class: "btn", type: "button", disabled: true, onclick: async () => {
+          if (!confirm("Clear this node's unused join codes?\n\nA code created before no longer works.")) return;
+          try { await api("POST", "/api/cluster/token/clear", {}); clear(tokenBox); clear(status); await VIEWS.cluster.poll(); } catch (e) { fail(status)(e); }
+        } }, "Clear join codes");
         promoteBtn = h("button", { class: "btn warn", type: "button", onclick: () => act("/api/cluster/promote", {}, "Promote THIS node to primary?\n\nDo this only if the current primary is gone for good (or you are moving the role on purpose). Every other member follows the new primary.", "This node is now the primary.") }, "Promote this node");
         main.append(status,
           h("div", { class: "toolbar" },
@@ -4107,9 +4446,11 @@
                 const ta = h("textarea", { rows: 4, readonly: true, class: "pem", "aria-label": "Join code" }); ta.value = r.code;
                 clear(tokenBox).append(h("div", { class: "card" }, h("header", {}, h("h2", {}, tc("Join code")), h("span", { class: "muted" }, "single use, valid until " + when(r.expires))),
                   h("div", { class: "body" }, ta, h("div", { class: "toolbar" }, copyBtn(() => ta.value),
-                    h("span", { class: "hint" }, "Paste it on the new node (Cluster → Join) or run: ntpdir --cluster-join '<code>'")))));
+                    h("span", { class: "hint" }, "Paste it on the new node (Cluster → Join) or run: netdir --cluster-join '<code>'")))));
+                VIEWS.cluster.poll().catch(() => {});   // Clear join codes counts the new one at once
               } catch (e) { fail(status)(e); }
             } }, "Create join code"),
+            clearBtn,
             h("button", { class: "btn", type: "button", onclick: () => act("/api/cluster/sync", {}, null, "Synced.") }, "Sync now"),
             h("span", { class: "spacer" }), promoteBtn, leaveBtn),
           tokenBox, dyn, h("p", { class: "hint" }, "★ marks this node"), joinBox);
@@ -4140,7 +4481,7 @@
     function draw(v) { const real = dyn; dyn = h("div", {}); try { build(v); } finally { morph(real, dyn); dyn = real; } }
     // built into a detached copy and morphed in: the page keeps its elements (and so its scroll boxes) from one poll to the next
     function build(v) {
-      if (!v.toolchain) dyn.append(h("div", { class: "notice bad", role: "alert" }, "No Go toolchain (≥ 1.24) was found on this node, so it cannot build updates itself. Re-run install.sh, which keeps one under /usr/local/share/ntpdir/go."));
+      if (!v.toolchain) dyn.append(h("div", { class: "notice bad", role: "alert" }, "No Go toolchain (≥ 1.24) was found on this node, so it cannot build updates itself. Re-run install.sh, which keeps one under /usr/local/share/netdir/go."));
       const newer = v.source_version && Number(v.source_version) > Number(v.running);
       fill(stats, 
         stat("Running", "v" + v.running), stat("Staged source", v.source_version ? "v" + v.source_version : "none"),
@@ -4215,551 +4556,6 @@
       },
       async poll() { draw((await api("GET", "/api/update")).data); },
       poll_ms: 2000,
-    };
-  })();
-
-  // ── Statistics, Monitor  (CLI: --stats) ──────────────────────────────────────
-  // Requests by outcome over time, NTP versions, IP families, top clients and servers.  The daemon keeps them for 30 days (in memory, saved to disk every 5 minutes).  The picked node (top-bar
-  // Node menu) is the one shown.
-  VIEWS.stats = (() => {
-    const SVGNS = "http://www.w3.org/2000/svg";
-    const sv = (tag, attrs, ...kids) => {
-      const el = document.createElementNS(SVGNS, tag);
-      for (const [k, v] of Object.entries(attrs || {})) {
-        if (v == null || v === false) continue;
-        if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
-      }
-      for (const kid of kids.flat(Infinity)) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
-      return el;
-    };
-    // Series in the validated colour order; the colour belongs to the entity.
-    const SERIES = [
-      { key: "total", label: "Total", cls: "q-total" },
-      { key: "answered", label: "Answered", cls: "q-ok" },
-      { key: "kod", label: "Kiss-o'-death", cls: "q-nx" },
-      { key: "refused", label: "Refused", cls: "q-ref" },
-      { key: "failed", label: "Failed", cls: "q-fail" },
-    ];
-    // an NTP version / IP family keeps its colour whatever its rank
-    const TYPE_CLS = { "NTPv4": "t1", "NTPv3": "t2", "NTPv2": "t3", "NTPv1": "t4" };
-    const OUTCOME_CLS = Object.fromEntries(SERIES.filter((x) => x.key !== "total").map((x) => [x.label, x.cls]));   // chrony cannot tell the NTP version of a client, so the card shows how the requests ended
-    const PROTO_CLS = { IPv4: "t1", IPv6: "t2" };
-    const RANGES = [["now", "Now"], ["1h", "Last Hour"], ["1d", "Last Day"], ["7d", "Last Week"], ["30d", "Last Month"], ["custom", "Custom"]];
-    const REFRESH_MS = 10000;
-    const n0 = (n) => Number(n || 0).toLocaleString();
-    // a share is rounded to two decimals at most, but never to 100% unless it is all of them (99.99%) or to 0% unless it is none (<0.01%)
-    const pct = (n, t) => {
-      if (t <= 0) return "–";
-      if (n === 0) return "0%";
-      if (n >= t) return "100%";
-      const x = Math.round((100 * n) / t * 100) / 100;
-      return x >= 100 ? "99.99%" : x <= 0 ? "<0.01%" : String(x) + "%";
-    };
-
-    let status, bar, cnote, tiles, chartBox, pies, tops, foot, rangeBtns, fromIn, toIn, customRow;
-    let range = "1h", qpsView = false, clientsView = false, sel = "", pickClient = "", pickServer = "", last = null, lastAt = 0, seq = 0, topPage = { c: 0, d: 0 }, topKey = "", cFilter = "", sFilter = "", filterTimer = 0;
-
-    // ── fetching ──
-    // the picked node (Node menu in the top bar) answers; pick another member there
-    // sel: the answer kind a tile picked ("" = everything); the daemon limits the donuts and
-    // top lists to it, the chart just shows that one line
-    const q = (from, to) => "/api/qstats?from=" + encodeURIComponent(from) + (to ? "&to=" + encodeURIComponent(to) : "") + (sel ? "&outcome=" + sel : "") + (pickClient ? "&client=" + encodeURIComponent(pickClient) : "") + (pickServer ? "&server=" + encodeURIComponent(pickServer) : "") + (cFilter ? "&cmatch=" + encodeURIComponent(cFilter) : "") + (sFilter ? "&smatch=" + encodeURIComponent(sFilter) : "");
-    const KINDS = { answered: "answered", failed: "failed", kod: "kod", refused: "refused" };
-    async function fetchData() {
-      let from = range, to = "";
-      if (range === "custom") {
-        const a = new Date(fromIn.value), b = new Date(toIn.value);
-        if (isNaN(a) || isNaN(b) || a >= b) throw new Error("Pick a start that is before the end.");
-        from = String(Math.floor(a / 1000)); to = String(Math.floor(b / 1000));
-      }
-      return (await api("GET", q(from, to))).data;
-    }
-
-    // ── drawing ──
-    const when2 = (sec, step) => {
-      const d = new Date(sec * 1000);
-      const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-      return step >= 3600 || state.statsLong ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm : hm;
-    };
-    const niceMax = (v) => {
-      if (v <= 5) return 5;
-      const p = Math.pow(10, Math.floor(Math.log10(v)));
-      for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
-      return 10 * p;
-    };
-
-    function drawTiles(d) {
-      const t = d.sums.total;
-      // a tile with a kind is a button: it limits the lists and the chart to that answer; Total Queries clears it
-      const tile = (cls, label, value, sub, key, tip) => h(key === undefined ? "div" : "button", key === undefined ? { class: "qtile " + cls, title: tip || null } :
-        { type: "button", class: "qtile pick " + cls, "aria-pressed": (key === "qps" ? qpsView : key === "clients" ? clientsView : (KINDS[key] || "") === sel && !qpsView && !clientsView) ? "true" : "false",
-          title: key === "qps" || key === "clients" ? (tip || "") : key ? "Show only " + label + " in the chart and lists" : "Show everything",
-          onclick: () => (key === "qps" ? toggleQps() : key === "clients" ? toggleClients() : pick(KINDS[key] || "")) },
-        h("div", { class: "qv", title: typeof value === "string" ? null : n0(value) }, typeof value === "string" ? value : shortCount(value)),   // a million and up is written short (2.71M, 100.5M), the full number in the tooltip
-        h("div", { class: "qs" }, sub || "\u00a0"), h("div", { class: "ql" }, label));
-      clear(tiles).append(
-        tile("q-total", "Total Requests", t, "", ""),
-        // requests per second: now = the last finished bucket (the newest one is still filling), with the average and the peak over the range
-        (() => { const b = d.total || [], st = d.step || 60, f = (v) => (v >= 100 ? shortCount(Math.round(v)) : v.toFixed(1)),
-            rate = b.map((v) => v / st), cur = rate.length > 1 ? rate[rate.length - 2] : rate.length ? rate[0] : 0,
-            avg = rate.length ? rate.reduce((a, v) => a + v, 0) / rate.length : 0, peak = rate.length ? Math.max(...rate) : 0;
-          return tile("q-qps", "RPS", f(cur), rate.length ? "peak " + f(peak) : "", "qps", "Click to draw requests per second in the chart. Requests per second in the last finished interval. Over the chosen range: average " + f(avg) + ", peak " + f(peak)); })(),
-        tile("q-ok", "Answered", d.sums.answered, pct(d.sums.answered, t), "answered"),
-        tile("q-fail", "Failed", d.sums.failed, pct(d.sums.failed, t), "failed"),
-        tile("q-nx", "Kiss-o'-death", d.sums.kod, pct(d.sums.kod, t), "kod"),
-        tile("q-ref", "Refused", d.sums.refused, pct(d.sums.refused, t), "refused"),
-        tile("q-clients", "Clients", d.sums.clients, "", "clients", "Click to draw the clients counted so far in the chart; its last point is this number (the line moves in steps of ten minutes up to a day and a half, an hour beyond)"));
-    }
-
-    // the chart's numbers: every line, one row per interval (the one still filling is left out, as in the chart)
-    const chartRows = (d) => {
-      const len = d.total.length, n = len - (partialLast(d, len) ? 1 : 0);
-      const rows = [["Time (UTC)", ...SERIES.map((s) => s.label), ...(d.client_counts ? ["Clients"] : [])]];
-      for (let i = 0; i < n; i++) rows.push([csvIso(d.start + i * d.step), ...SERIES.map((s) => (d[s.key] || [])[i]), ...(d.client_counts ? [d.client_counts[i]] : [])]);
-      return rows;
-    };
-    function drawChart(d) {
-      clear(chartBox);
-      const src = d;   // the data as the daemon sent it (below, a view may add a line of its own)
-      const only = Object.keys(KINDS).find((k) => KINDS[k] === sel); // the one line a tile picked
-      const single = qpsView || clientsView;   // one line of its own: no series toggles, no RPS row
-      if (clientsView) d = Object.assign({}, d, { client_counts: d.client_counts || d.total.map(() => 0) });
-      if (qpsView) d = Object.assign({}, d, { qps: (d[only || "total"] || d.total).map((v) => v / (d.step || 60)) });   // the rate of what is picked (all queries when nothing is)
-      const fq = (v) => (v >= 10 ? n0(Math.round(v)) : Number(v).toFixed(1));
-      const qs = SERIES.find((s) => s.key === (only || "total"));
-      const avail = clientsView ? [{ key: "client_counts", label: "Clients" + (only ? " — " + qs.label : ""), cls: qs.cls }] : qpsView ? [{ key: "qps", label: "RPS" + (only ? " — " + qs.label : ""), cls: qs.cls }] : SERIES.filter((s) => only ? s.key === only : true);
-      // no legend: each tile's coloured edge is its line's colour, and clicking a tile shows only that line
-      const shown = avail;
-      const n = d.total.length - (partialLast(d, d.total.length) && !clientsView ? 1 : 0);   // the bucket still filling is left out (not for the running client count: it only grows, and its last point is the tile)
-      const top = Math.max(qpsView ? 0.1 : 1, ...shown.flatMap((s) => d[s.key].slice(0, n))), max = qpsView ? 4 * niceMax(top / 4) : niceMax(top);   // a rate gets four round steps
-      const yLabels = [0, 1, 2, 3, 4].map((g) => (qpsView ? fq((max * g) / 4) : n0(Math.round((max * g) / 4))));
-      const W = 1000, H = 300, L = axisMargin(yLabels, 52), R = 14, T = 12, B = 28, pw = W - L - R, ph = H - T - B;
-      const x = (i) => L + (n <= 1 ? pw / 2 : (pw * i) / (n - 1));
-      const y = (v) => T + ph - (ph * v) / max;
-      const svg = sv("svg", { class: "qchart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": clientsView ? "Distinct clients over time" : qpsView ? "Requests per second over time" : "Requests over time" });
-      for (let g = 0; g <= 4; g++) {
-        const v = (max * g) / 4;
-        svg.append(sv("line", { class: "qgrid", x1: L, x2: W - R, y1: y(v), y2: y(v) }), sv("text", { class: "qax", x: L - 6, y: y(v) + 4, "text-anchor": "end" }, yLabels[g]));
-      }
-      const ticks = Math.min(8, n);
-      for (let k = 0; k < ticks; k++) {
-        const i = ticks === 1 ? 0 : Math.round((k * (n - 1)) / (ticks - 1));
-        svg.append(sv("text", { class: "qax", x: x(i), y: H - 8, "text-anchor": k === 0 ? "start" : k === ticks - 1 ? "end" : "middle" }, when2(d.start + i * d.step, d.step)));
-      }
-      for (const s of shown) {
-        const pts = d[s.key].slice(0, n).map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ");
-        svg.append(sv("polyline", { class: "qline " + s.cls, points: pts }));
-      }
-      // hover: a crosshair, a dot per series and one tooltip with the values
-      const cross = sv("line", { class: "qcross hidden", y1: T, y2: T + ph });
-      const dots = shown.map((s) => sv("circle", { class: "qdot hidden " + s.cls, r: 4, cx: 0, cy: 0 }));
-      const tip = sv("g", { class: "qtip hidden" });
-      const tipBg = sv("rect", { class: "qtipbg", rx: 6, width: 210, height: 20 + 18 * (shown.length + 1 + (single ? 0 : 1)) });
-      const tipHead = sv("text", { class: "qtiph", x: 10, y: 17 });
-      const tipRows = shown.map((s, k) => sv("g", { transform: `translate(10 ${36 + 18 * k})` }, sv("rect", { class: s.cls + " sw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, "")));
-      const qpsRow = single ? null : sv("g", { transform: `translate(10 ${36 + 18 * shown.length})` }, sv("rect", { class: "sw qpsw", width: 10, height: 10, y: -9, rx: 2 }), sv("text", { class: "qtipt", x: 16, y: 0 }, ""));   // the rate at this point, beside the counts
-      tip.append(tipBg, tipHead, ...tipRows, ...(qpsRow ? [qpsRow] : []));
-      const hit = sv("rect", { class: "qhit", x: L, y: T, width: pw, height: ph,
-        onmousemove: (e) => {
-          const r = svg.getBoundingClientRect();
-          const px = ((e.clientX - r.left) / r.width) * W;
-          const i = Math.max(0, Math.min(n - 1, Math.round(((px - L) / pw) * (n - 1))));
-          cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.classList.remove("hidden");
-          shown.forEach((s, k) => { dots[k].classList.remove("hidden"); dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", y(d[s.key][i])); });
-          tipHead.textContent = when((d.start + i * d.step) * 1000);
-          shown.forEach((s, k) => { tipRows[k].lastChild.textContent = s.label + ": " + (qpsView ? fq(d[s.key][i]) : n0(d[s.key][i])); });
-          if (qpsRow) qpsRow.lastChild.textContent = "RPS" + (only ? " — " + qs.label : "") + ": " + fq(d[only || "total"][i] / (d.step || 60));
-          const tx = x(i) > W / 2 ? x(i) - 220 : x(i) + 12;
-          tip.setAttribute("transform", `translate(${tx} ${T + 6})`); tip.classList.remove("hidden");
-        },
-        onmouseleave: () => { cross.classList.add("hidden"); tip.classList.add("hidden"); dots.forEach((c) => c.classList.add("hidden")); } });
-      svg.append(cross, ...dots, hit, tip);
-      chartBox.append(h("div", { class: "qtools" }, csvButton("Requests over time", () => chartRows(src))), svg);
-    }
-
-    function donut(title, items, clsOf, keep) {
-      const total = items.reduce((a, e) => a + e.count, 0);
-      const head = h("div", { class: "qdhead" }, h("h3", {}, tc(title)));
-      const card = h("div", { class: "qdonut" }, head);
-      if (!total) return card.appendChild(h("div", { class: "empty" }, "No requests in this range.")), card;
-      head.append(csvButton(title, () => [["Name", "Requests", "Share %"], ...items.map((e) => [e.name, e.count, csvShare(e.count, total)])]));
-      // fold everything beyond the named, coloured ones into "Other"
-      const rows = [];
-      let other = 0;
-      for (const e of items) { if (clsOf[e.name] && rows.length < keep) rows.push(e); else other += e.count; }
-      if (other) rows.push({ name: "Other", count: other, cls: "t-other" });
-      const S = 180, c = S / 2, ro = 84, ri = 52;
-      const svg = sv("svg", { class: "qpie", viewBox: `0 0 ${S} ${S}`, role: "img", "aria-label": title });
-      let a0 = -Math.PI / 2;
-      for (const e of rows) {
-        const frac = e.count / total, a1 = a0 + frac * 2 * Math.PI;
-        const cls = e.cls || clsOf[e.name];
-        const tt = sv("title", {}, e.name + ": " + n0(e.count) + " (" + pct(e.count, total) + ")");
-        if (frac > 0.9999) {
-          svg.append(sv("circle", { class: "qseg ring " + cls, cx: c, cy: c, r: (ro + ri) / 2, "stroke-width": ro - ri }, tt));
-        } else {
-          const p = (r, a) => (c + r * Math.cos(a)).toFixed(2) + " " + (c + r * Math.sin(a)).toFixed(2);
-          const big = a1 - a0 > Math.PI ? 1 : 0;
-          svg.append(sv("path", { class: "qseg " + cls, "stroke-width": 2, d: `M ${p(ro, a0)} A ${ro} ${ro} 0 ${big} 1 ${p(ro, a1)} L ${p(ri, a1)} A ${ri} ${ri} 0 ${big} 0 ${p(ri, a0)} Z` }, tt));
-        }
-        a0 = a1;
-      }
-      svg.append(sv("text", { class: "qpiet", x: c, y: c + 5, "text-anchor": "middle" }, sv("title", {}, n0(total)), shortCount(total)));
-      card.append(h("div", { class: "qrow" }, svg, h("ul", { class: "qkey" }, rows.map((e) => h("li", {}, h("span", { class: "sw " + (e.cls || clsOf[e.name]) }), h("span", { class: "kn" }, e.name), h("span", { class: "kc", title: n0(e.count) }, shortCount(e.count) + " · " + pct(e.count, total)))))));
-      return card;
-    }
-
-    // Tooltips: a client shows every reverse-DNS name the daemon has for it.  Whois is a popup (right-click ▸ Whois):
-    // the daemon caches the answer and asks the registry from the picked node.
-    const whoisText = (w) => {
-      if (w.kind === "ip") {
-        if (!w.found) return w.domain + " — " + w.note;
-        return [w.domain, w.network && "Network: " + w.network, w.netname && "Name: " + w.netname, w.org && "Organization: " + w.org, w.country && "Country: " + w.country,
-          w.origin && "Origin AS: " + w.origin, "From: " + w.server].filter(Boolean).join("\n");
-      }
-      const addrs = w.name ? [w.name, w.ipv4 && "IPv4: " + w.ipv4, w.ipv6 && "IPv6: " + w.ipv6, !w.ipv4 && !w.ipv6 && "No address found", ""].filter((x) => x !== false && x !== undefined && x !== null && x !== 0).join("\n") + "\n" : "";
-      if (!w.found) return addrs + w.domain + " — " + w.note;
-      return addrs + [w.domain, w.registrar && "Registrar: " + w.registrar, w.registrant && "Registrant: " + w.registrant, w.registered && "Registered: " + w.registered,
-        w.updated && "Updated: " + w.updated, w.expires && "Expires: " + w.expires, (w.name_servers || []).length && "Name servers: " + w.name_servers.join(", "), "From: " + w.server].filter(Boolean).join("\n");
-    };
-    // A row is a button: picking a client lists the servers that answered it, picking a
-    // server lists its clients in Top Clients.  o.picked is this list's picked row,
-    // o.note says the list is filtered, o.onClear drops that filter.
-    // Clear: forget the counts and the top lists (of every node when the Node menu says Cluster)
-    async function clearStats() {
-      const all = state.target === CLUSTER;
-      if (!confirm("Clear the statistics" + (all ? " of every node in the cluster" : " of this node") + "?\n\nThe counts, the chart and the top lists start again from nothing. This cannot be undone.")) return;
-      try {
-        const r = (await api("POST", "/api/qstats/clear", {})).data || {};
-        const bad = (r.nodes || []).filter((n) => !n.ok);
-        await load();
-        if (bad.length) say(status, "bad", "Cleared, except on: " + bad.map((n) => n.name + " (" + n.error + ")").join(", "));
-        else say(status, "info", "The statistics are cleared.");
-      } catch (e) { if (e.message !== "unauthenticated") say(status, "bad", "Not cleared: " + e.message); }
-    }
-
-    // Scan: an nmap of a client, run on the picked node; a popup with the report when it is done
-    function scanPopup(addr) {
-      textPopup("Scan " + addr, async (put, live) => {
-        let j = (await api("POST", "/api/scan", { client: addr })).data;
-        while (j.state === "running") {
-          await new Promise((r) => setTimeout(r, 3000));
-          if (!live()) return;
-          j = (await api("GET", "/api/scan?client=" + encodeURIComponent(addr))).data;
-        }
-        put(j.text || "nmap printed nothing");
-      });
-    }
-
-    // A popup with text in it that a function fills in (and can fill in again: Run again): Whois, Ping, Traceroute.
-    // run(put, live) calls put(text) as often as it likes and returns when done; live() says whether the popup still wants it.
-    function textPopup(title, run, extra) {
-      const out = h("pre", { class: "nt-out", tabindex: "0", "aria-live": "off" }, "…");
-      const again = h("button", { class: "btn", type: "button", disabled: true }, "Run again");
-      const d = h("dialog", { class: "cv-dialog nt-dialog", "aria-label": title });
-      let alive = true, round = 0;
-      const close = () => { alive = false; try { d.close(); } catch (_) { /* closed */ } d.remove(); };
-      d.addEventListener("close", () => { alive = false; d.remove(); });
-      d.append(h("button", { class: "dlg-x", type: "button", "aria-label": "Close", title: "Close", onclick: close }, "✕"), h("h2", {}, title), out,
-        h("div", { class: "toolbar" }, extra || null, again, h("button", { class: "btn", type: "button", onclick: close }, "Close")));
-      root.append(d);
-      d.showModal();
-      const go = async () => {
-        const me = ++round;
-        const live = () => alive && me === round;
-        again.disabled = true;
-        out.textContent = "…";
-        const put = (text) => { if (!live()) return; const end = out.scrollTop + out.clientHeight >= out.scrollHeight - 4; out.textContent = text; if (end) out.scrollTop = out.scrollHeight; };
-        try { await run(put, live); } catch (e) { if (live() && e.message !== "unauthenticated") out.textContent = e.message; }
-        if (live()) again.disabled = false;
-      };
-      again.addEventListener("click", go);
-      go();
-    }
-    // Ping / Traceroute of a client or server address: ping or mtr run on the picked node, shown as it comes in
-    // a traceroute as a table, with the host names or the addresses (the daemon looks the names up as the hops appear, so the box can be ticked at any time)
-    let traceNames = false;
-    try { traceNames = localStorage.getItem("nt_trace_names") === "1"; } catch (_) { /* no storage */ }
-    const traceText = (j, names) => {
-      if (!j.hops || !j.hops.length) return j.text || "";
-      const who = (x) => (names && x.name ? x.name : x.addr) || "???";
-      const w = Math.max(7, ...j.hops.map((x) => who(x).length));
-      const f = (v) => v.toFixed(1).padStart(7);
-      return (j.text || "").split("\n")[0] + "\n" + "".padEnd(w + 4) + "  " + "Loss%".padStart(6) + " " + "Snt".padStart(4) + " " + ["Last", "Avg", "Best", "Wrst"].map((x) => x.padStart(7)).join(" ") + "\n" +
-        j.hops.map((x, i) => String(i + 1).padStart(2) + ". " + who(x).padEnd(w) + "  " + (x.loss.toFixed(1) + "%").padStart(6) + " " + String(x.sent).padStart(4) + " " + [x.last, x.avg, x.best, x.worst].map(f).join(" ")).join("\n") + "\n";
-    };
-    function netTool(kind, name) {
-      let putFn = null, last = null;
-      const box = h("input", { type: "checkbox", checked: traceNames });
-      const show = () => { if (putFn && last) putFn(kind === "trace" ? traceText(last, box.checked) : last.text); };
-      box.addEventListener("change", () => { traceNames = box.checked; try { localStorage.setItem("nt_trace_names", traceNames ? "1" : "0"); } catch (_) { /* no storage */ } show(); });
-      const extra = kind === "trace" ? h("label", { class: "nt-opt", title: "Show the host name of each hop where it has one; untick for the addresses" }, box, " Resolve names") : null;
-      textPopup((kind === "ping" ? "Ping " : "Traceroute ") + name, async (put, live) => {
-        putFn = put;
-        let j = (await api("POST", "/api/nettool", { kind, client: name })).data;
-        for (;;) {
-          last = j;
-          if (j.text) show();
-          if (j.state !== "running") return;
-          await new Promise((r) => setTimeout(r, 1000));
-          if (!live()) return;
-          j = (await api("GET", "/api/nettool?kind=" + kind + "&client=" + encodeURIComponent(name))).data;
-        }
-      }, extra);
-    }
-    // Lookup: what this node's resolver says about a client address (its reverse names) or a server name (addresses, CNAME, MX, NS, TXT)
-    function lookupPopup(name) {
-      textPopup("Lookup " + name, async (put) => put((await api("GET", "/api/dnslookup/full?lookup=" + encodeURIComponent(name))).data.text));
-    }
-    function whoisPopup(name) {
-      textPopup("Whois " + name, async (put) => put(whoisText((await api("GET", "/api/whois?lookup=" + encodeURIComponent(name))).data)));
-    }
-
-    // Copy: the address or the name to the clipboard
-    async function copyAddr(text) {
-      try { await navigator.clipboard.writeText(text); } catch (_) { /* no permission: nothing copied */ }
-    }
-    // Name…: give a client a name by hand (Settings ▸ client_names); an empty name removes it
-    async function setClientName(addr, name) {
-      try {
-        const cfg = (await api("GET", "/api/config")).config;
-        cfg.ntp = cfg.ntp || {};
-        const names = Object.assign({}, cfg.ntp.client_names || {});
-        if (name) names[addr] = name; else delete names[addr];
-        if (Object.keys(names).length) cfg.ntp.client_names = names; else delete cfg.ntp.client_names;
-        await api("PUT", "/api/config", { config: cfg, note: "Client name from Statistics: " + addr + (name ? " is " + name : " name removed") });
-        await load();
-      } catch (e) { if (e.message !== "unauthenticated") say(status, "bad", "Name not saved: " + e.message); }
-    }
-    function askName(addr, current) {
-      const input = h("input", { type: "text", autocomplete: "off", spellcheck: "false", maxlength: "64", value: current || "", placeholder: "e.g. ann-pc.corp.example", "aria-label": "Name" });
-      const err = h("div", { "aria-live": "polite" });
-      const d = h("dialog", { class: "cv-dialog", "aria-label": "Name " + addr });
-      const close = () => { try { d.close(); } catch (_) { /* closed */ } d.remove(); };
-      d.addEventListener("close", () => d.remove());
-      d.append(h("h2", {}, "Name " + addr),
-        h("form", { onsubmit: (ev) => {
-          ev.preventDefault();
-          const v = input.value.trim();
-          const lc = v.toLowerCase().replace(/\.$/, "");
-          if (v && !(lc.split(".").length >= 2 && lc.split(".").every((l) => /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/.test(l)))) { errorBox(err, "Give the full host name: at least two parts separated by dots, using letters, digits, - and _ (e.g. ann-pc.corp.example)."); return; }
-          close(); setClientName(addr, lc);
-        } },
-        h("label", { class: "f wide" }, "Name", input,
-          h("span", { class: "hint" }, "The full host name, shown under the address in Top Clients instead of the reverse-DNS name. Empty removes it.")),
-        err,
-        h("div", { class: "toolbar" }, h("button", { class: "btn primary", type: "submit" }, "Save"), h("button", { class: "btn", type: "button", onclick: close }, "Cancel"))));
-      root.append(d);
-      d.showModal();
-      input.focus(); input.select();
-    }
-    // ── blocked clients (Settings ▸ blocked_clients, written to chrony as `deny`) ──
-    // an address as [number, bits]; a prefix is the same plus its length
-    const blocked = { list: [], nets: [] };
-    function ipBig(t) {
-      t = String(t).replace(/%.*$/, "");
-      const m4 = t.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-      if (m4) return { v: m4.slice(1).reduce((a, x) => a * 256n + BigInt(x), 0n), bits: 32 };
-      if (!t.includes(":")) return null;
-      let [head, tail] = t.split("::");
-      const grp = (x) => (x ? x.split(":") : []);
-      let hs = grp(head), ts = tail === undefined ? [] : grp(tail);
-      const v4 = (a) => { const l = a[a.length - 1]; if (l && l.includes(".")) { const b = ipBig(l).v; a.splice(a.length - 1, 1, ((b >> 16n) & 0xffffn).toString(16), (b & 0xffffn).toString(16)); } };
-      v4(hs); v4(ts);
-      if (tail === undefined ? hs.length !== 8 : hs.length + ts.length > 7) return null;
-      const all = tail === undefined ? hs : [...hs, ...Array(8 - hs.length - ts.length).fill("0"), ...ts];
-      return { v: all.reduce((a, x) => a * 65536n + BigInt(parseInt(x || "0", 16)), 0n), bits: 128 };
-    }
-    function setBlocked(list) {
-      blocked.list = list;
-      blocked.nets = list.map((t) => {
-        const [a, l] = t.split("/"), ip = ipBig(a);
-        return ip ? { text: t, v: ip.v, bits: ip.bits, len: l === undefined ? ip.bits : Number(l) } : null;
-      }).filter(Boolean);
-    }
-    // the entry that blocks this client, or null: its own address (exact) or a network that holds it
-    function blockedBy(addr) {
-      const ip = ipBig(addr);
-      if (!ip) return null;
-      let hit = null;
-      for (const n of blocked.nets) {
-        if (n.bits !== ip.bits) continue;
-        const sh = BigInt(n.bits - n.len);
-        if ((ip.v >> sh) === (n.v >> sh) && (!hit || n.len > hit.len)) hit = n;
-      }
-      return hit ? { text: hit.text, exact: hit.len === hit.bits } : null;
-    }
-    async function setBlock(addr, on) {
-      try {
-        const cfg = (await api("GET", "/api/config")).config;
-        cfg.ntp = cfg.ntp || {};
-        const list = (cfg.ntp.blocked_clients || []).filter((x) => x !== addr && x !== addr + "/32" && x !== addr + "/128");
-        if (on) list.push(addr);
-        if (list.length) cfg.ntp.blocked_clients = list; else delete cfg.ntp.blocked_clients;
-        await api("PUT", "/api/config", { config: cfg, note: "Client " + (on ? "blocked" : "unblocked") + " from Statistics: " + addr });
-        await load();
-      } catch (e) { if (e.message !== "unauthenticated") say(status, "bad", (on ? "Not blocked: " : "Not unblocked: ") + e.message); }
-    }
-    const isSelfAddr = (a) => /^127\./.test(a) || a === "::1" || /^0*:0*:0*:0*:0*:0*:0*:0*1$/.test(a);
-    function clientMenu(e, addr, entry) {
-      e.preventDefault(); e.stopPropagation();
-      const blk = blockedBy(addr);
-      const manual = !!(entry && entry.manual), host = (entry && entry.host) || "";
-      rowMenu([["Whois", () => whoisPopup(addr)], ["Lookup", () => lookupPopup(addr)], "-",
-        ["Ping", () => netTool("ping", addr)], ["Traceroute", () => netTool("trace", addr)], ["Scan", () => scanPopup(addr)], "-",
-        ["Copy", () => copyAddr(addr)], "-",
-        isSelfAddr(addr) ? ["Block", () => {}, "", null, "This node itself cannot be blocked: it asks its own NTP service from there"] :
-        blk ? (blk.exact ? ["Unblock", () => setBlock(addr, false)] : ["Blocked by " + blk.text + " (edit it in Settings)", () => say(status, "info", addr + " is blocked by " + blk.text + ". Edit Blocked clients in Configure ▸ Settings.")]) : ["Block", () => setBlock(addr, true)], "-",
-        ...(host ? [["Rename…", () => askName(addr, host)], ...(manual ? [["Remove name", () => setClientName(addr, "")]] : [])] : [["Name…", () => askName(addr, "")]])])(e);
-    }
-    function serverMenu(e, addr) {
-      e.preventDefault(); e.stopPropagation();
-      rowMenu([["Whois", () => whoisPopup(addr.replace(/:\d+$/, ""))], ["Lookup", () => lookupPopup(addr.replace(/:\d+$/, ""))], "-", ["Ping", () => netTool("ping", addr.replace(/:\d+$/, ""))], ["Traceroute", () => netTool("trace", addr.replace(/:\d+$/, ""))], "-", ["Copy", () => copyAddr(addr)]])(e);
-    }
-
-    // the filter box of a top list: the server keeps only the names that contain the text (everything it counted, not only
-    // the ten shown), a moment after the typing stops
-    function onFilter(withHost, text) {
-      if (withHost) cFilter = text.trim().toLowerCase(); else sFilter = text.trim().toLowerCase();
-      clearTimeout(filterTimer);
-      filterTimer = setTimeout(load, 300);
-    }
-    const TOP_PAGE = 10, TOP_PAGE_PLAIN = 12;   // rows with a host name under them are taller, so the list without them holds more and the two cards stay level
-    function topTable(title, items, total, withHost, o) {
-      const filtered = !!(withHost ? cFilter : sFilter);
-      const pk = withHost ? "c" : "d";
-      const size = withHost ? TOP_PAGE : TOP_PAGE_PLAIN;
-      const pages = Math.max(1, Math.ceil(items.length / size));
-      topPage[pk] = Math.min(Math.max(topPage[pk], 0), pages - 1);
-      const from = topPage[pk] * size;
-      const rows = items.slice(from, from + size);   // every result is listed, a page at a time
-      const go = (d) => () => { topPage[pk] += d; draw(last); };
-      const pager = h("span", { class: "pager" },
-        h("span", { class: "muted small" }, (rows.length ? (from + 1) + "–" + (from + rows.length) : "0") + " of " + items.length),
-        h("button", { class: "btn small", type: "button", "aria-label": "Previous page", disabled: topPage[pk] === 0, onclick: go(-1) }, "‹"),
-        h("span", { class: "muted small" }, "Page " + (topPage[pk] + 1) + " of " + pages),
-        h("button", { class: "btn small", type: "button", "aria-label": "Next page", disabled: topPage[pk] >= pages - 1, onclick: go(1) }, "›"));
-      const mine = withHost ? "Client" : "Server";
-      return h("div", { class: "card qcard" }, h("header", { class: "bar" }, h("h2", {}, tc(title)), h("span", { class: "grow" }),
-        h("input", { type: "text", class: "qfilter", placeholder: "Filter (AND, OR, !not)", "aria-label": "Filter " + (withHost ? "clients" : "servers") + ", words may be joined by AND or OR, and ! or NOT leaves a word out", autocomplete: "off", spellcheck: "false",
-          value: withHost ? cFilter : sFilter, oninput: (ev) => onFilter(withHost, ev.currentTarget.value),
-          onkeydown: (ev) => { if (ev.key === "Escape" && ev.currentTarget.value) { ev.currentTarget.value = ""; onFilter(withHost, ""); } } }),
-        items.length ? csvButton(title, () => withHost
-          ? [["Client", "Host names", "Requests", "Share %"], ...items.map((e) => [e.name, (e.hosts && e.hosts.length ? e.hosts : e.host ? [e.host] : []).join("; "), e.count, csvShare(e.count, total)])]
-          : [["Server", "Requests", "Share %"], ...items.map((e) => [e.name, e.count, csvShare(e.count, total)])]) : null,
-        ),
-        h("div", { class: "hint qnote" }, o.note ? [o.note, " ", h("button", { class: "qlink", type: "button", onclick: o.onClear }, "Show all")] : "\u00a0"),
-        h("div", { class: "body flush" }, rows.length
-          ? h("div", { class: "scroll" }, h("table", { class: "qtop" + (withHost ? "" : " plain") }, h("thead", {}, h("tr", {}, h("th", {}, mine), h("th", { class: "num" }, "Requests"), h("th", { class: "num" }, "Share"))),
-            h("tbody", {}, rows.map((e) => h("tr", { class: inPick(o.picked, e.name) ? "picked" : null,
-              oncontextmenu: e.name === "(others)" ? null : (ev) => (withHost ? clientMenu(ev, e.name, e) : serverMenu(ev, e.name)) },
-              h("td", {}, e.name === "(others)" ? h("div", { class: "muted" }, e.name)
-                : (() => {
-                  const tail = withHost ? "\n\nClick: show the servers that answered this client (Ctrl-click: add more clients)" : "\n\nClick (Ctrl-click: add more servers): show the clients this server answered";
-                  const head = withHost ? (e.hosts && e.hosts.length ? e.hosts.join("\n") : "No reverse DNS name known (yet)") : "";
-                  const b = h("button", { type: "button", class: "qlink mono", "data-name": e.name, "aria-pressed": inPick(o.picked, e.name) ? "true" : "false",
-                    title: withHost ? head + tail : tail.trim(),
-                    onclick: (ev) => o.onPick(e.name, ev.ctrlKey || ev.metaKey) }, e.name);
-                  const blk = withHost ? blockedBy(e.name) : null;
-                  return blk ? h("div", { class: "qname" }, b, h("span", { class: "qblocked" + (blk.exact ? "" : " qdim"), role: "img", "aria-label": "blocked",
-                    title: blk.exact ? "Blocked: this client gets no answers. Right-click ▸ Unblock to remove it." : "Blocked by " + blk.text + ": this client gets no answers. Edit it in Configure ▸ Settings ▸ Blocked clients." }, "🚫")) : b;
-                })(),
-                e.host ? h("div", { class: "muted small" }, e.host) : null),
-              h("td", { class: "num", title: n0(e.count) }, shortCount(e.count)), h("td", { class: "num" }, pct(e.count, total)))))))
-          : h("div", { class: "empty" }, filtered ? "Nothing matches “" + (withHost ? cFilter : sFilter) + "”." : "No requests in this range.")),
-        h("footer", { class: "qpager" }, pager));
-    }
-
-    const shareBase = (d) => { const k = Object.keys(KINDS).find((x) => KINDS[x] === sel); return k ? d.sums[k] : d.sums.total; };
-    const kindLabel = (sep = " — ") => { const s = SERIES.find((x) => KINDS[x.key] === sel); return s ? sep + s.label : ""; };   // the donuts say "Outcome — Refused", the top lists "Top Clients: Refused"
-    // picking a client clears the server and the other way round: one drill-down at a time
-    // Ctrl-click (Cmd on a Mac) adds a row to what is picked, or takes it off again; the picks travel as a comma-separated list
-    function inPick(picked, name) { return !!picked && picked.split(",").includes(name); }
-    function pickText(picked) { const l = picked.split(","); return l.length > 3 ? l.length + " picked (" + l.slice(0, 2).join(", ") + ", …)" : l.join(", "); }
-    function togglePick(cur, name, add) {
-      if (name === "") return "";
-      const l = cur ? cur.split(",") : [];
-      if (!add) return l.length === 1 && l[0] === name ? "" : name;
-      const i = l.indexOf(name);
-      if (i >= 0) l.splice(i, 1); else l.push(name);
-      return l.join(",");
-    }
-    function pickC(c, add) { const v = togglePick(pickClient, c, add); if (v === pickClient) return; pickClient = v; pickServer = ""; load(); }
-    function pickD(n, add) { const v = togglePick(pickServer, n, add); if (v === pickServer) return; pickServer = v; pickClient = ""; load(); }
-    function pick(kind) {
-      const was = qpsView || clientsView;
-      qpsView = clientsView = false;   // any other tile goes back to counting queries
-      if (kind === sel) { if (was && last) draw(last); return; }
-      sel = kind;
-      load();
-    }
-    function toggleQps() { qpsView = !qpsView; clientsView = false; if (last) draw(last); }
-    function toggleClients() { clientsView = !clientsView; qpsView = false; if (last) draw(last); }
-
-    function draw(d) {
-      last = d;
-      state.statsLong = d.step >= 600 && d.to - d.from > 20 * 3600;
-      clear(status);
-      drawTiles(d);
-      drawChart(d);
-      clear(pies).append(donut("Outcome" + kindLabel(), SERIES.filter((x) => x.key !== "total").map((x) => ({ name: x.label, count: d.sums[x.key] || 0 })).filter((x) => x.count > 0), OUTCOME_CLS, 4), donut("IP family" + kindLabel(), d.families, PROTO_CLS, 2));
-      const sumOf = (l) => l.reduce((a, e) => a + e.count, 0);
-      const tk = [range, sel, pickClient, pickServer, cFilter, sFilter].join("|");   // a different question starts on page one
-      if (tk !== topKey) { topKey = tk; topPage = { c: 0, d: 0 }; }
-      fill(tops,
-        topTable("Top Clients" + kindLabel(": "), d.clients, pickServer ? sumOf(d.clients) : shareBase(d), true,
-          { picked: pickClient, onPick: pickC, note: pickServer ? "Clients that " + pickText(pickServer) + " answered" : "", onClear: () => pickD("") }),
-        topTable("Top Servers" + kindLabel(": "), d.servers, pickClient ? sumOf(d.servers) : shareBase(d), false,
-          { picked: pickServer, onPick: pickD, note: pickClient ? "Servers that answered " + pickText(pickClient) : "", onClear: () => pickC("") }));
-      clear(cnote).append(...clusterNote(d.cluster));   // which nodes are added together, when the Node menu says Cluster
-      foot.hidden = true;
-    }
-
-    async function load() {
-      const my = ++seq;
-      try {
-        const [d, blk] = await Promise.all([fetchData(), api("GET", "/api/config").then((r) => (r.config && r.config.ntp && r.config.ntp.blocked_clients) || []).catch(() => blocked.list)]);
-        if (my !== seq) return;
-        setBlocked(blk);
-        lastAt = Date.now();
-        draw(d);
-      } catch (e) { fail(status)(e); }
-    }
-
-    function setRange(r) {
-      range = r;
-      for (const [id, b] of rangeBtns) b.setAttribute("aria-pressed", id === r ? "true" : "false");
-      customRow.classList.toggle("hidden", r !== "custom");
-      if (r === "custom" && !fromIn.value) {
-        const f = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-        toIn.value = f(new Date()); fromIn.value = f(new Date(Date.now() - 6 * 3600 * 1000));
-      }
-      if (r !== "custom") load();
-    }
-
-    return {
-      mount(main) {
-        status = h("div", { "aria-live": "polite" });
-        rangeBtns = new Map(RANGES.map(([id, label]) => [id, h("button", { type: "button", class: "seg", "aria-pressed": id === range ? "true" : "false", onclick: () => setRange(id) }, label)]));
-        fromIn = h("input", { type: "datetime-local", "aria-label": "From" });
-        toIn = h("input", { type: "datetime-local", "aria-label": "To" });
-        customRow = h("span", { class: "qcustom hidden" }, fromIn, " to ", toIn,
-          h("button", { class: "btn", type: "button", onclick: load }, "Apply"), h("span", { class: "muted small" }, " only the last 30 days exist"));
-        bar = h("div", { class: "toolbar qbar" }, h("span", { class: "segs", role: "group", "aria-label": "Time range" }, [...rangeBtns.values()]),
-          h("button", { class: "btn", type: "button", title: isGw() ? "Pick this node or Cluster to clear" : "Forget the counts and top lists", disabled: isGw() ? "" : null, onclick: clearStats }, "Clear"), customRow);
-        tiles = h("div", { class: "qtiles" });
-        chartBox = h("div", { class: "card qchartcard" });
-        pies = h("div", { class: "qpies" });
-        tops = h("div", { class: "grid2" });
-        foot = h("p", { class: "hint" });
-        cnote = h("div", {});
-        main.append(status, bar, cnote, tiles, h("div", { class: "card" }, h("div", { class: "body" }, chartBox)), pies, tops, foot);
-        setRange(range);
-      },
-      async poll() {
-        if (range === "custom") return;
-        if (Date.now() - lastAt >= REFRESH_MS) await load();
-      },
     };
   })();
 
@@ -5027,14 +4823,14 @@
       tsBtn.disabled = true; tsHold = Infinity;
       say(status, "info", "Collecting from every node… this takes up to a minute.");
       try {
-        await apiDownload("/api/tshoot/download?capture=1", "ntpdir-tshoot.tgz");
+        await apiDownload("/api/tshoot/download?capture=1", "netdir-tshoot.tgz");
         say(status, "info", "Downloaded. Passwords, the gateway key, tokens and join codes are removed; README.txt in it lists what it holds.");
       } catch (e) { fail(status)(e); }
       tsBtn.disabled = false; tsHold = Date.now() + 20000;
     }
     function download() {
       const text = shown.map((l) => l.raw).join("\n") + "\n";
-      const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: "ntpdir-log.txt" });
+      const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: "netdir-log.txt" });
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
@@ -5069,6 +4865,114 @@
     };
   })();
 
+  // ── MCP, Monitor  (API: GET /api/mcpusage) ──────────────────────────────────────
+  // What the MCP endpoint is used for on the picked node, laid out like Monitor ▸ Node: a time range, tiles, charts per hour, and cards
+  // with calls by key, by source address, by tool and by device, then the newest calls.  Counted by the daemon (mcpusage.go);
+  // nothing a caller sent or was answered is kept.
+  VIEWS.mcpusage = (() => {
+    const SVGNS = "http://www.w3.org/2000/svg";
+    const sv = (tag, attrs, ...kids) => {
+      const el = document.createElementNS(SVGNS, tag);
+      for (const [k, v] of Object.entries(attrs || {})) if (v != null && v !== false) el.setAttribute(k, v);
+      for (const kid of kids.flat(Infinity)) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+      return el;
+    };
+    const RANGES = [["1h", "Last Hour"], ["24h", "Last Day"], ["7d", "Last Week"]];
+    const REFRESH_MS = 5000;
+    const kept = { win: "24h" };
+    let status, bar, tiles, charts, tables, recent, foot, rangeBtns, win = kept.win, seq = 0, lastAt = 0, last = "";
+    const size = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB");
+    const at = (u) => (u ? new Date(u * 1000).toLocaleString() : "–");
+    const num = (n) => n.toLocaleString();
+    const hm = (u, long) => new Date(u * 1000).toLocaleString([], long ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false } : { hour: "2-digit", minute: "2-digit", hour12: false });
+    // csv: the rows of the card's download, or null when it has none to give
+    const card = (title, csv, ...kids) => h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc(title)), h("span", { class: "grow" }), csv ? csvButton(title, csv) : null), h("div", { class: "body flush" }, ...kids));
+    const sumCsv = (first, rows) => () => [[first, "Calls", "Errors", "Refused", "Changes", "Data (bytes)", "Avg ms", "Last (UTC)"],
+      ...rows.map((r) => [r.name, r.calls, r.errors, r.refused, r.writes, r.bytes, r.avg_ms, r.last ? csvIso(r.last) : ""])];
+    const COLS = [["Calls", (r) => num(r.calls), true], ["Errors", (r) => (r.errors ? num(r.errors) : "–"), true], ["Refused", (r) => (r.refused ? num(r.refused) : "–"), true],
+      ["Changes", (r) => (r.writes ? num(r.writes) : "–"), true], ["Data", (r) => size(r.bytes), true], ["Avg ms", (r) => num(r.avg_ms), true], ["Last", (r) => at(r.last), false]];
+    function sumCard(title, first, rows) {
+      return card(title, rows.length ? sumCsv(first, rows) : null, rows.length
+        ? h("div", { class: "scroll" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, first), COLS.map((c) => h("th", { class: c[2] ? "num" : "" }, c[0])))),
+          h("tbody", {}, rows.map((r) => h("tr", {}, h("td", { class: "mono" }, r.name), COLS.map((c) => h("td", { class: c[2] ? "num" : "" }, c[1](r))))))))
+        : h("div", { class: "empty" }, "No calls in this time range."));
+    }
+    // bars per hour; red is the part that failed
+    function bars(title, hours, cls, pick, fail2, text, csv) {
+      const W = 620, H = 230, L = 12, R = 12, T = 12, B = 28, n = hours.length, max = Math.max(1, ...hours.map(pick));
+      const pw = W - L - R, ph = H - T - B, bw = pw / Math.max(1, n);
+      const svg = sv("svg", { class: "qchart", viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": title });
+      for (let g = 0; g <= 4; g++) svg.append(sv("line", { class: "qgrid", x1: L, x2: W - R, y1: T + ph - (ph * g) / 4, y2: T + ph - (ph * g) / 4 }));
+      hours.forEach((x, i) => {
+        const v = pick(x), hh = Math.round((v / max) * ph), eh = fail2 ? Math.round((fail2(x) / max) * ph) : 0;
+        svg.append(sv("g", {}, sv("title", {}, hm(x.t, true) + ": " + text(x)),
+          sv("rect", { class: "ubar " + cls, x: (L + i * bw + 0.5).toFixed(1), y: T + ph - hh, width: Math.max(1, bw - 1).toFixed(1), height: hh }),
+          eh ? sv("rect", { class: "uerr t3", x: (L + i * bw + 0.5).toFixed(1), y: T + ph - eh, width: Math.max(1, bw - 1).toFixed(1), height: eh }) : null));
+      });
+      svg.append(sv("text", { class: "qax", x: L, y: H - 8 }, hm(hours[0].t, n > 24)), sv("text", { class: "qax", x: W - R, y: H - 8, "text-anchor": "end" }, hm(hours[n - 1].t, n > 24)),
+        sv("text", { class: "qax", x: W - R, y: T + 10, "text-anchor": "end" }, "most " + max.toLocaleString()));
+      return h("div", { class: "card" }, h("header", { class: "bar" }, h("h2", {}, tc(title)), h("span", { class: "grow" }), csvButton(title, csv)), h("div", { class: "body" }, svg));
+    }
+    function draw(r) {
+      const sig = JSON.stringify(r);
+      if (sig === last) return;
+      last = sig;
+      const t = r.totals;
+      const tile = (cls, label, value, sub) => h("div", { class: "qtile " + cls }, h("div", { class: "qv" }, value), h("div", { class: "qs" }, sub || "\u00a0"), h("div", { class: "ql" }, label));
+      const per = r.window_hours ? t.calls / r.window_hours : 0;
+      clear(tiles).append(
+        tile("t1", "Calls", num(t.calls), per ? (per < 10 ? per.toFixed(1) : Math.round(per)) + " an hour" : ""),
+        tile("t3", "Errors", num(t.errors), t.calls ? Math.round((t.errors * 100) / t.calls) + "% of calls" : ""),
+        tile("t2", "Refused", num(t.refused), "read-only callers asking to change"),
+        tile("t4", "Changes", num(t.writes), "that went through"),
+        tile("t5", "Data returned", size(t.bytes), "after privacy masking"),
+        tile("t6", "Average time", num(t.avg_ms) + " ms", "per call on this node"));
+      clear(charts).append(
+        bars("Calls per hour", r.hours, "t1", (x) => x.calls, (x) => x.errors, (x) => x.calls + " call" + (x.calls === 1 ? "" : "s") + (x.errors ? ", " + x.errors + " failed" : ""),
+          () => [["Hour (UTC)", "Calls", "Errors"], ...r.hours.map((x) => [csvIso(x.t), x.calls, x.errors])]),
+        bars("Data returned per hour", r.hours, "t5", (x) => x.bytes, null, (x) => size(x.bytes),
+          () => [["Hour (UTC)", "Data (bytes)"], ...r.hours.map((x) => [csvIso(x.t), x.bytes])]));
+      clear(tables).append(sumCard("By key", "Key", r.by_key), sumCard("By source address", "Address", r.by_source), sumCard("By tool", "Tool", r.by_tool), sumCard("By device", "Device, tag or target", r.by_target));
+      clear(recent).append(card("Newest calls", r.recent.length ? () => [["Time (UTC)", "Key", "Address", "Tool", "Target", "Result", "Change", "Ms", "Data (bytes)"],
+        ...r.recent.map((c) => [new Date(c.time).toISOString(), c.caller, c.addr, c.tool, c.target || "", c.result, c.write ? "yes" : "no", c.ms, c.bytes])] : null, r.recent.length
+        ? h("div", { class: "scroll" }, h("table", {},
+          h("thead", {}, h("tr", {}, ["Time", "Key", "Address", "Tool", "Target", "Result", "Ms", "Data"].map((x, i) => h("th", { class: i >= 6 ? "num" : "" }, x)))),
+          h("tbody", {}, r.recent.map((c) => h("tr", {}, h("td", {}, new Date(c.time).toLocaleTimeString([], { hour12: false })), h("td", { class: "mono" }, c.caller), h("td", { class: "mono" }, c.addr),
+            h("td", { class: "mono" }, c.tool), h("td", { class: "mono" }, c.target || ""), h("td", { class: c.result === "ok" ? "" : "bad" }, c.result + (c.write && c.result === "ok" ? " (change)" : "")),
+            h("td", { class: "num" }, String(c.ms)), h("td", { class: "num" }, size(c.bytes)))))))
+        : h("div", { class: "empty" }, "No calls since the daemon started.")));
+      foot.textContent = r.note;
+    }
+    async function load() {
+      const my = ++seq;
+      try {
+        const r = await api("GET", "/api/mcpusage?window=" + win);   // the answer is the report itself, not wrapped in {ok, data}
+        if (my !== seq) return;
+        lastAt = Date.now();
+        clear(status);
+        draw(r);
+      } catch (e) { fail(status)(e); }
+    }
+    function setRange(id) {
+      win = kept.win = id; last = "";
+      for (const [k, b] of rangeBtns) b.setAttribute("aria-pressed", k === id ? "true" : "false");
+      load();
+    }
+    return {
+      mount(main) {
+        last = ""; win = kept.win;
+        status = h("div", { "aria-live": "polite" });
+        rangeBtns = new Map(RANGES.map(([id, label]) => [id, h("button", { type: "button", class: "seg", "aria-pressed": id === win ? "true" : "false", onclick: () => setRange(id) }, label)]));
+        bar = h("div", { class: "toolbar qbar" }, h("span", { class: "segs", role: "group", "aria-label": "Time range" }, [...rangeBtns.values()]));
+        tiles = h("div", { class: "qtiles" }); charts = h("div", { class: "hostcharts" }); tables = h("div", { class: "hosttables" }); recent = h("div", {}); foot = h("p", { class: "hint" });
+        main.append(status, bar, tiles, charts, tables, recent, foot);
+        load();
+      },
+      async poll() { if (Date.now() - lastAt >= REFRESH_MS) await load(); },
+    };
+  })();
+
   // ── Capture, Monitor  (CLI: --capture, --capture-interfaces) ────────────────────
   // One node: a tcpdump-like capture on the node picked in the Node menu, shown live and downloadable as a .tgz (one .pcap in it).
   // Cluster: the same capture on every node at once for a chosen time, one .pcap per node in a .tgz.
@@ -5094,8 +4998,8 @@
       const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
       if (box.firstChild && box.firstChild.classList && box.firstChild.classList.contains("empty")) clear(box);
       for (const p of pk) {
-        const dns = / NTP /.test(p.summary), arp = /^(ARP|ICMPv6 .*neighbor)/.test(p.summary) || p.summary.startsWith("ARP");
-        box.append(h("div", { class: "capline" + (dns ? " ntp" : "") + (arp ? " arp" : ""), title: p.len + " bytes" },
+        const arp = /^(ARP|ICMPv6 .*neighbor)/.test(p.summary) || p.summary.startsWith("ARP");
+        box.append(h("div", { class: "capline" + (arp ? " arp" : ""), title: p.len + " bytes" },
           h("span", { class: "ct" }, p.time), h("span", { class: "cs" }, p.summary)));
       }
       shown += pk.length;
@@ -5184,7 +5088,7 @@
           durSel = h("select", { "aria-label": "How long" }, [["5", "5 seconds"], ["10", "10 seconds"], ["30", "30 seconds"], ["60", "60 seconds"]].map(([v, t]) => h("option", { value: v }, t)));
           durSel.value = "10";
           goBtn = h("button", { class: "btn primary", type: "button", onclick: goAll }, "Capture on all nodes");
-          dlJob = h("button", { class: "btn", type: "button", disabled: true, onclick: () => apiDownload("/api/clustercapture/download", "ntpdir-cluster-capture.tgz").catch(fail(status)) }, "Download .tgz");
+          dlJob = h("button", { class: "btn", type: "button", disabled: true, onclick: () => apiDownload("/api/clustercapture/download", "netdir-cluster-capture.tgz").catch(fail(status)) }, "Download .tgz");
           jobBox = h("div", {});
           const gw = pickedGw();
           if (gw) goBtn.textContent = "Capture on its nodes";
@@ -5195,7 +5099,7 @@
           return;
         }
         startBtn = h("button", { class: "btn primary", type: "button", onclick: () => (running ? stop() : start()) }, "Start");
-        dlBtn = h("button", { class: "btn", type: "button", disabled: true, onclick: () => apiDownload("/api/capture/download", "ntpdir-capture.tgz").catch(fail(status)) }, "Download .tgz");
+        dlBtn = h("button", { class: "btn", type: "button", disabled: true, onclick: () => apiDownload("/api/capture/download", "netdir-capture.tgz").catch(fail(status)) }, "Download .tgz");
         info = h("div", { class: "hint nomargin" });
         box = h("div", { class: "logbox capbox", tabindex: "0", role: "log", "aria-label": "Captured packets" });
         main.append(status, section("Packet capture",
@@ -5736,10 +5640,10 @@
           const more = [];
           if (!a.closed) for (const f of d.fix || []) more.push([ALERT_FIX[f] || f, () => call("fix", { id: a.id, action: f })]);
           if (d.go) more.push(["Go to " + (TABS.find((t) => t[0] === d.go) || [0, d.go])[1], () => selectTab(d.go)]);
-          more.push(["Edit rule…", () => { state.alertRule = a.rule; selectTab("cfg_alerts"); }]);
+          more.push(["Edit rule", () => { state.alertRule = a.rule; selectTab("cfg_alerts"); }]);
           const items = a.closed ? [["Copy", () => copy(text(a))], "-", ["More", more]] : [
             a.acked ? ["Unacknowledge", () => call("ack", { id: a.id, ack: false })] : ["Acknowledge", () => call("ack", { id: a.id, ack: true })],
-            ["Silence…", [["15 minutes", 15], ["1 hour", 60], ["4 hours", 240], ["1 day", 1440], ["7 days", 10080]].map(([l, m]) => [l, () => call("silence", { id: a.id, minutes: m })])],
+            ["Silence", [["15 minutes", 15], ["1 hour", 60], ["4 hours", 240], ["1 day", 1440], ["7 days", 10080]].map(([l, m]) => [l, () => call("silence", { id: a.id, minutes: m })])],
             a.silenced_until ? ["Unsilence", () => call("silence", { id: a.id, minutes: 0 })] : null,
             ["Mark resolved", () => call("resolve", { id: a.id })],
             ["Copy", () => copy(text(a))], "-", ["More", more]].filter(Boolean);
@@ -5789,7 +5693,7 @@
 
   VIEWS.scheduler = (() => {
     let status, box, last = "", clip = null;
-    try { clip = JSON.parse(localStorage.getItem("ntpdir_sched_clip") || "null"); } catch (_) { clip = null; }
+    try { clip = JSON.parse(localStorage.getItem("netdir_sched_clip") || "null"); } catch (_) { clip = null; }
     const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const NTH = [[1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [-1, "last"]];
     const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -5805,7 +5709,7 @@
 
     function copyTask(t) {
       clip = JSON.parse(JSON.stringify(t));
-      try { localStorage.setItem("ntpdir_sched_clip", JSON.stringify(clip)); } catch (_) { /* no storage */ }
+      try { localStorage.setItem("netdir_sched_clip", JSON.stringify(clip)); } catch (_) { /* no storage */ }
       VIEWS.scheduler.poll(true).catch(() => {});   // the Paste entries appear
       say(status, "info", "Copied “" + t.name + "”. Right-click ▸ Paste adds a copy.");
       setTimeout(() => clear(status), 2500);
@@ -5820,7 +5724,7 @@
     }
 
     function editor(task, existing) {
-      const t = Object.assign({ freq: "daily", at: "12:00:00", action: "stats_clear", window_sec: 0, timeout_sec: 300, days: [1], day: 1, nths: [], weekdays: [], month: 1, every: 1 }, task || {});
+      const t = Object.assign({ freq: "daily", at: "12:00:00", action: "backup", window_sec: 0, timeout_sec: 300, days: [1], day: 1, nths: [], weekdays: [], month: 1, every: 1 }, task || {});
       if (t.nth && !(t.nths || []).length) { t.nths = [t.nth]; t.weekdays = [t.weekday || 0]; }
       const isNew = !task;
       const err = h("div", { "aria-live": "polite" });
@@ -5949,12 +5853,12 @@
       const tasks = st.tasks.map((v) => v.task);
       const real = box; box = h("div", {});
       try {
-        const menu = (v) => rowMenu([["Edit…", () => editor(v.task, tasks)], ["Copy", () => copyTask(v.task)], clip ? ["Paste", () => pasteTask(tasks)] : null, "-",
-          ["Run now on…", [["this node", () => { if (confirm("Run “" + v.name + "” on this node now?")) call("run", { id: v.id }); }],
+        const menu = (v) => rowMenu([["Edit", () => editor(v.task, tasks)], ["Copy", () => copyTask(v.task)], clip ? ["Paste", () => pasteTask(tasks)] : null, "-",
+          ["Run now on", [["this node", () => { if (confirm("Run “" + v.name + "” on this node now?")) call("run", { id: v.id }); }],
             ["all nodes", () => { if (confirm("Run “" + v.name + "” on every node it is for now? The nodes start 1 minute apart, each when it is free.")) call("run", { id: v.id, all: true }); }]]],
           [v.disabled ? "Enable" : "Disable", () => call("task", { task: Object.assign({}, v.task, { disabled: !v.disabled }) })], "-",
           ["Delete", () => { if (confirm("Delete the task “" + v.name + "”?")) call("delete", { id: v.id }); }, "danger"]].filter(Boolean));
-        const emptyMenu = rowMenu([["New task…", () => editor(null, tasks)], clip ? ["Paste", () => pasteTask(tasks)] : null].filter(Boolean));
+        const emptyMenu = rowMenu([["New task", () => editor(null, tasks)], clip ? ["Paste", () => pasteTask(tasks)] : null].filter(Boolean));
         const lastCell = (v) => v.last ? h("span", { title: v.last.output || "" }, pill(v.last.status, v.last.status === "ok" ? "ok" : v.last.status === "failed" ? "bad" : v.last.status === "running" ? "info" : "warn"), " ", when(v.last.start)) : h("span", { class: "muted" }, "never");
         const where = (v) => (v.task.nodes || []).length ? v.task.nodes.map(nodeName).join(", ") : "every node";
         const row = (v) => h("tr", { tabindex: "0", class: v.disabled ? "paused" : "", oncontextmenu: menu(v), ondblclick: () => editor(v.task, tasks) },
@@ -6111,7 +6015,7 @@
             h("button", { class: "btn primary small", type: "button", onclick: () => { mode = "new"; drawList(); drawDetail(); } }, "+ New")),
           h("div", { class: "ufilterbar" }, filterIn),
           listBox,
-          h("div", { class: "ufoot" }, h("button", { class: "btn", type: "button", onclick: () => { mode = "existing"; drawList(); drawDetail(); } }, "Add an existing account…")));
+          h("div", { class: "ufoot" }, h("button", { class: "btn", type: "button", onclick: () => { mode = "existing"; drawList(); drawDetail(); } }, "Add an existing account")));
         main.append(status, h("div", { class: "usersplit" }, left, detail));
       },
       async poll() {

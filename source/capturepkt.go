@@ -164,22 +164,10 @@ func summarizeIP(pi pktInfo, data []byte) string {
 			return fmt.Sprintf("%s %s > %s, length %d", name, pi.src, pi.dst, total)
 		}
 		flags := ""
-		hdr := 8
-		if pi.proto == 6 {
-			hdr = 20
-			if len(data) >= pi.l4+14 {
-				flags = " [" + tcpFlags(data[pi.l4+13]) + "]"
-				hdr = int(data[pi.l4+12]>>4) * 4
-			}
+		if pi.proto == 6 && len(data) >= pi.l4+14 {
+			flags = " [" + tcpFlags(data[pi.l4+13]) + "]"
 		}
 		line := fmt.Sprintf("%s %s.%d > %s.%d%s, length %d", name, pi.src, pi.sport, pi.dst, pi.dport, flags, total)
-		if pi.proto == 17 && (pi.sport == 123 || pi.dport == 123) {
-			if pl := data[min(len(data), pi.l4+hdr):]; len(pl) > 0 {
-				if d := ntpSummary(pl); d != "" {
-					line += " " + d
-				}
-			}
-		}
 		return line
 	case 1:
 		return fmt.Sprintf("ICMP %s > %s%s, length %d", pi.src, pi.dst, icmpText(pi, data, false), total)
@@ -235,29 +223,6 @@ func icmpText(pi pktInfo, data []byte, v6 bool) string {
 		return ": neighbor advertisement, " + tgt.String() + mac + eth
 	}
 	return fmt.Sprintf(": type %d", typ)
-}
-
-// ntpModes are the names of the NTP packet modes.
-var ntpModes = [8]string{"reserved", "symmetric active", "symmetric passive", "client", "server", "broadcast", "control", "private"}
-
-// ntpSummary says what an NTP packet is, in a few words: "NTPv4 client" or "NTPv4 server stratum 2 ref 10.0.0.1".
-func ntpSummary(b []byte) string {
-	p, ok := parseNTP(b)
-	if !ok {
-		return ""
-	}
-	s := "NTPv" + strconv.Itoa(int(p.Version)) + " " + ntpModes[p.Mode&7]
-	if p.Mode != ntpModeServer {
-		return s
-	}
-	if p.Stratum == 0 {
-		return s + " kiss-o'-death " + refIDString(0, p.RefID)
-	}
-	s += " stratum " + strconv.Itoa(int(p.Stratum)) + " ref " + refIDString(p.Stratum, p.RefID)
-	if p.Leap == ntpLeapUnsynch {
-		s += " [unsynchronised]"
-	}
-	return s
 }
 
 func tcpFlags(b byte) string {

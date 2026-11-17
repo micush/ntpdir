@@ -71,25 +71,3 @@ func TestClusterLogsHostStrain(t *testing.T) {
 		t.Fatalf("cleared: %s", out)
 	}
 }
-
-// Turning something on or off reads "enabled" / "disabled" in the change log line.
-func TestSummaryWordsEnableDisable(t *testing.T) {
-	a, b := newDaemonConfig(), newDaemonConfig()
-	b.Groups[0].Preempt = true
-	b.NTP.MaxOffsetMS = 0
-	b.NTP.ClientRate = 50
-	b.NTP.Spread = false
-	got := summarizeSections(configSections(a, b))
-	for _, w := range []string{"preempt enabled", "max_offset_ms disabled", "client_rate enabled (50)", "spread disabled"} {
-		if !strings.Contains(got, w) {
-			t.Errorf("missing %q in %q", w, got)
-		}
-	}
-	a, b = b, a
-	got = summarizeSections(configSections(a, b))
-	for _, w := range []string{"preempt disabled", "max_offset_ms enabled (128)", "client_rate disabled"} {
-		if !strings.Contains(got, w) {
-			t.Errorf("missing %q in %q", w, got)
-		}
-	}
-}

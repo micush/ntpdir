@@ -26,7 +26,7 @@ import (
 )
 
 // Software updates, after umiss's managerupdate: a release archive (the
-// ntpdir_vN.tgz this project ships) is uploaded to any node or pulled from a
+// netdir_vN.tgz this project ships) is uploaded to any node or pulled from a
 // peer, built natively on each node (the PAM binding is cgo, so a binary is
 // only portable to a host with the same libpam), and swapped in with a re-exec.
 // A boot guard restores the previous binary if the new one keeps failing to
@@ -496,7 +496,7 @@ func collectZip(body []byte, c *srcCollector) error {
 }
 
 // finishSource strips a single common top directory, drops VCS/binary
-// leftovers and checks the tree really is a ntpdir source tree.
+// leftovers and checks the tree really is a netdir source tree.
 func finishSource(files []srcFile) ([]srcFile, error) {
 	if len(files) == 0 {
 		return nil, errors.New("archive is empty")
@@ -523,7 +523,7 @@ func finishSource(files []srcFile) ([]srcFile, error) {
 		if same {
 			name = strings.TrimPrefix(name, top+"/")
 		}
-		if name == ".git" || strings.HasPrefix(name, ".git/") || name == "ntpdir" || strings.HasSuffix(name, ".tmp") {
+		if name == ".git" || strings.HasPrefix(name, ".git/") || name == "netdir" || strings.HasSuffix(name, ".tmp") {
 			continue
 		}
 		if seen[name] {
@@ -541,11 +541,11 @@ func finishSource(files []srcFile) ([]srcFile, error) {
 		return nil
 	}
 	gm := get("source/go.mod")
-	if gm == nil || !bytes.Contains(gm, []byte("module ntpdir")) {
-		return nil, errors.New("not a ntpdir source tree (source/go.mod with \"module ntpdir\" not found in the archive; trees before v44 had the Go files at the top and cannot be used by this version)")
+	if gm == nil || !bytes.Contains(gm, []byte("module netdir")) {
+		return nil, errors.New("not a netdir source tree (source/go.mod with \"module netdir\" not found in the archive; trees before v44 had the Go files at the top and cannot be used by this version)")
 	}
 	if get("source/main.go") == nil {
-		return nil, errors.New("not a ntpdir source tree (source/main.go missing)")
+		return nil, errors.New("not a netdir source tree (source/main.go missing)")
 	}
 	v := get("source/VERSION")
 	if v == nil || !versionFileRe.Match(v) {
@@ -595,7 +595,7 @@ func (u *Updater) ExtractSource(body []byte) (string, error) {
 	return u.SourceVersion(), nil
 }
 
-// SourceTarball packs the staged source tree (top-level "ntpdir/") for a peer.
+// SourceTarball packs the staged source tree (top-level "netdir/") for a peer.
 func (u *Updater) SourceTarball() ([]byte, string, error) {
 	ver := u.SourceVersion()
 	if ver == "" {
@@ -614,7 +614,7 @@ func (u *Updater) SourceTarball() ([]byte, string, error) {
 		if err != nil {
 			return err
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: "ntpdir/" + filepath.ToSlash(rel), Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0)}); err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: "netdir/" + filepath.ToSlash(rel), Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0)}); err != nil {
 			return err
 		}
 		_, err = tw.Write(data)
@@ -682,13 +682,13 @@ func (u *Updater) findGo() (string, error) {
 		sort.Sort(sort.Reverse(sort.StringSlice(m)))
 		cands = append(cands, m...)
 	}
-	cands = append(cands, "/usr/local/share/ntpdir/go/bin/go")
+	cands = append(cands, "/usr/local/share/netdir/go/bin/go")
 	for _, c := range cands {
 		if goUsable(c) {
 			return c, nil
 		}
 	}
-	return "", errors.New("no Go toolchain >= 1.24 found on this node (install Go, or re-run install.sh which keeps one under /usr/local/share/ntpdir/go)")
+	return "", errors.New("no Go toolchain >= 1.24 found on this node (install Go, or re-run install.sh which keeps one under /usr/local/share/netdir/go)")
 }
 
 // Build compiles the staged source natively and returns the binary path.
@@ -705,7 +705,7 @@ func (u *Updater) Build(ctx context.Context) (bin, version string, err error) {
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return "", "", err
 	}
-	out := filepath.Join(cache, fmt.Sprintf("ntpdir-v%s-%s", version, fp[:12]))
+	out := filepath.Join(cache, fmt.Sprintf("netdir-v%s-%s", version, fp[:12]))
 	if checkBuilt(out, version) == nil {
 		return out, version, nil
 	}
@@ -765,8 +765,8 @@ func checkBuilt(bin, version string) error {
 	if err != nil {
 		return fmt.Errorf("built binary does not run: %w", err)
 	}
-	if got := strings.TrimSpace(string(b)); got != "ntpdir v"+version {
-		return fmt.Errorf("built binary reports %q, expected %q", got, "ntpdir v"+version)
+	if got := strings.TrimSpace(string(b)); got != "netdir v"+version {
+		return fmt.Errorf("built binary reports %q, expected %q", got, "netdir v"+version)
 	}
 	if pamAvailable {
 		data, err := os.ReadFile(bin)
@@ -856,7 +856,7 @@ func (u *Updater) Apply(ctx context.Context, self, by string) (string, error) {
 		u.noteFailure(self, from, target, err.Error())
 		return "", err
 	}
-	prev := filepath.Join(u.dir, "ntpdir.prev")
+	prev := filepath.Join(u.dir, "netdir.prev")
 	if err := copyFile(exe, prev, 0o755); err != nil {
 		u.noteFailure(self, from, target, "cannot save the current binary: "+err.Error())
 		return "", fmt.Errorf("cannot save the current binary for rollback: %w", err)

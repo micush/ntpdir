@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-// The memory guard.  The statistics and the host history live in memory, and they
-// grow up to 30 days of data.  Every memGuardEvery the guard looks at how much
+// The memory guard.  The host history lives in memory, and it grows up to 30 days
+// of data.  Every memGuardEvery the guard looks at how much
 // memory the machine is using (the same figure as Monitor ▸ Node: what programs hold, caches excluded; inside a
 // container with a memory limit, the container's own use against its limit, whichever is higher).  At or above
 // the limit (85 % by default) it drops the oldest data: each round removes the oldest tenth of the time span the
-// statistics and the host history cover, gives
+// host history covers, gives
 // the memory back to the system and measures again, up to memGuardRounds rounds per check, until use is below
 // the limit.  If it is still above, the next check carries on.  Newer data always outlives older data, and the newest hour is never dropped (it is tiny, and a machine that
 // is short of memory for another reason should not lose its recent history as well).
 //
-// The limit can be changed with the environment variable NTPDIR_MEMORY_LIMIT_PERCENT (1-99) of the daemon.
+// The limit can be changed with the environment variable NETDIR_MEMORY_LIMIT_PERCENT (1-99) of the daemon.
 
 const (
 	memGuardEvery  = 30 * time.Second
@@ -29,7 +29,7 @@ const (
 	memGuardRounds = 5         // rounds per check
 	memGuardKeep   = time.Hour // the newest hour of statistics and host history is never dropped
 	memGuardSettle = time.Second
-	memGuardEnv    = "NTPDIR_MEMORY_LIMIT_PERCENT"
+	memGuardEnv    = "NETDIR_MEMORY_LIMIT_PERCENT"
 )
 
 // MemGuardInfo is what Monitor ▸ Node and --host say about the guard.
@@ -128,8 +128,8 @@ func (g *memGuard) check() bool {
 		warnf("memory guard: memory use is %.1f%% (limit %.0f%%), but there is no statistics or host history left to drop", start, g.limit)
 		return false
 	}
-	note := fmt.Sprintf("memory was %.1f%% (limit %.0f%%): dropped the oldest history (%d statistics minutes and %d top-list slots, %d host minutes); now %.1f%%",
-		start, g.limit, total.statMinutes, total.statSlots, total.hostMinutes, pct)
+	note := fmt.Sprintf("memory was %.1f%% (limit %.0f%%): dropped the oldest host history (%d minutes); now %.1f%%",
+		start, g.limit, total.hostMinutes, pct)
 	warnf("memory guard: %s", note)
 	g.mu.Lock()
 	g.info.Trims++
@@ -144,22 +144,18 @@ func (g *memGuard) check() bool {
 func (g *memGuard) trimRound() (trimmed, time.Time) {
 	var r trimmed
 	now := g.now()
-	oldest := qstats.oldest()
-	if h := hoststats.oldest(); !h.IsZero() && (oldest.IsZero() || h.Before(oldest)) {
-		oldest = h
-	}
+	oldest := hoststats.oldest()
 	if !oldest.IsZero() {
 		span := now.Sub(oldest)
 		cut := time.Duration(float64(span) * memGuardStep)
 		if cut < time.Minute {
 			cut = time.Minute
 		}
-		before := oldest.Add(cut).Truncate(time.Hour).Add(time.Hour) // up to a whole hour: the top lists are kept in hours
+		before := oldest.Add(cut).Truncate(time.Hour).Add(time.Hour) // up to a whole hour
 		if floor := now.Add(-memGuardKeep); before.After(floor) {
 			before = floor
 		}
 		if before.After(oldest) {
-			r.statSlots, r.statMinutes = qstats.dropBefore(before)
 			r.hostMinutes = hoststats.dropBefore(before)
 		}
 	}
@@ -167,67 +163,6 @@ func (g *memGuard) trimRound() (trimmed, time.Time) {
 }
 
 // ── what the collectors give up ──
-
-// oldest is the start of the oldest data held, zero when there is none.
-func (s *QStats) oldest() time.Time {
-	s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var min int64
-	note := func(m int64) {
-		if m > 0 && (min == 0 || m < min) {
-			min = m
-		}
-	}
-	for i := range s.mins {
-		if s.mins[i].total > 0 {
-			note(s.mins[i].stamp)
-		}
-	}
-	for i := range s.fine {
-		if s.fine[i].stamp > 0 {
-			note(s.fine[i].stamp * qsFineSpan)
-		}
-	}
-	for i := range s.coarse {
-		if s.coarse[i].stamp > 0 {
-			note(s.coarse[i].stamp * qsCoarseSpan)
-		}
-	}
-	if min == 0 {
-		return time.Time{}
-	}
-	return time.Unix(min*60, 0)
-}
-
-// dropBefore forgets everything older than t: the top lists that end before it and the minute counters.
-func (s *QStats) dropBefore(t time.Time) (slots, minutes int) {
-	m := t.Unix() / 60
-	s.flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.mins {
-		if s.mins[i].stamp > 0 && s.mins[i].stamp < m {
-			if s.mins[i].total > 0 {
-				minutes++
-			}
-			s.mins[i] = qsMin{}
-		}
-	}
-	for i := range s.fine {
-		if s.fine[i].stamp > 0 && (s.fine[i].stamp+1)*qsFineSpan <= m {
-			s.fine[i] = qsTop{}
-			slots++
-		}
-	}
-	for i := range s.coarse {
-		if s.coarse[i].stamp > 0 && (s.coarse[i].stamp+1)*qsCoarseSpan <= m {
-			s.coarse[i] = qsTop{}
-			slots++
-		}
-	}
-	return
-}
 
 func (h *HostStats) oldest() time.Time {
 	h.mu.Lock()

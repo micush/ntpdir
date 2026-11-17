@@ -1,0 +1,308 @@
+package device
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestMonitor(t *testing.T) {
+	calls := 0
+	d, srv := stub(t, func(r *http.Request) bool { u, p, _ := r.BasicAuth(); return u == "admin" && p == "pw" }, map[string]string{
+		"/restconf/data/Cisco-IOS-XE-native:native/hostname": `{"x:hostname":"sw1"}`,
+	})
+	srv.Config.Handler = countCalls(srv.Config.Handler, &calls)
+	d.Name, d.Platform, d.Credential = "sw1", "iosxe", "lab"
+	off := d
+	off.Name, off.Disabled = "off", true
+	dead := d
+	dead.Name, dead.Address, dead.Port = "dead", "127.0.0.1", freePort(t)
+	creds := []Credential{{Name: "lab", Username: "admin", Password: "pw"}}
+	m := NewMonitor()
+	m.Timeout = time.Second
+	m.IdleReach, m.IdleFacts = 0, 0 // this test is about what a check finds, not how often
+	now := time.Unix(1_800_000_000, 0)
+	m.Check(context.Background(), []Device{d, off, dead}, creds, now)
+	s := m.Snapshot()
+	if h := s["sw1"]; h.Status != "ok" || h.Facts == nil || h.Facts.Hostname != "sw1" || h.LastOK != now.Unix() {
+		t.Fatalf("sw1: %+v", h)
+	}
+	if h := s["off"]; h.Status != "paused" {
+		t.Fatalf("a disabled device is contacted: %+v", h)
+	}
+	if h := s["dead"]; h.Status != "bad" || !strings.Contains(h.Detail, "does not answer") {
+		t.Fatalf("dead: %+v", h)
+	}
+	// the facts are not asked again before FactsEvery
+	before := calls
+	m.Check(context.Background(), []Device{d}, creds, now.Add(time.Minute))
+	if calls != before {
+		t.Fatalf("facts asked again after a minute (%d requests)", calls-before)
+	}
+	if _, ok := m.Snapshot()["dead"]; ok {
+		t.Fatal("a device that left the inventory is still kept")
+	}
+	// a wrong password: the port answers, the request does not; the last facts are kept, the password never shows
+	bad := []Credential{{Name: "lab", Username: "admin", Password: "wrong-secret"}}
+	m.Check(context.Background(), []Device{d}, bad, now.Add(10*time.Minute))
+	if h := m.Snapshot()["sw1"]; h.Status != "warn" || h.Facts == nil || strings.Contains(h.Detail, "wrong-secret") || h.LastOK != now.Unix() {
+		t.Fatalf("wrong password: %+v", h)
+	}
+}
+
+func TestMonitorUnreachableWhenDialFails(t *testing.T) {
+	od := dialFn
+	dialFn = func(context.Context, string) (net.Conn, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	}
+	defer func() { dialFn = od }()
+	m := NewMonitor()
+	m.Check(context.Background(), []Device{{Name: "a", Platform: "iosxe", Address: "192.0.2.1", Credential: "c"}}, nil, time.Now())
+	if h := m.Snapshot()["a"]; h.Status != "bad" || h.Detail != "the API port does not answer: connection refused" {
+		t.Fatalf("%+v", h)
+	}
+}
+
+func countCalls(h http.Handler, n *int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { *n++; h.ServeHTTP(w, r) })
+}
+
+// freePort is a TCP port on loopback that nothing listens on.
+func freePort(t *testing.T) int {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return p
+}
+
+// while nobody is looking the facts are asked rarely; looking (Touch) brings back the short interval
+func TestMonitorQuietWhenNobodyLooks(t *testing.T) {
+	calls := 0
+	d, srv := stub(t, func(r *http.Request) bool { return true }, map[string]string{
+		"/restconf/data/Cisco-IOS-XE-native:native/hostname": `{"x:hostname":"sw1"}`,
+	})
+	srv.Config.Handler = countCalls(srv.Config.Handler, &calls)
+	d.Name, d.Platform, d.Credential = "sw1", "iosxe", "lab"
+	creds := []Credential{{Name: "lab", Username: "admin", Password: "pw"}}
+	m := NewMonitor()
+	m.Timeout = time.Second
+	now := time.Now()
+	if r, f := m.intervals(now); r != 3*time.Minute || f != 6*time.Hour {
+		t.Fatalf("quiet intervals %v %v", r, f)
+	}
+	m.Check(context.Background(), []Device{d}, creds, now) // first sight: the facts are asked
+	first := calls
+	if first == 0 {
+		t.Fatal("the facts were not asked at first sight")
+	}
+	m.Check(context.Background(), []Device{d}, creds, now.Add(30*time.Minute))
+	if calls != first {
+		t.Errorf("facts asked after 30 minutes with nobody looking (%d requests)", calls-first)
+	}
+	m.Tune = func() Tuning { return Tuning{Reach: 10 * time.Minute, Facts: 45 * time.Minute} }
+	if r, f := m.intervals(now); r != 10*time.Minute || f != 45*time.Minute {
+		t.Errorf("tuned intervals %v %v", r, f)
+	}
+	m.Tune = func() Tuning { return Tuning{Reach: time.Second, Facts: time.Second} } // never shorter than while looking
+	if r, f := m.intervals(now); r != 30*time.Second || f != 5*time.Minute {
+		t.Errorf("a tuned interval shorter than the watched one: %v %v", r, f)
+	}
+	m.Tune = func() Tuning { return Tuning{LiveReach: 15 * time.Second, LiveFacts: 2 * time.Minute} }
+	m.Touch()
+	if r, f := m.intervals(time.Now()); r != 15*time.Second || f != 2*time.Minute {
+		t.Errorf("tuned watched intervals %v %v", r, f)
+	}
+	if r, f := m.intervals(time.Now().Add(time.Hour)); r != 3*time.Minute || f != 6*time.Hour {
+		t.Errorf("quiet intervals with a tuned watched pair %v %v", r, f)
+	}
+	m.Tune = nil
+	if !m.watched(time.Now()) {
+		t.Fatal("not watched after a Touch")
+	}
+	if r, f := m.intervals(time.Now()); r != 30*time.Second || f != 5*time.Minute {
+		t.Errorf("watched intervals %v %v", r, f)
+	}
+	m.Check(context.Background(), []Device{d}, creds, time.Now().Add(6*time.Minute))
+	if calls == first {
+		t.Error("facts not asked again 6 minutes after a look")
+	}
+	// a Touch after a quiet time wakes the loop once
+	m2 := NewMonitor()
+	m2.Touch()
+	select {
+	case <-m2.wake:
+	default:
+		t.Error("the first look after a quiet time did not wake the checks")
+	}
+	m2.Touch()
+	select {
+	case <-m2.wake:
+		t.Error("a second look woke the checks again")
+	default:
+	}
+}
+
+func TestMonitorInactiveDoesNotCheck(t *testing.T) {
+	m := NewMonitor()
+	var active atomic.Bool
+	m.Active = active.Load
+	m.InactiveWait = 10 * time.Millisecond
+	var calls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	defer func() { cancel(); <-done }()
+	go func() {
+		defer close(done)
+		m.Run(ctx, func() ([]Device, []Credential) {
+			calls.Add(1)
+			return nil, nil
+		})
+	}()
+	time.Sleep(80 * time.Millisecond)
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("inactive node listed devices %d times", n)
+	}
+	active.Store(true)
+	time.Sleep(80 * time.Millisecond)
+	if calls.Load() == 0 {
+		t.Fatal("node did not start checking once active")
+	}
+}
+
+func TestDefaultPortIsDialedByTheCheck(t *testing.T) {
+	for p, want := range map[string]int{"proxmox": 8006, "junos": 3443, "technitium": 53443, "dnsdir": 53853, "ntpdir": 12380, "mediaencoder": 8765, "iosxe": 443, "vcenter": 443} {
+		if got := DefaultPort(p); got != want {
+			t.Errorf("%s: %d, want %d", p, got, want)
+		}
+	}
+	var dialed string
+	old := dialFn
+	defer func() { dialFn = old }()
+	dialFn = func(ctx context.Context, addr string) (net.Conn, error) {
+		dialed = addr
+		return nil, errors.New("refused")
+	}
+	m := NewMonitor()
+	m.checkOne(context.Background(), Device{Name: "pve10", Platform: "proxmox", Address: "10.0.0.10"}, Credential{}, Health{}, time.Now())
+	if dialed != "10.0.0.10:8006" {
+		t.Fatalf("the check dialed %q, want the Proxmox port", dialed)
+	}
+}
+
+func TestMonitorChecksAnEnabledDeviceAtOnce(t *testing.T) {
+	od, oc := dialFn, changeEvery
+	defer func() { dialFn, changeEvery = od, oc }()
+	changeEvery = 10 * time.Millisecond
+	dialFn = func(context.Context, string) (net.Conn, error) { return nil, errors.New("refused") }
+	m := NewMonitor()
+	m.IdleReach, m.IdleFacts = time.Hour, time.Hour // nothing is due for an hour
+	var off atomic.Bool
+	off.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	defer func() { cancel(); <-done }() // the loop has ended before the stubs are put back
+	go func() {
+		defer close(done)
+		m.Run(ctx, func() ([]Device, []Credential) {
+			return []Device{{Name: "pve10", Platform: "proxmox", Address: "10.0.0.10", Disabled: off.Load()}}, nil
+		})
+	}()
+	wait := func(want string) {
+		t.Helper()
+		for i := 0; i < 200; i++ {
+			if m.Snapshot()["pve10"].Status == want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("status %q, want %q", m.Snapshot()["pve10"].Status, want)
+	}
+	wait("paused")
+	off.Store(false) // enabled: it is checked now, not in an hour
+	wait("bad")
+	off.Store(true)
+	wait("paused")
+}
+
+// An SNMP device (UDP) has no TCP port: it was reported "the API port does not answer: connection refused" whatever it did.  It is now
+// asked over SNMP: an agent that answers is ok, a silent one is unreachable, and no TCP connection is tried either way.
+func TestMonitorSNMPDeviceIsNotDialled(t *testing.T) {
+	od := dialFn
+	dialFn = func(context.Context, string) (net.Conn, error) {
+		t.Error("a TCP connection was tried for an SNMP device")
+		return nil, errors.New("refused")
+	}
+	defer func() { dialFn = od }()
+	a := &testAgent{mib: iosMIB(), comm: "ro-comm-7q2x"}
+	d := iosDevice(startAgent(t, a))
+	m := NewMonitor()
+	m.Timeout = 500 * time.Millisecond
+	now := time.Now()
+	m.Check(context.Background(), []Device{d}, []Credential{{Name: "x", Token: "ro-comm-7q2x"}}, now)
+	if h := m.Snapshot()["sw1"]; h.Status != "ok" || h.Facts == nil || h.Facts.Hostname != "sw-core-1" {
+		t.Fatalf("an answering agent: %+v", h)
+	}
+	// the same device asked again a minute later is asked again (nothing is cached for SNMP)
+	m.Check(context.Background(), []Device{d}, []Credential{{Name: "x", Token: "wrong-community"}}, now.Add(time.Minute))
+	if h := m.Snapshot()["sw1"]; h.Status != "bad" || !strings.Contains(h.Detail, "no answer over SNMP") || strings.Contains(h.Detail, "wrong-community") {
+		t.Fatalf("a wrong community: %+v", h)
+	}
+}
+
+// A device that refused a request (a wrong password) is asked again only every FactsEvery; Recheck asks it now, so a corrected
+// login shows at once, and a disabled device is still not contacted.
+func TestMonitorRecheck(t *testing.T) {
+	calls := 0
+	d, srv := stub(t, func(r *http.Request) bool { u, p, _ := r.BasicAuth(); return u == "admin" && p == "pw" }, map[string]string{
+		"/restconf/data/Cisco-IOS-XE-native:native/hostname": `{"x:hostname":"sw1"}`,
+	})
+	srv.Config.Handler = countCalls(srv.Config.Handler, &calls)
+	d.Name, d.Platform, d.Credential = "sw1", "iosxe", "lab"
+	bad := []Credential{{Name: "lab", Username: "admin", Password: "wrong-secret"}}
+	good := []Credential{{Name: "lab", Username: "admin", Password: "pw"}}
+	m := NewMonitor()
+	m.Timeout = time.Second
+	now := time.Unix(1_800_000_000, 0)
+	m.Check(context.Background(), []Device{d}, bad, now)
+	if h := m.Snapshot()["sw1"]; h.Status != "warn" {
+		t.Fatalf("a wrong password: %+v", h)
+	}
+	// the login is corrected; a minute later the round does not ask the device again
+	m.Check(context.Background(), []Device{d}, good, now.Add(time.Minute))
+	if h := m.Snapshot()["sw1"]; h.Status != "warn" {
+		t.Fatalf("the round asked again before FactsEvery: %+v", h)
+	}
+	// Recheck does, and what it finds is the state from then on
+	h := m.Recheck(context.Background(), d, good[0], now.Add(time.Minute))
+	if h.Status != "ok" || h.Facts == nil || h.Facts.Hostname != "sw1" || h.FactsErr != "" || h.LastOK != now.Add(time.Minute).Unix() {
+		t.Fatalf("after the recheck: %+v", h)
+	}
+	if got := m.Snapshot()["sw1"]; got.Status != "ok" {
+		t.Fatalf("the monitor kept the old state: %+v", got)
+	}
+	// and a login that is still wrong shows as refusing again, without the password
+	h = m.Recheck(context.Background(), d, bad[0], now.Add(2*time.Minute))
+	if h.Status != "warn" || strings.Contains(h.Detail, "wrong-secret") || h.Facts == nil {
+		t.Fatalf("a recheck with the wrong password: %+v", h)
+	}
+	// a disabled device is not contacted, however it is asked
+	off := d
+	off.Name, off.Disabled = "off", true
+	before := calls
+	if h := m.Recheck(context.Background(), off, good[0], now); h.Status != "paused" || calls != before {
+		t.Fatalf("a disabled device was contacted: %+v (%d requests)", h, calls-before)
+	}
+	// a device whose login is not in the list says so
+	h = m.Recheck(context.Background(), d, Credential{}, now.Add(3*time.Minute))
+	if h.Status != "warn" || !strings.Contains(h.Detail, "not in the list") {
+		t.Fatalf("no login: %+v", h)
+	}
+}

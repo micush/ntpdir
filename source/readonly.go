@@ -11,8 +11,8 @@ import (
 // Read-only accounts.  A member of web.read_group who is in none of the web.group groups signs in and sees
 // everything the GUI shows, but cannot change anything: the one gate every request passes (authedCT) refuses
 // every method but GET and HEAD, and keeps three things back that a GET would hand over whole: the
-// configuration versions (the whole file, keys and passwords included), the keys and passwords inside the
-// configuration the Configure pages read and the BGP and OSPF passwords of their own pages.  Logging out stays possible.
+// configuration versions (the whole file, keys and passwords included) and the keys and passwords inside the
+// configuration the Configure pages read.  Logging out stays possible.
 
 const readOnlyMsg = "This account is read-only: it can look at everything but cannot change anything."
 
@@ -52,23 +52,23 @@ func readOnlyDenied(r *http.Request) bool {
 	return p == "/api/versions/get" || p == "/api/versions/diff" || p == "/api/versions/download"
 }
 
-// redactRouting is what a read-only account is shown of the BGP and OSPF pages (bgp.* and ospf.*): the status with the
-// neighbors' and interfaces' passwords hidden, as in the configuration the Configure pages read, and the secrets that
-// FRR's own output can echo in the result of the last apply taken out.
-func redactRouting(v any) any {
-	out := redactSecrets(v)
-	if m, ok := out.(map[string]any); ok {
-		if ap, ok := m["applied"].(map[string]any); ok {
-			if s, ok := ap["detail"].(string); ok {
-				ap["detail"], _ = redactText(s)
-			}
-		}
+// readOnlyJob: the two POSTs that only start a look (ping/mtr, nmap) are let through for a request that came
+// in-process (an MCP caller, or a node relaying one).  A read-only GUI user cannot reach this: the browser path
+// (authed, second branch) still refuses every POST, and /api/proxy refuses non-GET for them.
+func readOnlyJob(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
 	}
-	return out
+	p := r.URL.Path
+	if p == "/api/proxy" { // the same job asked of another node: the path it carries is the one that counts
+		p, _, _ = strings.Cut(r.URL.Query().Get("path"), "?")
+	}
+	return p == "/api/nettool" || p == "/api/scan"
 }
 
 // secretKeys are the configuration keys whose values a read-only account is not shown.
-var secretKeys = map[string]bool{"key": true, "password": true, "register_key": true, "secret": true, "sso_google_client_secret": true, "sso_entra_client_secret": true, "sso_oidc_client_secret": true, "ldap_bind_password": true}
+var secretKeys = map[string]bool{"key": true, "password": true, "register_key": true, "secret": true, "sso_google_client_secret": true, "sso_entra_client_secret": true, "sso_oidc_client_secret": true, "ldap_bind_password": true,
+	"token": true} // token: a device credential's API token (devices.go)
 
 // redactSecrets returns v (a configuration) as generic JSON with the values of secretKeys replaced.
 func redactSecrets(v any) any {
@@ -127,39 +127,4 @@ func ensureReadGroup(cfg WebConfig) {
 		return
 	}
 	infof("web: created the read-only group %q (add people on the Users page)", def)
-}
-
-// hiddenRepo is what a read-only account gets for the online repository; the page shows only "https://github.com".
-const hiddenRepo = "(hidden)"
-
-// redactUpdate takes the online repository out of the upgrade status or history: a read-only account sees the host
-// name of the repository, not the owner and name after it.  The "repo" events of the history name the repository, so
-// their text goes too.  The value given in is not changed.
-func redactUpdate(v any) any {
-	hide := func(evs []UpdateEvent) []UpdateEvent {
-		if evs == nil {
-			return nil
-		}
-		out := append([]UpdateEvent(nil), evs...)
-		for i := range out {
-			if out[i].Kind == "repo" {
-				out[i].Detail = ""
-			}
-		}
-		return out
-	}
-	switch t := v.(type) {
-	case UpdateView:
-		t.Intent.Repo = hiddenRepo
-		t.History = hide(t.History)
-		if t.Last != nil && t.Last.Kind == "repo" {
-			l := *t.Last
-			l.Detail = ""
-			t.Last = &l
-		}
-		return t
-	case []UpdateEvent:
-		return hide(t)
-	}
-	return v
 }

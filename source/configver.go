@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netdir/device"
 )
 
 // Configuration history, modelled on umiss's internal/configversion: an
@@ -21,7 +23,7 @@ import (
 // a diff between any two versions (or either against the live one) and
 // restore.  One small JSON file per version, named by a unix-millisecond id.
 //
-// The versioned unit is the whole per-node config file (groups, ntp, web,
+// The versioned unit is the whole per-node config file (groups, settings, web,
 // cluster, log_level): that is what this node actually runs, including the
 // parts a cluster replicates from the primary.
 
@@ -357,10 +359,6 @@ next:
 			out = append(out, "key changed")
 			continue
 		}
-		if k == "ntp" {
-			out = append(out, ntpChange(a[k], b[k]))
-			continue
-		}
 		if k == "paused" {
 			if on, _ := b[k].(bool); on {
 				out = append(out, "paused on this node")
@@ -515,9 +513,6 @@ func configSections(a, b *DaemonConfig) []Section {
 		}
 	}
 
-	if a.selfCheckOn() != b.selfCheckOn() {
-		out = append(out, Section{"Self-check", onOff(a.selfCheckOn()) + " → " + onOff(b.selfCheckOn())})
-	}
 	if a.NodePaused != b.NodePaused {
 		if b.NodePaused {
 			out = append(out, Section{"Node", "paused — this node is out of service"})
@@ -526,49 +521,34 @@ func configSections(a, b *DaemonConfig) []Section {
 		}
 	}
 
-	// ntp
-	if sa, sb := a.NTP.Servers, b.NTP.Servers; !reflect.DeepEqual(sa, sb) {
-		add, rem := setDiff(sa, sb)
-		var parts []string
-		if len(add) > 0 {
-			parts = append(parts, "added "+named(add))
-		}
-		if len(rem) > 0 {
-			parts = append(parts, "removed "+named(rem))
-		}
-		if len(parts) == 0 {
-			parts = append(parts, "reordered")
-		}
-		out = append(out, Section{"NTP servers", strings.Join(parts, ", ")})
-	}
-	if !reflect.DeepEqual(a.NTP.ServerNames, b.NTP.ServerNames) && !(len(a.NTP.ServerNames) == 0 && len(b.NTP.ServerNames) == 0) {
-		out = append(out, Section{"NTP server names", "changed"})
-	}
-	if fadd, frem := setDiff(a.NTP.FallbackServers, b.NTP.FallbackServers); len(fadd)+len(frem) > 0 {
-		var parts []string
-		if len(fadd) > 0 {
-			parts = append(parts, "added "+named(fadd))
-		}
-		if len(frem) > 0 {
-			parts = append(parts, "removed "+named(frem))
-		}
-		out = append(out, Section{"NTP fallback servers", strings.Join(parts, "; ")})
-	}
-	if padd, prem := setDiff(a.NTP.PausedServers, b.NTP.PausedServers); len(padd)+len(prem) > 0 {
+	if padd, prem := setDiff(a.PausedDevicesHere, b.PausedDevicesHere); len(padd)+len(prem) > 0 {
 		var parts []string
 		if len(padd) > 0 {
-			parts = append(parts, "paused "+named(padd))
+			parts = append(parts, "paused on this node: "+strings.Join(padd, ", "))
 		}
 		if len(prem) > 0 {
-			parts = append(parts, "resumed "+named(prem))
+			parts = append(parts, "resumed on this node: "+strings.Join(prem, ", "))
 		}
-		out = append(out, Section{"NTP servers", strings.Join(parts, ", ")})
+		out = append(out, Section{"Devices", strings.Join(parts, "; ")})
 	}
-	if !reflect.DeepEqual(a.NTP.Keys, b.NTP.Keys) && !(len(a.NTP.Keys) == 0 && len(b.NTP.Keys) == 0) { // secrets: only their number
-		out = append(out, Section{"NTP keys", fmt.Sprintf("changed (%d now)", len(b.NTP.Keys))})
+
+	if dadd, drem := setDiff(deviceNames(a.Settings.Devices), deviceNames(b.Settings.Devices)); len(dadd)+len(drem) > 0 {
+		var parts []string
+		if len(dadd) > 0 {
+			parts = append(parts, "added "+named(dadd))
+		}
+		if len(drem) > 0 {
+			parts = append(parts, "removed "+named(drem))
+		}
+		out = append(out, Section{"Devices", strings.Join(parts, ", ")})
+	} else if !reflect.DeepEqual(a.Settings.Devices, b.Settings.Devices) {
+		out = append(out, Section{"Devices", "changed"})
 	}
-	if f := changedFields(toMap(a.NTP), toMap(b.NTP), "servers", "paused_servers", "snmp_communities", "snmp_contact", "keys"); len(f) > 0 {
-		out = append(out, Section{"NTP settings", named(f)})
+	if !reflect.DeepEqual(a.Settings.DeviceCredentials, b.Settings.DeviceCredentials) { // secrets: only their number
+		out = append(out, Section{"Device credentials", fmt.Sprintf("changed (%d now)", len(b.Settings.DeviceCredentials))})
+	}
+	if f := changedFields(toMap(a.Settings), toMap(b.Settings), "snmp_communities", "snmp_contact", "devices", "device_credentials"); len(f) > 0 {
+		out = append(out, Section{"Settings", named(f)})
 	}
 	if f := changedFields(toMap(a.Web), toMap(b.Web)); len(f) > 0 {
 		out = append(out, Section{"Web GUI", named(f)})
@@ -659,48 +639,11 @@ func lineDiff(a, b []string, ctx int) []DiffLine {
 	return out
 }
 
-// ntpChange describes a change of a group's own NTP pool in words.
-func ntpChange(a, b any) string {
-	parse := func(v any) NTPConfig {
-		var d NTPConfig
-		if v != nil {
-			raw, _ := json.Marshal(v)
-			_ = json.Unmarshal(raw, &d)
-		}
-		return d
+// deviceNames lists the names of the devices.
+func deviceNames(l []device.Device) []string {
+	out := make([]string, 0, len(l))
+	for _, d := range l {
+		out = append(out, d.Name)
 	}
-	da, db := parse(a), parse(b)
-	if a == nil {
-		return fmt.Sprintf("own NTP pool created (%d server(s))", len(db.Servers))
-	}
-	if b == nil {
-		return "own NTP pool removed (back to the shared one)"
-	}
-	var parts []string
-	add, rem := setDiff(da.Servers, db.Servers)
-	if len(add) > 0 {
-		parts = append(parts, "servers added "+named(add))
-	}
-	if len(rem) > 0 {
-		parts = append(parts, "servers removed "+named(rem))
-	}
-	if fadd, frem := setDiff(da.FallbackServers, db.FallbackServers); len(fadd)+len(frem) > 0 {
-		if len(fadd) > 0 {
-			parts = append(parts, "fallback servers added "+named(fadd))
-		}
-		if len(frem) > 0 {
-			parts = append(parts, "fallback servers removed "+named(frem))
-		}
-	}
-	padd, prem := setDiff(da.PausedServers, db.PausedServers)
-	if len(padd) > 0 {
-		parts = append(parts, "servers paused "+named(padd))
-	}
-	if len(prem) > 0 {
-		parts = append(parts, "servers resumed "+named(prem))
-	}
-	if len(parts) == 0 {
-		parts = append(parts, "settings changed")
-	}
-	return "NTP pool: " + strings.Join(parts, ", ")
+	return out
 }

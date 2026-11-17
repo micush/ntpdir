@@ -177,17 +177,6 @@ td.wrap { white-space: normal; word-break: break-word; max-width: 28rem; }
 
 .bar-wrap { display: inline-block; width: 90px; height: 6px; border-radius: 3px; background: var(--surface-2); vertical-align: middle; margin-right: .6rem; overflow: hidden; }
 /* the same column widths in every gateway's table, so the cards line up */
-.srv-list { display: grid; gap: .6rem; padding: .75rem .9rem .9rem; }
-.srv { display: grid; grid-template-columns: minmax(13rem, 2fr) repeat(6, minmax(4.5rem, 1fr)); gap: .45rem .9rem; align-items: start; border: 1px solid var(--border); border-radius: 8px; padding: .6rem .8rem; }
-.srv .nm { font-weight: 600; overflow-wrap: anywhere; }
-.srv .addr { font-size: .82rem; line-height: 1.7; overflow-wrap: anywhere; }
-.srv .addr .fam-tag, .srv .addr .fb-tag { white-space: nowrap; display: inline-block; }
-.srv .pills { margin-top: .25rem; display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
-.srv .m .k { font-size: .72rem; color: var(--muted); }
-.srv .m .v { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.srv .bar-wrap { display: block; width: 100%; max-width: 70px; margin: 0 0 .25rem; }
-.srv .err { grid-column: 1 / -1; overflow-wrap: anywhere; }
-@media (max-width: 900px) { .srv { grid-template-columns: repeat(3, minmax(0, 1fr)); } .srv .who { grid-column: 1 / -1; } }
 .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 
 .notice { padding: 0; margin: 0 0 .5rem; font-size: .85rem; background: none; border: 0; }
@@ -227,10 +216,13 @@ input[type=search] { -webkit-appearance: none; appearance: none; }
 input[type=search]::-webkit-search-cancel-button { cursor: pointer; }
 textarea { font-family: var(--mono); font-size: .86rem; resize: vertical; }
 textarea.json { min-height: 28rem; }
+/* the picked rows keep the accent colour when the list loses the focus (the browser would turn them black) */
+select[multiple] option:checked { background: var(--accent) linear-gradient(var(--accent), var(--accent)); color: var(--accent-text); }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .85rem 1rem; align-items: start; }
 .grid .wide { grid-column: 1 / -1; }
 .grid .fsec { grid-column: 1 / -1; margin-top: .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+.gap-top { margin-top: 1.1rem; }
 .grid .fsec:first-child { margin-top: 0; }
 .grid .fsec h3 { margin: 0; font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .grid .fsec .hint { margin-top: .25rem; }
@@ -303,6 +295,7 @@ svg.cv { max-width: none; outline: none; cursor: grab; user-select: none; -webki
 .cv-wrap.panning, .cv-wrap.panning * { cursor: grabbing !important; user-select: none; }
 svg.cv .edge { stroke: var(--muted); stroke-opacity: .4; stroke-width: 2; }   /* the border colour is too faint on the page itself */
 svg.cv .edge.spread { stroke: var(--accent); stroke-opacity: 1; stroke-width: 4; }
+svg.cv .edge.thin { stroke-width: 1; stroke-opacity: .25; }   /* the lines to the small squares: many, so lighter */
 svg.cv .edge.down { stroke: var(--bad); stroke-opacity: 1; stroke-dasharray: 7 5; }
 svg.cv .shape { cursor: pointer; outline: none; }
 svg.cv .shape.drag { cursor: grab; }
@@ -315,6 +308,13 @@ svg.cv .shape.st-warn circle, svg.cv .shape.st-warn rect, svg.cv .shape.st-warn 
 svg.cv .shape.st-bad circle, svg.cv .shape.st-bad rect, svg.cv .shape.st-bad polygon { fill: var(--bad-bg); stroke: var(--bad); }
 svg.cv .shape.st-paused circle, svg.cv .shape.st-paused rect, svg.cv .shape.st-paused polygon { fill: var(--surface); stroke: var(--muted); stroke-dasharray: 7 5; }
 svg.cv .shape.st-paused text.t1 { fill: var(--muted); }
+/* more than 36 devices: a small square each, filled with its colour; the full-size one beside the pointer is .hovcard (it never takes the pointer) */
+svg.cv .shape.dotsq rect { stroke-width: 1; fill: var(--muted); stroke: var(--surface-2); }
+svg.cv .shape.dotsq.st-ok rect { fill: var(--ok); } svg.cv .shape.dotsq.st-warn rect { fill: var(--amber); } svg.cv .shape.dotsq.st-bad rect { fill: var(--bad); }
+svg.cv .shape.dotsq.st-paused rect { fill: none; stroke: var(--muted); stroke-dasharray: none; pointer-events: all; }   /* a hollow square takes the pointer over its whole area, not only its 1 px outline */
+svg.cv .shape.dotsq.sel rect, svg.cv .shape.dotsq:hover rect { stroke: var(--accent); stroke-width: 2.5; }
+svg.cv .shape.dotsq:focus-visible rect { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: none; }
+svg.cv .shape.hovcard { pointer-events: none; }
 svg.cv .shape.sel circle, svg.cv .shape.sel rect, svg.cv .shape.sel polygon { stroke-width: 5; }
 svg.cv .shape:focus-visible circle, svg.cv .shape:focus-visible rect, svg.cv .shape:focus-visible polygon { stroke-width: 5; stroke-dasharray: 6 3; }
 svg.cv text { fill: var(--text); font: 600 13px system-ui, sans-serif; pointer-events: none; }
@@ -328,7 +328,6 @@ svg.cv text.t2 { font-weight: 400; font-size: 11px; fill: var(--muted); }
 .dot.st-ok { background: var(--ok); } .dot.st-warn { background: var(--amber); } .dot.st-bad { background: var(--bad); } .dot.st-idle { background: var(--muted); } .dot.st-paused { background: transparent; border: 2px dashed var(--muted); box-sizing: border-box; }
 .cv-legend { margin-bottom: 1rem; }
 .tsc h3 { font-size: .95rem; margin: .9rem 0 .25rem; }
-.dot.line-spread { background: var(--accent); }
 .cv-legend .dot:first-child { margin-left: 0; }
 .cv-form { max-width: 34rem; margin-bottom: 1rem; }
 svg.cv text.sm { font-size: 11px; }
@@ -359,6 +358,8 @@ svg.cv text.ip { font-family: var(--mono); font-weight: 600; font-size: 12px; }
 .tbnode { margin-left: auto; }   /* the node picker stays at the right whatever is on its left */
 .topbar label { white-space: nowrap; background: var(--bg); padding: .1rem .35rem; border-radius: 4px; }
 .topbar select, .topbar input { width: auto; flex: none; min-width: 14rem; max-width: 100%; }
+.topbar select, .topbar input { height: 2.3rem; box-sizing: border-box; }   /* the filter and the node picker are the same size */
+.tbfilter { margin-right: auto; }   /* the Topology filter stays at the left, the node picker at the right */
 .topbar.hidden { display: none; }
 body.remote { box-shadow: inset 0 3px 0 var(--amber); }
 body.remote .topbar select { border-color: var(--amber); }
@@ -500,12 +501,7 @@ svg rect.sw { fill: var(--c); background: none; }
 .qpsw { fill: #000; stroke: var(--border); }
 .qpies { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; margin: 1rem 0; }
 .qdonut { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .8rem 1rem; box-shadow: var(--shadow); }
-.qdonut h3 { margin: 0; font-size: .95rem; }
-.qdhead { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin: 0 0 .5rem; }
-.qtools { display: flex; justify-content: flex-end; }
-.btn.small.csv { padding: .2rem .35rem; line-height: 0; color: var(--muted); }
-.btn.small.csv:hover { color: var(--text); }
-.btn.csv svg { width: 1rem; height: 1rem; display: block; }
+.qdonut h3 { margin: 0 0 .5rem; font-size: .95rem; }
 .qrow { display: flex; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap; }
 .qpie { width: 11rem; height: 11rem; flex: 0 0 auto; display: block; }
 .qseg { fill: var(--c); stroke: var(--surface); }
@@ -548,7 +544,6 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .capline { display: grid; grid-template-columns: 7.2rem 1fr; gap: .6rem; padding: .1rem .6rem; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: .78rem; }
 .capline .ct { color: var(--muted); white-space: nowrap; }
 .capline .cs { white-space: pre-wrap; overflow-wrap: anywhere; }
-.capline.ntp .cs { color: var(--info); }
 .capline.arp .cs { color: var(--warn); }
 select.capif { width: auto; flex: 0 0 auto; max-width: 14rem; }
 
@@ -782,17 +777,62 @@ table.arules tr.flash { outline: 2px solid var(--accent); outline-offset: -2px; 
 .bk-restore label.check { margin-left: .2rem; }
 table.policy.mcpkeytab td.ctext { padding: .45rem .6rem; font-size: .85rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.policy.mcpkeytab th:nth-child(3) { width: 5.5rem; }
+.keyshow { display: flex; align-items: center; gap: .6rem; margin: .3rem 0 .8rem; }
+.keyshow code { flex: 1; min-width: 0; word-break: break-all; padding: .45rem .6rem; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: .85rem; user-select: all; }
+
+/* Monitor ▸ Devices: a failure is plain red text, never a box; a device's text answer scrolls in its card */
+.bad-text { color: var(--bad); }
+.devtext { font-family: var(--mono); font-size: .78rem; max-height: 32rem; overflow: auto; white-space: pre; margin: .4rem 0 0; }
+.devask { align-items: flex-end; flex-wrap: wrap; }
+.devask input[type=text] { min-width: 16rem; }
+.devask label.f.wide { flex: 1 1 28rem; }
+.devask label.f.wide input[type=text], .devask label.f.wide textarea { width: 100%; }
+
 /* a password box with its Show/Hide button */
-table.policy.rows.mcpkeytab th:nth-child(2) { width: 11rem; }
-table.policy.rows.mcpkeytab th:nth-child(3) { width: 5.5rem; }
-table.policy.rows.mcpkeytab th:nth-child(4) { width: 8rem; }
-table.policy.rows.mcpkeytab th:nth-child(5) { width: auto; }
-table.mcpkeytab td input[readonly] { text-overflow: ellipsis; font-family: var(--mono); font-size: .86rem; line-height: 1.5; padding: .45rem .6rem; height: 2.3rem; box-sizing: border-box; }   /* the same box hidden and shown */
 .reveal-wrap { display: flex; align-items: center; gap: .3rem; min-width: 0; }
 .reveal-wrap > input { flex: 1 1 auto; min-width: 0; }
 .reveal { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; height: 1.7rem; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 4px; opacity: .6; cursor: pointer; }
 .reveal:hover, .reveal:focus-visible, .reveal[aria-pressed="true"] { opacity: 1; }
 .reveal-btn { display: inline-flex; align-items: center; padding: .15rem .4rem; }
+
+/* MCP keys: the key box takes the room */
+table.policy.rows.mcpkeytab th:nth-child(2) { width: 9.5rem; }
+table.policy.rows.mcpkeytab th:nth-child(3) { width: 5rem; }
+table.policy.rows.mcpkeytab th:nth-child(4) { width: 7rem; }
+table.policy.rows.mcpkeytab th:nth-child(5) { width: 13rem; }
+table.policy.rows.mcpkeytab th:nth-child(6) { width: 6.5rem; }
+table.policy.rows.mcpkeytab th:nth-child(7) { width: 9.5rem; }
+table.policy.rows.mcpkeytab th:nth-child(8) { width: 16rem; }   /* the notes */
+table.policy.rows.mcpkeytab th:nth-child(9) { width: auto; }   /* the key takes what is left: the nine columns fit the box, no sideways scroll */
+table.mcpkeytab td input[readonly] { text-overflow: ellipsis; font-family: var(--mono); font-size: .86rem; line-height: 1.5; padding: .45rem .6rem; height: 2.3rem; box-sizing: border-box; }   /* the same box hidden and shown */
+
+.ubar, .uerr { fill: var(--c); }
+.tight td.bad { color: var(--bad); }
+table.policy tr.off td { opacity: .5; }
+table.policy tr.off td:first-child { opacity: 1; }
+
+/* the devices a key or an allowed source may use: pills, and a box to add one */
+.devpick { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; padding: .2rem .4rem; min-height: 2.3rem; box-sizing: border-box; }
+.devpick .pill { display: inline-flex; align-items: center; gap: .2rem; margin: 0; }
+.devpick .pill.special { font-style: italic; opacity: .85; }
+.devpick .pill button { all: unset; cursor: pointer; padding: 0 .2rem; line-height: 1; border-radius: 3px; }
+.devpick .pill button:hover, .devpick .pill button:focus-visible { outline: 2px solid var(--accent); }
+table.policy td .devpick input[type=text] { flex: 1 1 7rem; width: auto; min-width: 6rem; padding: .2rem .3rem; }
+.devpick input.bad { outline: 2px solid var(--bad); outline-offset: -2px; }
+
+/* a checkbox with its text beside it, in a form (Add device ▸ Enable them) */
+.f.check { display: flex; align-items: center; gap: .5rem; }
+.f.check input { width: auto; }
+/* the download icon in a card's header (Monitor ▸ MCP, Monitor ▸ Node) */
+.btn.small.csv { padding: .2rem .35rem; line-height: 0; color: var(--muted); }
+.btn.small.csv:hover { color: var(--text); }
+.btn.csv svg { width: 1rem; height: 1rem; display: block; }
+
+/* Configure ▸ MCP: a wider card than the other pages (the two tables have a notes column), and its tables use all of it */
+main:has(.card.mcpcard:not([hidden])) { max-width: 1600px; }
+.mcpcard .policy-box.rows.wide { max-width: none; }
+.mcpcard table.policy.rows td input[aria-label=Notes], .mcpcard table.policy.rows td input[aria-label^="Notes for"] { min-width: 14rem; }
+.mcpcard table.policy.rows:not(.mcpkeytab) th:nth-child(7) { width: 24rem; }   /* the notes of the allowed sources */
 
 .vmac-out { margin: .25rem 0 1rem; }
 .vmac-out p { margin: 0 0 .5rem; overflow-wrap: anywhere; }
@@ -804,3 +844,19 @@ table.mcpkeytab td input[readonly] { text-overflow: ellipsis; font-family: var(-
 .nav-theme + .nav-footer { margin-top: .3rem; }
 .theme-btn { appearance: none; background: none; border: 0; color: var(--muted); cursor: pointer; padding: .3rem; border-radius: 6px; line-height: 0; }
 .theme-btn:hover { color: var(--text); background: var(--surface-2); }
+
+/* the tags in use, offered under a Tags box while it is typed in; the Tags tab */
+.tagpop { position: fixed; z-index: 1000; display: flex; flex-direction: column; max-height: 14rem; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); padding: 2px; }
+.tagpop button { text-align: left; background: none; border: 0; color: var(--text); font: inherit; padding: .25rem .6rem; border-radius: 4px; cursor: pointer; }
+.tagpop button:hover, .tagpop button.on { background: var(--surface-2); outline: 1px solid var(--accent); }
+table.tagtable td.num, table.tagtable th.num { text-align: right; width: 8rem; padding-right: 1rem; }
+table.tagtable td:nth-child(2) input { width: 100%; min-width: 14rem; }
+.tagpick { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.tagpick:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.tagpick input[type=text] { border: 0; background: transparent; outline: none; box-shadow: none; }
+.tagpick input[type=text] { flex: 1 1 7rem; width: auto; min-width: 6rem; padding: .2rem .3rem; }
+/* the devices table: the Tags column (pills) takes what the others leave */
+.policy-box.rows.wide:has(table.t-devices) { max-width: none; }
+table.policy.rows.t-devices th:nth-child(2) { width: 7rem; } table.policy.rows.t-devices th:nth-child(3) { width: 7.5rem; } table.policy.rows.t-devices th:nth-child(4) { width: 7rem; }
+table.policy.rows.t-devices th:nth-child(5) { width: 4rem; } table.policy.rows.t-devices th:nth-child(6) { width: 5.5rem; } table.policy.rows.t-devices th:nth-child(7) { width: auto; }
+table.policy.rows.t-devices th:nth-child(8) { width: 6rem; } table.policy.rows.t-devices th:nth-child(9) { width: 5.5rem; }

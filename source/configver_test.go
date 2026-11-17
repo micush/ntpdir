@@ -22,46 +22,6 @@ func cfgBytes(t *testing.T, mut func(*DaemonConfig)) []byte {
 	return b
 }
 
-func TestVersionRecordDedupeAndSummary(t *testing.T) {
-	vs, err := NewVersionStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	m1, err := vs.Record(cfgBytes(t, nil), "startup", "", false)
-	if err != nil || m1 == nil || m1.Summary != "initial configuration" {
-		t.Fatalf("first record: %v %+v", err, m1)
-	}
-	if m, _ := vs.Record(cfgBytes(t, nil), "x", "", false); m != nil {
-		t.Fatalf("identical config must not create a version: %+v", m)
-	}
-	m2, _ := vs.Record(cfgBytes(t, func(d *DaemonConfig) {
-		d.Groups[0].Priority = 200
-		d.Groups[0].Key = "secret-new"
-		d.NTP.Servers = []string{"10.0.0.1"}
-	}), "alice", "bump", false)
-	if m2 == nil {
-		t.Fatal("changed config must be recorded")
-	}
-	for _, want := range []string{"group 1", "priority 100 → 200", "key changed", "added 10.0.0.1"} {
-		if !strings.Contains(m2.Summary, want) {
-			t.Errorf("summary %q lacks %q", m2.Summary, want)
-		}
-	}
-	if strings.Contains(m2.Summary, "secret-new") {
-		t.Error("summary leaks the key")
-	}
-	if m2.Actor != "alice" || m2.Note != "bump" {
-		t.Errorf("meta: %+v", m2)
-	}
-	l := vs.List()
-	if len(l) != 2 || l[0].ID != m2.ID || l[1].ID != m1.ID {
-		t.Fatalf("list order: %+v", l)
-	}
-	if m, _ := vs.Record(cfgBytes(t, nil), "bob", "", true); m == nil || !m.Manual {
-		t.Fatal("manual snapshot must always record")
-	}
-}
-
 func TestVersionExpectAttributesActor(t *testing.T) {
 	vs, _ := NewVersionStore(t.TempDir())
 	vs.Record(cfgBytes(t, nil), "startup", "", false)

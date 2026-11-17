@@ -12,7 +12,7 @@ import (
 // (mcpWholeFile), and the audit line of a write shows its arguments redacted the same way.
 //
 // So that a caller can still send back what it read, "(hidden)" is taken on the way in to mean "keep what is there":
-// edit_config and api_request put the current value back wherever a secret key says "(hidden)" (mcpRestoreHidden),
+// (no MCP tool saves the configuration now; these helpers once put the current value back) wherever a secret key says "(hidden)" (mcpRestoreHidden),
 // matching list entries by an identity field (a gateway by group_id, a BGP neighbor by peer, a backup target by name,
 // ...), never by position alone when the list could have changed.  A "(hidden)" that cannot be matched is refused,
 // never saved: a caller that wants a new secret sends the real value.
@@ -20,9 +20,10 @@ import (
 const mcpHidden = "(hidden)"
 
 // mcpSecretExtra are the keys hidden from MCP besides those a read-only GUI account is not shown (secretKeys): lists of
-// secrets (chrony's symmetric keys, SNMP communities), private keys, join codes and cluster tokens.
+// secrets (SNMP communities, device tokens), private keys, join codes and cluster tokens.
 var mcpSecretExtra = map[string]bool{"keys": true, "snmp_communities": true, "communities": true, "key_pem": true,
-	"private_key": true, "token": true, "tokens": true, "code": true, "server_password": true, "psk": true, "csrf": true, "cookie": true}
+	"private_key": true, "token": true, "tokens": true, "code": true, "server_password": true, "psk": true, "csrf": true, "cookie": true,
+	"snmp_community": true, "snmp_authpass": true, "snmp_cryptopass": true, "snmp_authname": true} // Observium device rows
 
 func mcpSecret(k string) bool {
 	k = strings.ToLower(k)

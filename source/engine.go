@@ -99,9 +99,6 @@ type Engine struct {
 	cfg GroupConfig
 	af  AF
 
-	ntpCfg func() NTPConfig // current NTP settings (port)
-	pool   func() *Pool
-
 	state      State
 	peers      map[string]*Peer
 	stamps     map[string]int64     // the newest packet timestamp taken from each sender (replay.go)
@@ -130,7 +127,7 @@ type Engine struct {
 
 	arp, ns *rawResponder
 
-	ntpLoAdded bool
+	vipLoAdded bool
 
 	leaving bool // told the group we are going: no more hellos
 }
@@ -164,9 +161,9 @@ var prepareV4InputFn = prepareV4Input
 // announceVmacFn is announceVmac, replaceable in tests.
 var announceVmacFn = announceVmac
 
-func NewEngine(cfg GroupConfig, af AF, ntpCfg func() NTPConfig, pool func() *Pool) *Engine {
+func NewEngine(cfg GroupConfig, af AF) *Engine {
 	return &Engine{
-		cfg: cfg, af: af, ntpCfg: ntpCfg, pool: pool,
+		cfg: cfg, af: af,
 		state: stateInit, peers: map[string]*Peer{},
 		failoverPrimary: 1, takeover: map[int]bool{},
 	}
@@ -894,10 +891,10 @@ func (e *Engine) becomeAFNLocked() {
 }
 
 // leaveControllerLocked gives up the controller role IN PLACE: the ARP/NS responder stops and the VIP moves off the
-// macvlan, and that is all.  The macvlans (this node's own slot and the MACs it covers for others) and the NTP service stay
-// up: clients that cached one of those MACs are still answered while the new controller takes them over, and the NTP
+// macvlan, and that is all.  The macvlans (this node's own slot and the MACs it covers for others) and the service stay
+// up: clients that cached one of those MACs are still answered while the new controller takes them over, and the
 // listener never closes.  Taking everything down and building it again, as this used to, left the node without its MAC and
-// its NTP for a moment, which the clients saw as lost packets.  The VIP goes onto lo before it comes off the macvlan, so
+// its service for a moment, which the clients saw as lost packets.  The VIP goes onto lo before it comes off the macvlan, so
 // the node answers for it at every instant; the MACs it covered are released after a grace (lingerLocked).
 // delVIPsLocked takes every shared address of this engine's family off the slot's macvlan.
 func (e *Engine) delVIPsLocked(slot int) {
@@ -911,7 +908,7 @@ func (e *Engine) leaveControllerLocked() {
 	e.state = stateStandby
 	if e.vipSlot != 0 {
 		slot := e.vipSlot
-		e.setupNTPLocked(true) // the VIP onto lo (and ARP not answered for it), the listener untouched
+		e.setupVIPLocked(true) // the VIP onto lo (and ARP not answered for it), the listener untouched
 		e.delVIPsLocked(slot)
 		e.vipSlot = 0
 	}
@@ -1139,7 +1136,7 @@ func (e *Engine) setupVmacsLocked() {
 			infof("AFN id=%d (%s): macvlan up, no VIP assigned (AGC handles ARP/NS for this slot)", e.afnID, e.tag())
 		}
 	}
-	e.setupNTPLocked(ok)
+	e.setupVIPLocked(ok)
 	// A forwarder tells the network its virtual MAC is here only once it can answer:
 	// the switch moves the MAC to this port on the first frame, and the node that
 	// was covering for it (or the old port) stops getting it from then on.
@@ -1181,7 +1178,7 @@ func (e *Engine) reannounceLocked() {
 }
 
 func (e *Engine) cleanupVmacsLocked() {
-	e.teardownNTPLocked()
+	e.teardownVIPLocked()
 	if e.afnID != 0 {
 		e.releaseVmacLocked(e.afnID)
 	}
@@ -1242,21 +1239,21 @@ func (e *Engine) releaseTakeoverLocked(slot int) {
 	delete(e.takeover, slot)
 }
 
-// ── NTP on the VIP ─────────────────────────────────────────────────────
+// ── answering on the VIP ───────────────────────────────────────────────
 //
-// Every node that is ACTIVE or FORWARD terminates NTP for the VIP.  The AGC
+// Every node that is ACTIVE or FORWARD answers on the VIP (its web listener: MCP and the GUI).  The AGC
 // has the VIP on its macvlan.  An AFN is reached through its vMAC, but the
 // kernel only delivers packets for addresses it owns, so an AFN adds the VIP
 // to loopback as a host route and is told not to answer or advertise it in
 // ARP (arp_ignore/arp_announce) — the AGC stays the only ARP authority.
 
-// addLoVIPsLocked puts every shared address on lo (the node answers NTP for them without holding them on a macvlan); it
+// addLoVIPsLocked puts every shared address on lo (the node answers on them without holding them on a macvlan); it
 // returns false if one could not be added.
 func (e *Engine) addLoVIPsLocked(where string) bool {
 	ok := true
 	for _, v := range e.cfg.vipsFor(e.af) {
 		if !runCmd("ip", "addr", "replace", hostCIDR(v), "dev", "lo") {
-			warnf("ntp: could not add %s to lo%s (%s)", v, where, e.tag())
+			warnf("vip: could not add %s to lo%s (%s)", v, where, e.tag())
 			ok = false
 		}
 	}
@@ -1269,11 +1266,11 @@ func (e *Engine) delLoVIPsLocked() {
 	}
 }
 
-func (e *Engine) setupNTPLocked(macvlanUp bool) {
+func (e *Engine) setupVIPLocked(macvlanUp bool) {
 	if e.cfg.RealMACs {
 		// no macvlan: the VIP is on lo on every node, the controller included, and the real interface is told not to
 		// answer ARP for it (the controller's responder is the one that does)
-		if !e.ntpLoAdded {
+		if !e.vipLoAdded {
 			if e.af == afIPv4 {
 				for _, dev := range []string{e.cfg.Interface, "all"} {
 					base := "/proc/sys/net/ipv4/conf/" + dev + "/"
@@ -1283,15 +1280,15 @@ func (e *Engine) setupNTPLocked(macvlanUp bool) {
 				}
 			}
 			if e.addLoVIPsLocked("") {
-				e.ntpLoAdded = true
+				e.vipLoAdded = true
 			}
 		}
 	} else if e.state == stateActive {
-		if e.ntpLoAdded {
+		if e.vipLoAdded {
 			e.delLoVIPsLocked()
-			e.ntpLoAdded = false
+			e.vipLoAdded = false
 		}
-	} else if macvlanUp && !e.ntpLoAdded {
+	} else if macvlanUp && !e.vipLoAdded {
 		if e.af == afIPv4 {
 			for _, dev := range []string{e.cfg.Interface, vmacName(e.cfg.GroupID, e.afnID), "all"} {
 				base := "/proc/sys/net/ipv4/conf/" + dev + "/"
@@ -1301,15 +1298,15 @@ func (e *Engine) setupNTPLocked(macvlanUp bool) {
 			}
 		}
 		if e.addLoVIPsLocked(" on AFN") {
-			e.ntpLoAdded = true
+			e.vipLoAdded = true
 		}
 	}
 }
 
-func (e *Engine) teardownNTPLocked() {
-	if e.ntpLoAdded {
+func (e *Engine) teardownVIPLocked() {
+	if e.vipLoAdded {
 		e.delLoVIPsLocked()
-		e.ntpLoAdded = false
+		e.vipLoAdded = false
 	}
 	e.restoreSysctls() // real-MAC mode changed the real interface's ARP settings: put them back
 }
@@ -1368,7 +1365,7 @@ type SnapshotRow struct {
 	VIP4       string `json:"vip4"`
 	VIP6       string `json:"vip6"`
 	AGCIP      string `json:"agc_ip"`
-	NTPUp      bool   `json:"ntp_listening"`
+	ServiceUp  bool   `json:"service_up"` // this node can answer on the gateway's addresses (health.go)
 	// RealMACs: the gateway runs without virtual MACs; MAC is then the node's real MAC address, when known (the
 	// controller learns the others'; a forwarder knows only its own)
 	RealMACs bool   `json:"real_macs,omitempty"`
@@ -1381,7 +1378,7 @@ func (e *Engine) snapshot() []SnapshotRow {
 	row := func() SnapshotRow {
 		return SnapshotRow{GroupID: e.cfg.GroupID, AF: e.af.String(), VIP4: e.cfg.VIP4,
 			VIP6: e.cfg.VIP6, AGCIP: e.agcIP,
-			NTPUp: chronyServingFn()}
+			ServiceUp: serviceUpFn()}
 	}
 	local := row()
 	if e.cfg.RealMACs {

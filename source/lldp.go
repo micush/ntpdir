@@ -14,38 +14,38 @@ import (
 	"time"
 )
 
-// LLDP (Configure ▸ Settings ▸ General ▸ Neighbor discovery).  When ntp.lldp is on, every node runs lldpd: the switches
+// LLDP (Configure ▸ Settings ▸ General ▸ Neighbor discovery).  When settings.lldp is on, every node runs lldpd: the switches
 // see the nodes (host name, port, management address) and each node sees which switch and port each of its interfaces is
 // plugged into, shown on Monitor ▸ Node and by --lldp.  It is a shared setting, off by default, because LLDP tells
 // everything on the segment the host's name, OS and addresses.
 //
 // The setting decides, whoever started lldpd: on, lldpd is enabled and running; off, it is stopped and disabled, also one
 // started by hand or by its package (Debian starts lldpd as soon as it is installed).  lldpWatch checks once a minute, so
-// an lldpd installed, started or stopped behind ntpdir's back follows the setting again within a minute.  lldpd is optional:
+// an lldpd installed, started or stopped behind netdir's back follows the setting again within a minute.  lldpd is optional:
 // the installer adds it when the distribution has it (on RHEL and its rebuilds it is in EPEL, which is never switched on
 // for it); a node without it says so.
 //
 // lldpOwnPath, a comments-only file in lldpd's snippet directory (lldpd reads /etc/lldpd.d/*.conf as lldpcli commands), is
-// there while ntpdir has LLDP on.  The uninstaller reads it: with it, lldpd is stopped when ntpdir goes.
+// there while netdir has LLDP on.  The uninstaller reads it: with it, lldpd is stopped when netdir goes.
 //
-// ntpdir and dnsdir on one host share one lldpd, and dnsdir decides: while dnsdir is installed, ntpdir neither starts nor
-// stops lldpd (the page says it is managed in AnyName) and drops its file; once dnsdir is removed, ntpdir decides again
+// netdir and dnsdir on one host share one lldpd, and dnsdir decides: while dnsdir is installed, netdir neither starts nor
+// stops lldpd (the page says it is managed in AnyName) and drops its file; once dnsdir is removed, netdir decides again
 // within a minute.
 
 const (
 	lldpUnit         = "lldpd"
-	lldpHeader       = "# Managed by ntpdir (Configure ▸ Settings ▸ General ▸ Neighbor discovery): LLDP is on there, so ntpdir keeps lldpd\n# running.  Switched off there, ntpdir stops lldpd and removes this file; the uninstaller stops lldpd when this file is here.\n"
+	lldpHeader       = "# Managed by netdir (Configure ▸ Settings ▸ General ▸ Neighbor discovery): LLDP is on there, so netdir keeps lldpd\n# running.  Switched off there, netdir stops lldpd and removes this file; the uninstaller stops lldpd when this file is here.\n"
 	lldpNotInstalled = "lldpd is not installed, so LLDP cannot run: install the lldpd package (on RHEL, Rocky and Alma it is in EPEL) or run the installer again"
 	lldpCliTimeout   = 5 * time.Second
-	lldpSelf         = "ntpdir"
+	lldpSelf         = "netdir"
 	lldpSibling      = "dnsdir" // the other product that may share this host's lldpd
 )
 
 var (
-	lldpDir = envOr("NTPDIR_LLDP_DIR", "/etc/lldpd.d")
+	lldpDir = envOr("NETDIR_LLDP_DIR", "/etc/lldpd.d")
 	// lldpRun runs systemctl; replaced in tests.
 	lldpRun = func(args ...string) ([]byte, error) {
-		return exec.Command(envOr("NTPDIR_SYSTEMCTL", "systemctl"), args...).CombinedOutput()
+		return exec.Command(envOr("NETDIR_SYSTEMCTL", "systemctl"), args...).CombinedOutput()
 	}
 	lldpInstalled = func() bool {
 		if _, err := exec.LookPath("lldpd"); err == nil {
@@ -54,14 +54,14 @@ var (
 		_, err := os.Stat("/usr/sbin/lldpd")
 		return err == nil
 	}
-	// lldpCli runs lldpcli (with NTPDIR_LLDPCLI_ARGS first, e.g. "-u /path/to/socket" for a test lldpd); replaced in tests.
+	// lldpCli runs lldpcli (with NETDIR_LLDPCLI_ARGS first, e.g. "-u /path/to/socket" for a test lldpd); replaced in tests.
 	lldpCli = func(args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), lldpCliTimeout)
 		defer cancel()
-		all := append(strings.Fields(os.Getenv("NTPDIR_LLDPCLI_ARGS")), args...)
+		all := append(strings.Fields(os.Getenv("NETDIR_LLDPCLI_ARGS")), args...)
 		return exec.CommandContext(ctx, "lldpcli", all...).Output()
 	}
-	// lldpDefer says whether the sibling decides about lldpd on this host (ntpdir: while dnsdir is installed).
+	// lldpDefer says whether the sibling decides about lldpd on this host (netdir: while dnsdir is installed).
 	lldpDefer = dnsdirPresent
 
 	lldpMu     sync.Mutex
@@ -84,7 +84,7 @@ func applyLLDP(on bool) {
 	if lldpDefer() { // the sibling decides on this host
 		if fileExists(lldpOwnPath()) {
 			_ = os.Remove(lldpOwnPath())
-			infof("lldp: %s is installed and decides about LLDP on this host; ntpdir leaves lldpd to it", lldpSibling)
+			infof("lldp: %s is installed and decides about LLDP on this host; netdir leaves lldpd to it", lldpSibling)
 		}
 		return
 	}
@@ -135,7 +135,7 @@ func lldpWatch(ctx context.Context, sup *Supervisor) {
 			return
 		case <-t.C:
 			sup.mu.Lock()
-			on := sup.dc != nil && sup.dc.NTP.LLDP
+			on := sup.dc != nil && sup.dc.Settings.LLDP
 			sup.mu.Unlock()
 			applyLLDP(on)
 		}
@@ -163,7 +163,7 @@ type LLDPStatus struct {
 	Enabled   bool           `json:"enabled"`    // the shared setting
 	Installed bool           `json:"installed"`  // lldpd is on this node
 	Running   bool           `json:"running"`    // lldpd is running
-	ManagedBy string         `json:"managed_by"` // who decides about lldpd here: "ntpdir", or "dnsdir" when it is installed too
+	ManagedBy string         `json:"managed_by"` // who decides about lldpd here: "netdir", or "dnsdir" when it is installed too
 	Deferred  bool           `json:"deferred"`   // dnsdir is installed here and decides
 	Neighbors []LLDPNeighbor `json:"neighbors"`
 	Error     string         `json:"error,omitempty"` // lldpcli could not be asked
@@ -288,10 +288,10 @@ func (m *Mgmt) LLDPSet(on bool, actor string) error {
 	if err != nil {
 		return err
 	}
-	if dc.NTP.LLDP == on {
+	if dc.Settings.LLDP == on {
 		return nil
 	}
-	dc.NTP.LLDP = on
+	dc.Settings.LLDP = on
 	return m.PutConfig(dc, actor, map[bool]string{true: "lldp: on", false: "lldp: off"}[on])
 }
 

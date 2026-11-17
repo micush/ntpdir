@@ -17,6 +17,13 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/vmactest", w.authed(w.op("vmac.test", nil)))
 	mux.HandleFunc("POST /api/canvas/edit", w.authed(w.op("canvas.edit", nil))) // as --canvas-*: used by the MCP tools (mcp.go)
 	// configuration history
+	mux.HandleFunc("GET /api/devices/troubleshoot", w.authed(w.op("device.troubleshoot", []string{"user", "host", "hours", "devices", "network", "entra", "meraki", "panorama", "ad"}))) // a user's devices on the network: MCP device_troubleshoot_user (devtroubleshoot.go)
+	mux.HandleFunc("POST /api/devices/signin", w.authed(w.op("device.signin_start", nil)))                                                                                               // Entra browser sign-in (devsignin.go)
+	mux.HandleFunc("POST /api/devices/signin/poll", w.authed(w.op("device.signin_poll", nil)))
+	mux.HandleFunc("POST /api/devices/capture", w.authed(w.op("device.capture", nil)))         // packet capture on a device: MCP device_capture (devcapture.go)
+	mux.HandleFunc("POST /api/devices/raw", w.authed(w.op("device.raw", nil)))                 // arbitrary configuration change: MCP device_change_raw (devraw.go)
+	mux.HandleFunc("POST /api/devices/import", w.authed(w.op("device.import_observium", nil))) // devimport.go: GUI and CLI only, not MCP
+	mux.HandleFunc("POST /api/devices/change", w.authed(w.op("device.change", nil)))           // as --device-change: used by the MCP tool device_change (devchange.go)
 	mux.HandleFunc("GET /api/versions", w.authed(w.op("versions.list", nil)))
 	mux.HandleFunc("GET /api/versions/get", w.authed(w.op("versions.get", []string{"id"})))
 	mux.HandleFunc("GET /api/versions/diff", w.authed(w.op("versions.diff", []string{"a", "b"})))
@@ -36,6 +43,7 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	// cluster
 	mux.HandleFunc("GET /api/cluster", w.authed(w.op("cluster.status", nil)))
 	mux.HandleFunc("POST /api/cluster/token", w.authed(w.op("cluster.token", nil)))
+	mux.HandleFunc("POST /api/cluster/token/clear", w.authed(w.op("cluster.token.clear", nil)))
 	mux.HandleFunc("POST /api/cluster/join", w.authed(w.op("cluster.join", nil)))
 	mux.HandleFunc("POST /api/cluster/promote", w.authed(w.op("cluster.promote", nil)))
 	mux.HandleFunc("POST /api/cluster/peers/remove", w.authed(w.op("cluster.remove", nil)))
@@ -53,10 +61,11 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/ospf/operate", w.authed(w.op("ospf.operate", nil)))
 	mux.HandleFunc("GET /api/syslog", w.authed(w.op("syslog.status", nil)))
 	mux.HandleFunc("POST /api/syslog/test", w.authed(w.op("syslog.test", nil)))
+	mux.HandleFunc("GET /api/devices/health", w.authed(w.handleDeviceHealth))    // the primary's device checks, asked by the other nodes (devicehealth.go)
+	mux.HandleFunc("POST /api/devices/recheck", w.authed(w.handleDeviceRecheck)) // ask one device again now (devicehealth.go): right-click ▸ Network tools ▸ Recheck
+	mux.HandleFunc("GET /api/mcpusage", w.authed(w.handleMCPUsage))              // what the MCP endpoint is used for: Monitor ▸ MCP (mcpusage.go)
 	mux.HandleFunc("GET /api/log", w.authed(w.op("log.view", []string{"level", "q", "since", "n"})))
 	mux.HandleFunc("GET /api/host", w.authed(w.op("host.get", []string{"from", "to"})))
-	mux.HandleFunc("GET /api/serverstats", w.authed(w.op("ntp.serverstats", []string{"addr", "from", "to"})))
-	mux.HandleFunc("GET /api/time", w.authed(w.op("time.now", nil)))
 	mux.HandleFunc("GET /api/dnslookup/full", w.authed(w.op("dns.lookup.full", []string{"lookup"})))
 	mux.HandleFunc("GET /api/backup", w.authed(w.op("backup.status", nil)))
 	mux.HandleFunc("POST /api/backup/run", w.authed(w.op("backup.run", nil)))
@@ -81,15 +90,17 @@ func (w *WebServer) mgmtRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/schedule/run", w.authed(w.op("schedule.run", nil)))
 	mux.HandleFunc("GET /api/hostlookup", w.authed(w.op("host.lookup", []string{"lookup"})))
 	mux.HandleFunc("GET /api/whois", w.authed(w.op("whois.get", []string{"lookup"})))
-	mux.HandleFunc("GET /api/qstats", w.authed(w.op("qstats.get", []string{"from", "to", "outcome", "client", "server", "cmatch", "smatch"})))
-	mux.HandleFunc("POST /api/qstats/clear", w.authed(w.op("qstats.clear", nil)))
-	mux.HandleFunc("POST /api/clusterstats/clear", w.authed(w.op("qstats.clear.cluster", nil)))
+	mux.HandleFunc("GET /api/curl", w.authed(w.op("curl.get", []string{"lookup", "method", "follow", "insecure"}))) // MCP net_curl (curl.go)
+	mux.HandleFunc("GET /api/dig", w.authed(w.op("dig.get", []string{"name", "type", "server"})))                   // MCP net_dig (dig.go)
 	mux.HandleFunc("POST /api/scan", w.authed(w.op("scan.start", nil)))
 	mux.HandleFunc("GET /api/scan", w.authed(w.op("scan.get", []string{"client"})))
 	mux.HandleFunc("POST /api/nettool", w.authed(w.op("nettool.start", nil)))
-	mux.HandleFunc("GET /api/nettool", w.authed(w.op("nettool.get", []string{"kind", "client"})))
+	mux.HandleFunc("GET /api/nettool", w.authed(w.op("nettool.get", []string{"kind", "client", "count", "size", "df", "family"})))
+	mux.HandleFunc("GET /api/portcheck", w.authed(w.op("portcheck.get", []string{"client", "ports", "family"})))     // MCP net_port (netprobe.go)
+	mux.HandleFunc("GET /api/tlscheck", w.authed(w.op("tlscheck.get", []string{"client", "port", "sni", "family"}))) // MCP net_tls
+	mux.HandleFunc("GET /api/arp", w.authed(w.op("arp.get", []string{"ip"})))                                        // MCP net_arp
+	mux.HandleFunc("POST /api/wake", w.authed(w.op("wake.send", nil)))                                               // MCP net_wake (needs a read-write key)
 	// the whole cluster's numbers added together (not relayable: the node asked does the asking of the others)
-	mux.HandleFunc("GET /api/clusterstats", w.authed(w.op("qstats.cluster", []string{"gw", "from", "to", "outcome", "client", "server", "cmatch", "smatch"})))
 	mux.HandleFunc("GET /api/clusterhost", w.authed(w.op("host.cluster", []string{"gw", "from", "to"})))
 	mux.HandleFunc("GET /api/nodepause", w.authed(w.op("node.status", nil)))
 	mux.HandleFunc("POST /api/nodepause", w.authed(w.op("node.pause", nil)))
@@ -135,7 +146,7 @@ func (w *WebServer) op(cmd string, query []string) func(http.ResponseWriter, *ht
 			}
 			args = body
 		}
-		if cmd == "versions.restore" || cmd == "cluster.promote" || cmd == "cluster.leave" || cmd == "cluster.join" || cmd == "update.apply" || cmd == "power.do" || cmd == "node.pause" || cmd == "node.rename" || cmd == "schedule.run" || cmd == "schedule.set" || cmd == "schedule.del" || cmd == "qstats.clear" || cmd == "qstats.clear.cluster" || strings.HasPrefix(cmd, "users.") && cmd != "users.list" {
+		if cmd == "versions.restore" || cmd == "cluster.promote" || cmd == "cluster.leave" || cmd == "cluster.join" || cmd == "update.apply" || cmd == "power.do" || cmd == "node.pause" || cmd == "node.rename" || cmd == "schedule.run" || cmd == "schedule.set" || cmd == "schedule.del" || strings.HasPrefix(cmd, "users.") && cmd != "users.list" {
 			warnf("web: %q ran %s (from %s)", s.user, cmd, clientIP(r))
 		}
 		data, err := w.mg.Op(cmd, args, s.user)
@@ -147,14 +158,44 @@ func (w *WebServer) op(cmd string, query []string) func(http.ResponseWriter, *ht
 			jsonError(rw, code, err.Error())
 			return
 		}
-		if (strings.HasPrefix(cmd, "bgp.") || strings.HasPrefix(cmd, "ospf.")) && w.ro(s) {
-			data = redactRouting(data) // the neighbors' and interfaces' passwords stay back from a read-only account
-		}
-		if (cmd == "update.status" || cmd == "update.history") && w.ro(s) {
-			data = redactUpdate(data) // a read-only account is not shown the online repository beyond its host name
+		if v, ok := data.(AlertView); ok && cmd == "alerts.list" {
+			data = w.scopeAlerts(scopeOf(s), v)
 		}
 		writeJSON(rw, http.StatusOK, map[string]any{"ok": true, "data": data})
 	}
+}
+
+// scopeAlerts drops the alerts about a gateway or a device the caller may not see (devscope.go); the other alerts stay.
+func (w *WebServer) scopeAlerts(sc *devScope, v AlertView) AlertView {
+	if !sc.limited() {
+		return v
+	}
+	tags := map[string][]string{}
+	if devs, err := w.status.sup.deviceInventory(); err == nil {
+		for _, d := range devs {
+			tags[d.Name] = d.Tags
+		}
+	}
+	keep := func(in []Alert) []Alert {
+		out := make([]Alert, 0, len(in))
+		for _, al := range in {
+			d, _ := alertDefByID(al.Rule)
+			switch d.Subject {
+			case "gateway":
+				if n, ok := alertSubjectGateway(al.Subject); ok && !sc.allowsGateway(n) {
+					continue
+				}
+			case "device":
+				if !sc.allows(al.Subject, tags[al.Subject]) {
+					continue
+				}
+			}
+			out = append(out, al)
+		}
+		return out
+	}
+	v.Alerts = keep(v.Alerts)
+	return v
 }
 
 func (w *WebServer) handleCSRCancel(rw http.ResponseWriter, r *http.Request, s *session) {
@@ -175,7 +216,7 @@ func (w *WebServer) handleVersionDownload(rw http.ResponseWriter, r *http.Reques
 		jsonError(rw, code, err.Error())
 		return
 	}
-	name := "ntpdir-config-" + meta.ID + ".json"
+	name := "netdir-config-" + meta.ID + ".json"
 	rw.Header().Set("Content-Type", "application/json")
 	rw.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	rw.Write(append([]byte(cfg), '\n'))

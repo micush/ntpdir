@@ -100,7 +100,7 @@ func printOSPF(st OSPFStatus) {
 	}
 	if !c.Active() {
 		fmt.Println("OSPF is off on this node (no interface set).")
-		fmt.Println("  Set it up with: ntpdir --ospf-router-id 192.0.2.10 --ospf-interface-add eth0")
+		fmt.Println("  Set it up with: netdir --ospf-router-id 192.0.2.10 --ospf-interface-add eth0")
 		return
 	}
 	h, d := c.timers()

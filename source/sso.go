@@ -53,7 +53,7 @@ type SSOConfig struct {
 	OIDCSkipVerify bool `json:"sso_oidc_skip_verify,omitempty"`
 	// Users are the people who may sign in: "alice@example.com rw" or "bob@example.com ro" (no level means ro).
 	Users []string `json:"sso_users,omitempty"`
-	// BaseURL is the address the provider sends the browser back to ("https://dns1.example.com:12380"); empty uses the
+	// BaseURL is the address the provider sends the browser back to ("https://dns1.example.com:22161"); empty uses the
 	// address the browser used to reach this node.  It must be registered with the provider as BaseURL/api/sso/callback.
 	BaseURL string `json:"sso_base_url,omitempty"`
 }
@@ -163,7 +163,7 @@ func (c *SSOConfig) validateSSO() error {
 		c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 		u, err := url.Parse(c.BaseURL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("web: sso_base_url must be an address like https://dns1.example.com:12380 (https, no path)")
+			return errors.New("web: sso_base_url must be an address like https://dns1.example.com:22161 (https, no path)")
 		}
 	}
 	us, err := normalizeSSOUsers(c.Users)
@@ -528,7 +528,7 @@ func ssoBase(c SSOConfig, r *http.Request) string {
 	return "https://" + r.Host
 }
 
-const ssoCookie = "__Host-ntpdir_sso"
+const ssoCookie = "__Host-netdir_sso"
 
 func ssoFail(rw http.ResponseWriter, r *http.Request, msg string) {
 	http.SetCookie(rw, &http.Cookie{Name: ssoCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})

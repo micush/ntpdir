@@ -21,7 +21,7 @@ func backupScheduled(tasks []SchedTask, node string) bool {
 	return false
 }
 
-func migrateBackupSchedule(d *NTPConfig) {
+func migrateBackupSchedule(d *Settings) {
 	b := d.Backup
 	if b == nil || (!b.Enabled && b.Hours == 0 && b.At == "") {
 		return

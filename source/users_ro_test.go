@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	roGroupFx  = "root:x:0:\nntpdir:x:1001:alice,bob\nntpdir-ro:x:1004:dave\n"
+	roGroupFx  = "root:x:0:\nnetdir:x:1001:alice,bob\nnetdir-ro:x:1004:dave\n"
 	roPasswdFx = "root:x:0:0::/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\nbob:x:1002:1000::/:/usr/sbin/nologin\ndave:x:1004:1000::/:/usr/sbin/nologin\ngina:x:1005:1000::/:/usr/sbin/nologin\n"
 )
 
 func roFixture(t *testing.T, group string) (*Mgmt, *[]usersCall) {
 	m, calls := usersFixture(t, group, roPasswdFx, "")
-	m.webPolicy.Store(&WebConfig{Group: "ntpdir", ReadGroup: "ntpdir-ro"})
+	m.webPolicy.Store(&WebConfig{Group: "netdir", ReadGroup: "netdir-ro"})
 	return m, calls
 }
 
@@ -27,7 +27,7 @@ func callLines(calls []usersCall) string {
 func TestUsersListShowsReadOnlyAccounts(t *testing.T) {
 	m, _ := roFixture(t, roGroupFx)
 	v := m.UsersList()
-	if v.ReadGroup != "ntpdir-ro" || len(v.Users) != 3 {
+	if v.ReadGroup != "netdir-ro" || len(v.Users) != 3 {
 		t.Fatalf("view: %+v", v)
 	}
 	for _, u := range v.Users {
@@ -40,7 +40,7 @@ func TestUsersListShowsReadOnlyAccounts(t *testing.T) {
 			t.Errorf("%s is in a group already and must not be offered: %v", o, v.Others)
 		}
 	}
-	m.webPolicy.Store(&WebConfig{Group: "ntpdir"})
+	m.webPolicy.Store(&WebConfig{Group: "netdir"})
 	if v := m.UsersList(); v.ReadGroup != "" || len(v.Users) != 2 {
 		t.Errorf("with no read-only setting: %+v", v)
 	}
@@ -51,17 +51,17 @@ func TestUserAddAndGrantReadOnly(t *testing.T) {
 	if _, _, err := m.UserAdd("erin", "long-enough-1", 0, true, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if got := callLines(*calls); !strings.Contains(got, "--gid ntpdir-ro") {
+	if got := callLines(*calls); !strings.Contains(got, "--gid netdir-ro") {
 		t.Errorf("a read-only user must get the read-only group:\n%s", got)
 	}
 	*calls = nil
 	if _, _, err := m.UserGrant("gina", true, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if got := callLines(*calls); !strings.Contains(got, "usermod -aG ntpdir-ro gina") {
+	if got := callLines(*calls); !strings.Contains(got, "usermod -aG netdir-ro gina") {
 		t.Errorf("grant read-only:\n%s", got)
 	}
-	m.webPolicy.Store(&WebConfig{Group: "ntpdir"})
+	m.webPolicy.Store(&WebConfig{Group: "netdir"})
 	if _, _, err := m.UserAdd("frank", "long-enough-1", 0, true, "alice"); err == nil || !strings.Contains(err.Error(), "no read-only group") {
 		t.Errorf("read-only with no read-only group set: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestUserAccessMovesBetweenGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := callLines(*calls)
-	if !strings.Contains(got, "gpasswd -d dave ntpdir-ro") || !strings.Contains(got, "usermod -aG ntpdir dave") {
+	if !strings.Contains(got, "gpasswd -d dave netdir-ro") || !strings.Contains(got, "usermod -aG netdir dave") {
 		t.Errorf("promote:\n%s", got)
 	}
 	*calls = nil
@@ -81,7 +81,7 @@ func TestUserAccessMovesBetweenGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = callLines(*calls)
-	if !strings.Contains(got, "gpasswd -d bob ntpdir") || !strings.Contains(got, "usermod -aG ntpdir-ro bob") {
+	if !strings.Contains(got, "gpasswd -d bob netdir") || !strings.Contains(got, "usermod -aG netdir-ro bob") {
 		t.Errorf("demote:\n%s", got)
 	}
 	if _, _, err := m.UserAccess("bob", true, "bob"); err == nil {
@@ -93,7 +93,7 @@ func TestUserAccessMovesBetweenGroups(t *testing.T) {
 }
 
 func TestLastFullAccessAccountIsKept(t *testing.T) {
-	m, _ := roFixture(t, "root:x:0:\nntpdir:x:1001:alice\nntpdir-ro:x:1004:dave\n")
+	m, _ := roFixture(t, "root:x:0:\nnetdir:x:1001:alice\nnetdir-ro:x:1004:dave\n")
 	if _, _, err := m.UserAccess("alice", true, "dave"); err == nil || !strings.Contains(err.Error(), "last") {
 		t.Errorf("demoting the last full account: %v", err)
 	}

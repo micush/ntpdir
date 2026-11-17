@@ -22,7 +22,7 @@ import (
 // The scheduler (Operate ▸ Scheduler): tasks that run on every node of the cluster, or on chosen nodes, at times given
 // as hourly / daily / weekly / monthly / yearly rules, including "the 3rd Saturday of every month".  A task also has an
 // window: it is due at its scheduled time (At), and each node runs it at a time of its own somewhere between then and
-// the end of the window (To), so the nodes do not all act at once.  The task list is part of the shared settings (NTPConfig.Schedule,
+// the end of the window (To), so the nodes do not all act at once.  The task list is part of the shared settings (Settings.Schedule,
 // replicated like the rest); every node works out for itself what is due, so a node that is down only misses its own runs.
 // The history of what ran is kept per node.
 
@@ -92,12 +92,10 @@ const (
 
 // schedActions are the built-in actions.  The first is the label shown in the page.
 var schedActions = map[string]string{
-	"chrony_restart": "Restart chrony",
-	"node_pause":     "Pause this node",
-	"node_resume":    "Resume this node",
-	"stats_clear":    "Clear the statistics",
-	"update_online":  "Update from online",
-	"node_reboot":    "Reboot this node",
+	"node_pause":    "Pause this node",
+	"node_resume":   "Resume this node",
+	"update_online": "Update from online",
+	"node_reboot":   "Reboot this node",
 	// to every backup server of Configure ▸ Backup; the task's history says how it went (backup.go)
 	"backup": "Back up this node",
 }
@@ -946,14 +944,6 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 // builtin runs one of the built-in actions on this node.
 func (s *Scheduler) builtin(action, actor string) (string, error) {
 	switch action {
-	case "chrony_restart":
-		if err := chronyRestart(); err != nil {
-			return "", err
-		}
-		chrony.mu.Lock()
-		chrony.pending = true // the sources added at run time are gone: write them again
-		chrony.mu.Unlock()
-		return "chrony restarted", nil
 	case "node_pause", "node_resume":
 		return s.m.NodePause(action == "node_pause", actor)
 	case "update_online":
@@ -965,12 +955,6 @@ func (s *Scheduler) builtin(action, actor string) (string, error) {
 		return s.m.backup.RunScheduled(actor)
 	case "node_reboot":
 		return s.rebootHost(actor)
-	case "stats_clear":
-		qstats.Clear()
-		if err := savePersisted(s.m.stateDir); err != nil {
-			return "", err
-		}
-		return "statistics cleared", nil
 	}
 	return "", fmt.Errorf("unknown action %q", action)
 }
@@ -1057,7 +1041,7 @@ func schedEnv(base []string, task string) []string {
 		case strings.HasPrefix(e, "HOME="):
 			home = true
 			out = append(out, e)
-		case strings.HasPrefix(e, "NTPDIR_TASK=") || strings.HasPrefix(e, "DNSDIR_TASK="):
+		case strings.HasPrefix(e, "NETDIR_TASK=") || strings.HasPrefix(e, "DNSDIR_TASK="):
 		default:
 			out = append(out, e)
 		}
@@ -1078,7 +1062,7 @@ func schedEnv(base []string, task string) []string {
 	if !home {
 		out = append(out, "HOME=/root")
 	}
-	return append(out, "NTPDIR_TASK="+task)
+	return append(out, "NETDIR_TASK="+task)
 }
 
 func strconvI(n int64) string { return strconv.FormatInt(n, 10) }

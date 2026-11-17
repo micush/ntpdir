@@ -5,11 +5,9 @@ import (
 	"fmt"
 )
 
-// NodePauseState is what the Node page and `ntpdir --node-status` show.
+// NodePauseState is what the Node page and `netdir --node-status` show.
 type NodePauseState struct {
 	Paused bool `json:"paused"`
-	// Auto is why the node paused itself (see selfcheck.go); empty when it did not.  Paused is true then too.
-	Auto string `json:"auto,omitempty"`
 }
 
 // NodePauseStatus says whether this node is paused.
@@ -18,25 +16,14 @@ func (m *Mgmt) NodePauseStatus() (NodePauseState, error) {
 	if err != nil {
 		return NodePauseState{}, err
 	}
-	return NodePauseState{Paused: dc.nodePausedNow(), Auto: selfPausedWhy()}, nil
+	return NodePauseState{Paused: dc.NodePaused}, nil
 }
 
 // NodePause takes this whole node out of service (or puts it back): every gateway
-// on it resigns and stops answering and probing, and the other nodes carry on, the
+// on it resigns and stops answering, and the other nodes carry on, the
 // same as pausing each gateway but in one step and covering gateways added later.
 // The flag is local to the node and is never replicated.
 func (m *Mgmt) NodePause(pause bool, actor string) (string, error) {
-	if selfPauseActive() { // a person takes over from the self-check: resuming tries again at once
-		clearSelfPause()
-		if !pause {
-			if dc, _, err := m.LiveConfig(); err == nil && !dc.NodePaused {
-				if m.reloadFn != nil {
-					_ = m.reloadFn()
-				}
-				return "node resumed — its gateways rejoin once their NTP servers answer", nil
-			}
-		}
-	}
 	dc, _, err := m.LiveConfig()
 	if err != nil {
 		return "", err
@@ -46,9 +33,6 @@ func (m *Mgmt) NodePause(pause bool, actor string) (string, error) {
 			return "this node is already paused", nil
 		}
 		return "this node is already running", nil
-	}
-	if pause && dnsdirPresent() {
-		return "", errors.New("AnyName is installed on this host and decides where the gateway addresses answer; pausing the node here would stop nothing, because chrony keeps answering on them. Drain the node in AnyName instead")
 	}
 	if pause && m.othersInService() == 0 {
 		return "", errors.New("this is the only node in service (the others are paused or not answering), so pausing it would stop every gateway — resume or repair another node first; to stop a gateway everywhere, pause the gateway instead")
@@ -78,7 +62,7 @@ func (m *Mgmt) NodePause(pause bool, actor string) (string, error) {
 		}
 		return msg, nil
 	}
-	return "node resumed — its gateways rejoin once their NTP servers answer", nil
+	return "node resumed — its gateways rejoin", nil
 }
 
 func (m *Mgmt) othersInService() int {

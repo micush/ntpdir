@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"sort"
 )
 
@@ -44,14 +45,23 @@ func (s *StatusServer) gatewaysVia(ctx context.Context, gs []GatewayGroup) []Gat
 	for _, g := range gs {
 		have[g.GroupID] = true
 	}
+	fetched := map[string][]GatewayGroup{}
 	ask := func(n CanvasNode) []GatewayGroup {
+		if l, done := fetched[n.Addr]; done {
+			return l
+		}
+		cctx, cancel := context.WithTimeout(ctx, viaFetchTimeout)
+		defer cancel()
+		resp, err := s.mg.cl.Relay(cctx, n.Addr, proxyReq{User: "gateways", Method: http.MethodGet, Path: "/api/gateways?own=1"})
 		var out struct {
 			Data []GatewayGroup `json:"data"`
 		}
-		if body := s.peerBody(n, "gateways", "/api/gateways?own=1"); body == nil || json.Unmarshal(body, &out) != nil {
-			return nil
+		if err == nil && resp.Status == http.StatusOK && json.Unmarshal(resp.Body, &out) == nil {
+			fetched[n.Addr] = out.Data
+		} else {
+			fetched[n.Addr] = nil
 		}
-		return out.Data
+		return fetched[n.Addr]
 	}
 	for _, cg := range s.canvasGroups() {
 		if have[cg.GroupID] {

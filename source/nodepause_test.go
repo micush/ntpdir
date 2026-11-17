@@ -46,36 +46,6 @@ func TestNodePauseFlagIsLocalAndOptional(t *testing.T) {
 	}
 }
 
-func TestNodePauseStartsNothingAndShowsOnTheCanvas(t *testing.T) {
-	a := newFakeNTP(t)
-	d := testNTPCfg(a.addr)
-	g := defaultGroup()
-	g.NTP = &d
-	dc := newDaemonConfig()
-	dc.Groups = []GroupConfig{g}
-	dc.NodePaused = true
-
-	sup := NewSupervisor(context.Background(), dc)
-	sup.StartAll()
-	if n := len(sup.engineList()); n != 0 {
-		t.Fatalf("a paused node must start no engines, got %d", n)
-	}
-	if sup.poolFor(1) == nil {
-		t.Fatal("a paused node keeps its pools: the servers are still its time sources")
-	}
-	cv := buildCanvas(sup.config(), nil, sup.poolList())[0]
-	if cv.Status != "paused" || !cv.Paused || !cv.NodePaused || !strings.Contains(cv.Detail, "This node is paused") {
-		t.Fatalf("canvas: %+v", cv)
-	}
-	// a reload that keeps the node paused changes nothing
-	nu := *dc
-	sup.Reload(&nu)
-	if n := len(sup.engineList()); n != 0 {
-		t.Fatalf("still paused after a reload, got %d engines", n)
-	}
-	sup.StopAll()
-}
-
 func TestNodePauseThroughMgmt(t *testing.T) {
 	mg := newPowerMgmt(t)
 	if err := newDaemonConfig().save(mg.confPath); err != nil {
@@ -163,11 +133,11 @@ func TestLastServing(t *testing.T) {
 // Pausing the primary moves the primary role to a node that is running, never to a paused one.
 func TestPickSuccessorSkipsPausedNodes(t *testing.T) {
 	peers := []PeerView{
-		{Addr: "10.0.0.1:12381", Self: true, IsPrimary: true, Reachable: true},
-		{Addr: "10.0.0.2:12381", Reachable: true, NodePaused: true, SharedRev: 9},
-		{Addr: "10.0.0.3:12381", Reachable: true, SharedRev: 5},
+		{Addr: "10.0.0.1:22162", Self: true, IsPrimary: true, Reachable: true},
+		{Addr: "10.0.0.2:22162", Reachable: true, NodePaused: true, SharedRev: 9},
+		{Addr: "10.0.0.3:22162", Reachable: true, SharedRev: 5},
 	}
-	if got := pickSuccessor(peers, "1"); got != "10.0.0.3:12381" {
+	if got := pickSuccessor(peers, "1"); got != "10.0.0.3:22162" {
 		t.Fatalf("successor %q, want the running node", got)
 	}
 	peers[2].NodePaused = true
@@ -208,19 +178,26 @@ func TestPausedNodeCannotBePromoted(t *testing.T) {
 	}
 }
 
-// With AnyName on the host the gateway addresses are its to hold, and chrony answers on them whatever ntpdir says, so a node
-// pause would stop nothing and is refused; resuming still works.
-func TestNodePauseRefusedWithAnyName(t *testing.T) {
-	withDnsdir(t)
-	mg := newPowerMgmt(t)
-	if err := newDaemonConfig().save(mg.confPath); err != nil {
-		t.Fatal(err)
+func TestNodePauseStartsNothingAndShowsOnTheCanvas(t *testing.T) {
+	g := defaultGroup()
+	dc := newDaemonConfig()
+	dc.Groups = []GroupConfig{g}
+	dc.NodePaused = true
+
+	sup := NewSupervisor(context.Background(), dc)
+	sup.StartAll()
+	if n := len(sup.engineList()); n != 0 {
+		t.Fatalf("a paused node must start no engines, got %d", n)
 	}
-	mg.othersFn = func() int { return 2 }
-	if _, err := mg.NodePause(true, "test"); err == nil || !strings.Contains(err.Error(), "AnyName") {
-		t.Fatalf("pause with AnyName installed: %v", err)
+	cv := buildCanvas(sup.config(), nil)[0]
+	if cv.Status != "paused" || !cv.Paused || !cv.NodePaused || !strings.Contains(cv.Detail, "This node is paused") {
+		t.Fatalf("canvas: %+v", cv)
 	}
-	if st, _ := mg.NodePauseStatus(); st.Paused {
-		t.Fatal("the node was paused")
+	// a reload that keeps the node paused changes nothing
+	nu := *dc
+	sup.Reload(&nu)
+	if n := len(sup.engineList()); n != 0 {
+		t.Fatalf("still paused after a reload, got %d engines", n)
 	}
+	sup.StopAll()
 }

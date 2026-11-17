@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -55,20 +56,20 @@ func TestRenderFRR(t *testing.T) {
 	conf := renderFRR(b, []string{"203.0.113.53"}, []string{"2001:db8:53::1"}, "dns1")
 	for _, want := range []string{
 		"hostname dns1\n",
-		"ip prefix-list NTPDIR-ANYCAST-V4 seq 10 permit 203.0.113.53/32\n",
-		"ip prefix-list NTPDIR-ANYCAST-V4 seq 1000 deny any\n",
-		"ipv6 prefix-list NTPDIR-ANYCAST-V6 seq 10 permit 2001:db8:53::1/128\n",
-		"route-map NTPDIR-IN deny 10\n",
+		"ip prefix-list NETDIR-ANYCAST-V4 seq 10 permit 203.0.113.53/32\n",
+		"ip prefix-list NETDIR-ANYCAST-V4 seq 1000 deny any\n",
+		"ipv6 prefix-list NETDIR-ANYCAST-V6 seq 10 permit 2001:db8:53::1/128\n",
+		"route-map NETDIR-IN deny 10\n",
 		"router bgp 64512\n no bgp default ipv4-unicast\n bgp router-id 192.0.2.10\n",
 		" neighbor 192.0.2.1 remote-as 64500\n neighbor 192.0.2.1 description core\n neighbor 192.0.2.1 password pw\n neighbor 192.0.2.1 bfd\n",
-		" address-family ipv4 unicast\n  network 203.0.113.53/32\n  neighbor 192.0.2.1 activate\n  neighbor 192.0.2.1 route-map NTPDIR-IN in\n  neighbor 192.0.2.1 route-map NTPDIR-OUT-V4 out\n",
-		" address-family ipv6 unicast\n  network 2001:db8:53::1/128\n  neighbor 2001:db8::1 activate\n  neighbor 2001:db8::1 route-map NTPDIR-IN in\n  neighbor 2001:db8::1 route-map NTPDIR-OUT-V6 out\n",
+		" address-family ipv4 unicast\n  network 203.0.113.53/32\n  neighbor 192.0.2.1 activate\n  neighbor 192.0.2.1 route-map NETDIR-IN in\n  neighbor 192.0.2.1 route-map NETDIR-OUT-V4 out\n",
+		" address-family ipv6 unicast\n  network 2001:db8:53::1/128\n  neighbor 2001:db8::1 activate\n  neighbor 2001:db8::1 route-map NETDIR-IN in\n  neighbor 2001:db8::1 route-map NETDIR-OUT-V6 out\n",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("missing %q in:\n%s", want, conf)
 		}
 	}
-	if strings.Contains(conf, "neighbor 192.0.2.1 route-map NTPDIR-OUT-V6") || strings.Contains(conf, "ipv4 unicast\n  network 2001") {
+	if strings.Contains(conf, "neighbor 192.0.2.1 route-map NETDIR-OUT-V6") || strings.Contains(conf, "ipv4 unicast\n  network 2001") {
 		t.Errorf("families mixed up:\n%s", conf)
 	}
 	// BFD is on for every neighbor
@@ -123,9 +124,12 @@ func fakeFRR(t *testing.T, fail map[string]bool) (*[]frrCall, string) {
 	frrDir = dir
 	frrCanReload = func() bool { return true }
 	var calls []frrCall
+	var mu sync.Mutex
 	frrRun = func(name string, args ...string) ([]byte, error) {
 		c := frrCall{name, strings.Join(args, " ")}
+		mu.Lock()
 		calls = append(calls, c)
+		mu.Unlock()
 		if fail[c.name+" "+c.args] {
 			return []byte("boom"), os.ErrInvalid
 		}
@@ -404,8 +408,8 @@ func TestBGPApplyWithoutReloadScript(t *testing.T) {
 	if r := m.applyNow(bgpDC(true)); !r.OK {
 		t.Fatal(r)
 	}
-	// the host's own config was kept before ntpdir replaced it
-	if b, _ := os.ReadFile(filepath.Join(dir, "frr.conf.pre-ntpdir")); string(b) != "! old\n" {
+	// the host's own config was kept before netdir replaced it
+	if b, _ := os.ReadFile(filepath.Join(dir, "frr.conf.pre-netdir")); string(b) != "! old\n" {
 		t.Fatalf("no backup of the foreign frr.conf: %q", b)
 	}
 	// no frr-reload.py: a changed config restarts once, no reload attempt,
@@ -422,8 +426,8 @@ func TestBGPApplyWithoutReloadScript(t *testing.T) {
 			t.Fatalf("tried a reload that cannot work: %v", *calls)
 		}
 	}
-	// a second apply must not overwrite the backup with ntpdir's own file
-	if b, _ := os.ReadFile(filepath.Join(dir, "frr.conf.pre-ntpdir")); string(b) != "! old\n" {
+	// a second apply must not overwrite the backup with netdir's own file
+	if b, _ := os.ReadFile(filepath.Join(dir, "frr.conf.pre-netdir")); string(b) != "! old\n" {
 		t.Fatalf("backup replaced: %q", b)
 	}
 }
@@ -496,10 +500,10 @@ func TestRenderFRRASPrepend(t *testing.T) {
 	b.ASPrepend = true
 	conf := renderFRR(b, []string{"203.0.113.53"}, []string{"2001:db8:53::1"}, "h")
 	want := " set as-path prepend 4215123199 4215123199 4215123199\n"
-	if strings.Count(conf, want) != 2 || !strings.Contains(conf, "match ip address prefix-list NTPDIR-ANYCAST-V4\n"+want) || !strings.Contains(conf, "match ipv6 address prefix-list NTPDIR-ANYCAST-V6\n"+want) {
+	if strings.Count(conf, want) != 2 || !strings.Contains(conf, "match ip address prefix-list NETDIR-ANYCAST-V4\n"+want) || !strings.Contains(conf, "match ipv6 address prefix-list NETDIR-ANYCAST-V6\n"+want) {
 		t.Fatalf("both outbound route-maps must prepend three times:\n%s", conf)
 	}
-	if strings.Contains(strings.SplitN(conf, "route-map NTPDIR-IN", 2)[1], "prepend") {
+	if strings.Contains(strings.SplitN(conf, "route-map NETDIR-IN", 2)[1], "prepend") {
 		t.Fatal("the inbound route-map must not change")
 	}
 }

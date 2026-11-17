@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// OSPF: the second way (after BGP, bgp.go) to carry the anycast addresses off the node.  ntpdir drives FRR's ospfd
+// OSPF: the second way (after BGP, bgp.go) to carry the anycast addresses off the node.  netdir drives FRR's ospfd
 // (OSPFv2, for the IPv4 addresses) and ospf6d (OSPFv3, for the IPv6 addresses) the same way it drives bgpd: the whole
 // frr.conf is rendered by one pure function, and the two daemons are switched on in /etc/frr/daemons only while OSPF
 // is set up on this node (and off again when it is cleared or disabled), so they do not run when nobody uses them.
@@ -164,9 +164,9 @@ func (o *OSPFConfig) Validate() error {
 // renderOSPFRouteMaps is the route-maps OSPF needs: what may be redistributed (the anycast addresses only) and what
 // zebra may take from OSPF (nothing).
 func renderOSPFRouteMaps() string {
-	return "route-map NTPDIR-OSPF-V4 permit 10\n match ip address prefix-list NTPDIR-ANYCAST-V4\n" +
-		"route-map NTPDIR-OSPF-V6 permit 10\n match ipv6 address prefix-list NTPDIR-ANYCAST-V6\n" +
-		"route-map NTPDIR-OSPF-IN deny 10\n!\n"
+	return "route-map NETDIR-OSPF-V4 permit 10\n match ip address prefix-list NETDIR-ANYCAST-V4\n" +
+		"route-map NETDIR-OSPF-V6 permit 10\n match ipv6 address prefix-list NETDIR-ANYCAST-V6\n" +
+		"route-map NETDIR-OSPF-IN deny 10\n!\n"
 }
 
 // renderOSPF is the interface, router ospf, router ospf6 and zebra sections of frr.conf.
@@ -201,9 +201,9 @@ func renderOSPF(o *OSPFConfig) string {
 		redist += fmt.Sprintf(" metric %d", o.Metric)
 	}
 	redist += " metric-type 1 route-map "
-	s.WriteString("router ospf\n ospf router-id " + o.RouterID + "\n " + redist + "NTPDIR-OSPF-V4\n!\n")
-	s.WriteString("router ospf6\n ospf6 router-id " + o.RouterID + "\n " + redist + "NTPDIR-OSPF-V6\n!\n")
-	s.WriteString("ip protocol ospf route-map NTPDIR-OSPF-IN\nipv6 protocol ospf6 route-map NTPDIR-OSPF-IN\n!\n")
+	s.WriteString("router ospf\n ospf router-id " + o.RouterID + "\n " + redist + "NETDIR-OSPF-V4\n!\n")
+	s.WriteString("router ospf6\n ospf6 router-id " + o.RouterID + "\n " + redist + "NETDIR-OSPF-V6\n!\n")
+	s.WriteString("ip protocol ospf route-map NETDIR-OSPF-IN\nipv6 protocol ospf6 route-map NETDIR-OSPF-IN\n!\n")
 	return s.String()
 }
 

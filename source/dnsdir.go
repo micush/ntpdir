@@ -10,9 +10,9 @@ import (
 )
 
 // The Anyname DNS Director (dnsdir) can live on the same host.  The two products cannot share BGP (each owns
-// /etc/frr/frr.conf, see bgp.go), so while dnsdir is installed ntpdir does no BGP of its own; instead a gateway may
-// answer NTP on chosen addresses of dnsdir: anycast addresses it holds on lo and announces, or the shared address of one of its
-// gateways (GroupConfig.DNSDirVIPs).  ntpdir only listens on them: it never adds or removes them and never announces them.
+// /etc/frr/frr.conf, see bgp.go), so while dnsdir is installed netdir does no BGP of its own; instead a gateway may
+// answer on chosen addresses of dnsdir: anycast addresses it holds on lo and announces, or the shared address of one of its
+// gateways (GroupConfig.DNSDirVIPs).  netdir only listens on them: it never adds or removes them and never announces them.
 
 // dnsdirMarkers are what an installed dnsdir leaves behind (a variable for the tests).  The state directory is not
 // one of them: it stays after an uninstall without --purge.
@@ -42,7 +42,7 @@ func dnsdirPresent() bool {
 	return false
 }
 
-// dnsdirOffered lists the addresses dnsdir has that a gateway may answer NTP on, sorted: the anycast addresses of its
+// dnsdirOffered lists the addresses dnsdir has that a gateway may answer on, sorted: the anycast addresses of its
 // gateways (extra_vips) and their shared addresses (vip4, vip6, more_vip4, more_vip6, without the prefix length).
 // Nothing when dnsdir is not installed or its configuration cannot be read.
 func dnsdirOffered() []string {
@@ -73,7 +73,7 @@ type dnsdirGateway struct {
 }
 
 // dnsdirGateways reads dnsdir's configuration: its gateways with their shared and anycast addresses.  The shared ones are
-// held by dnsdir on whichever node serves the gateway (they are not on lo everywhere), and ntpdir only listens on them.
+// held by dnsdir on whichever node serves the gateway (they are not on lo everywhere), and netdir only listens on them.
 // Nothing when dnsdir is not installed or its configuration cannot be read.
 func dnsdirGateways() []dnsdirGateway {
 	if !dnsdirPresent() {
@@ -164,39 +164,6 @@ type DNSDirInfo struct {
 }
 
 func dnsdirInfo() DNSDirInfo { return DNSDirInfo{Present: dnsdirPresent(), Offered: dnsdirOffered()} }
-
-// checkDNSDirAdded refuses a dnsdir address that was not on the gateway before unless dnsdir is installed here and
-// announces it.  Addresses already in the configuration are not re-checked, so a config stays loadable (and its
-// settings are kept) while dnsdir is away.
-func checkDNSDirAdded(cur, next *DaemonConfig) error {
-	had := map[string]bool{}
-	for _, g := range cur.Groups {
-		for _, a := range g.DNSDirVIPs {
-			had[a] = true
-		}
-	}
-	var offered map[string]bool
-	for _, g := range next.Groups {
-		for _, a := range g.DNSDirVIPs {
-			if had[a] {
-				continue
-			}
-			if !dnsdirPresent() {
-				return errDNSDir("the AnyName DNS Director is not installed on this host")
-			}
-			if offered == nil {
-				offered = map[string]bool{}
-				for _, o := range dnsdirOffered() {
-					offered[o] = true
-				}
-			}
-			if !offered[a] {
-				return errDNSDir(a + " is not an anycast address of AnyName")
-			}
-		}
-	}
-	return nil
-}
 
 type errDNSDir string
 

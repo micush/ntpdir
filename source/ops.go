@@ -18,6 +18,27 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	if strings.HasPrefix(cmd, "backup.") {
 		return m.backupOp(cmd, raw, actor)
 	}
+	if cmd == "device.raw" {
+		return m.deviceRaw(raw, actor)
+	}
+	if cmd == "device.capture" {
+		return m.deviceCapture(raw, actor)
+	}
+	if cmd == "device.troubleshoot" {
+		return m.deviceTroubleshoot(raw, actor)
+	}
+	if cmd == "device.signin_start" {
+		return m.deviceSigninStart(raw, actor)
+	}
+	if cmd == "device.signin_poll" {
+		return m.deviceSigninPoll(raw, actor)
+	}
+	if cmd == "device.import_observium" {
+		return m.deviceImportObservium(raw, actor)
+	}
+	if cmd == "device.change" {
+		return m.deviceChange(raw, actor)
+	}
 	if strings.HasPrefix(cmd, "alerts.") {
 		return m.alertsOp(cmd, raw, actor)
 	}
@@ -50,9 +71,23 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		QOutcome string     `json:"outcome"`
 		QClient  string     `json:"client"`
 		NetKind  string     `json:"kind"`
+		PCount   string     `json:"count"`  // nettool: pings
+		PSize    string     `json:"size"`   // nettool: payload bytes
+		PDF      string     `json:"df"`     // nettool: do not fragment
+		PFam     string     `json:"family"` // nettool, portcheck, tlscheck: 4 or 6
+		PPorts   string     `json:"ports"`
+		PPort    string     `json:"port"`
+		PSNI     string     `json:"sni"`
+		PMAC     string     `json:"mac"`
+		PBcast   string     `json:"broadcast"`
+		PIP      string     `json:"ip"`
+		QType    string     `json:"type"`
+		QMethod  string     `json:"method"`
+		QFollow  string     `json:"follow"`
+		QInsec   string     `json:"insecure"`
 		QServer  string     `json:"server"`
 		QCMatch  string     `json:"cmatch"`
-		QGW      string     `json:"gw"` // qstats.cluster: only the nodes of this gateway (group number)
+		QGW      string     `json:"gw"` // host.cluster: only the nodes of this gateway (group number)
 		QSMatch  string     `json:"smatch"`
 		Lookup   string     `json:"lookup"`
 		Paused   bool       `json:"paused"`
@@ -128,7 +163,7 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return lldpStatus(dc.NTP.LLDP), nil
+		return lldpStatus(dc.Settings.LLDP), nil
 	case "lldp.set":
 		if err := m.LLDPSet(a.Enabled, actor); err != nil {
 			return nil, err
@@ -156,6 +191,9 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 	case "cluster.token":
 		code, exp, err := m.cl.MintJoinCode(actor)
 		return map[string]any{"code": code, "expires": exp}, err
+	case "cluster.token.clear":
+		n, err := m.cl.ClearJoinCodes(actor)
+		return map[string]any{"cleared": n}, err
 	case "cluster.join":
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -255,19 +293,6 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 			q.Limit = logReadMax // the GUI never gets more than this in one reply
 		}
 		return ReadLog(q)
-	// query statistics
-	case "qstats.get":
-		from, to, err := qstatsRange(a.QFrom, a.QTo)
-		if err != nil {
-			return nil, err
-		}
-		f, err := qstatsFilter(a.QOutcome, a.QClient, a.QServer)
-		if err != nil {
-			return nil, err
-		}
-		f = f.withMatch(a.QCMatch, a.QSMatch)
-		return qstats.Query(from, to, f), nil
-	// the same for the whole cluster: every node's numbers added together (Node menu ▸ Cluster, --stats --all-nodes)
 	// packet capture: this node's Capture page, a timed capture (also what each node runs for the cluster-wide one), and
 	// the capture on every node at once
 	case "capture.interfaces":
@@ -306,55 +331,31 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 			return j, nil
 		}
 		return map[string]any{"none": true}, nil
-	// clear this node's statistics, and the file they were saved to
-	case "qstats.clear":
-		qstats.Clear()
-		if err := savePersisted(m.stateDir); err != nil {
-			warnf("statistics: saving after clear: %v", err)
-		}
-		warnf("statistics: %q cleared the statistics of this node", actor)
-		return map[string]any{"cleared": true}, nil
-	// the same on every node of the cluster
-	case "qstats.clear.cluster":
-		parts, infos := clusterGatherReq(context.Background(), m, proxyReq{User: actor, Method: "POST", Path: "/api/qstats/clear", CT: "application/json", Body: []byte("{}")}, clusterStatsTimeout,
-			func() (*struct{ Cleared bool }, error) {
-				qstats.Clear()
-				if err := savePersisted(m.stateDir); err != nil {
-					warnf("statistics: saving after clear: %v", err)
-				}
-				warnf("statistics: %q cleared the statistics of this node", actor)
-				return &struct{ Cleared bool }{true}, nil
-			})
-		if len(parts) == 0 {
-			return nil, errors.New("no node answered")
-		}
-		return map[string]any{"cleared": true, "nodes": infos}, nil
 	// nmap of a client
 	case "scan.start":
 		return scanStart(a.QClient, actor)
 	case "nettool.start":
-		return netToolStart(a.NetKind, a.QClient, actor)
+		o, err := netOptsParse(a.NetKind, a.PCount, a.PSize, a.PDF, a.PFam)
+		if err != nil {
+			return nil, err
+		}
+		return netToolStartOpts(a.NetKind, a.QClient, actor, o)
 	case "scan.get":
 		return scanGet(a.QClient)
 	case "nettool.get":
-		return netToolGet(a.NetKind, a.QClient)
-	case "qstats.cluster":
-		from, to, err := qstatsRange(a.QFrom, a.QTo)
+		o, err := netOptsParse(a.NetKind, a.PCount, a.PSize, a.PDF, a.PFam)
 		if err != nil {
 			return nil, err
 		}
-		f, err := qstatsFilter(a.QOutcome, a.QClient, a.QServer)
-		if err != nil {
-			return nil, err
-		}
-		f = f.withMatch(a.QCMatch, a.QSMatch)
-		gid := 0
-		if a.QGW != "" {
-			if gid, err = strconv.Atoi(a.QGW); err != nil || gid < 1 {
-				return nil, errors.New("bad gateway number")
-			}
-		}
-		return m.clusterQStatsGW(context.Background(), actor, from, to, f, gid)
+		return netToolGetOpts(a.NetKind, a.QClient, o)
+	case "portcheck.get":
+		return portCheck(a.QClient, a.PPorts, a.PFam)
+	case "tlscheck.get":
+		return tlsCheck(a.QClient, a.PPort, a.PSNI, a.PFam)
+	case "arp.get":
+		return arpLookup(a.PIP)
+	case "wake.send":
+		return wakeSend(a.PMAC, a.PBcast, actor)
 	case "host.cluster":
 		from, to, err := hostRange(a.QFrom, a.QTo)
 		if err != nil {
@@ -374,39 +375,16 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 			return nil, err
 		}
 		return hoststats.Query(from, to), nil
-	// how one upstream server has answered, per minute for up to 7 days (Topology ▸ server ▸ Statistics…, --server-stats)
-	case "ntp.serverstats":
-		from, to, err := hostRange(a.QFrom, a.QTo)
-		if err != nil {
-			return nil, err
-		}
-		addr := strings.TrimSpace(a.Addr)
-		if addr == "" {
-			return nil, errors.New("which server? give its address")
-		}
-		// a gateway ("gw:7") is named by its history key
-		if kindOf(addr) == "server" {
-			if n, err := normalizeServer(addr); err == nil {
-				addr = n
-			}
-		}
-		if kindOf(addr) == "gateway" && m.cl != nil {
-			return m.cl.clusterStats(addr, from, to) // every node's history of the gateway, not just this one's
-		}
-		res, err := srvhist.Query(addr, from, to)
-		if err == nil && !res.Known && m.cl != nil && m.cl.Enabled() {
-			// this node has nothing for it: a node probes only the servers of the gateways it serves, so the history of a
-			// server of another gateway is on the nodes that serve that one
-			if cr, cerr := m.cl.clusterStats(addr, from, to); cerr == nil && cr.Known {
-				cr.ViaCluster = true
-				return cr, nil
-			}
-		}
-		return res, err
 	// whois of a domain (asked of the registry from this node, only when requested)
 	case "whois.get":
 		return whoisWithAddrs(a.Lookup)
-	// a name for an address (reverse lookup) or an address for a name, for the Add NTP server form
+	// dig of a name, run on this node
+	case "dig.get":
+		return digRun(a.Name, a.QType, a.QServer)
+	// curl of a URL, run on this node
+	case "curl.get":
+		return curlRun(a.Lookup, a.QMethod, a.QFollow == "1" || a.QFollow == "true", a.QInsec == "1" || a.QInsec == "true")
+	// a name for an address (reverse lookup) or an address for a name
 	case "dns.lookup.full":
 		return lookupFull(a.Lookup)
 	case "schedule.status":
@@ -437,9 +415,6 @@ func (m *Mgmt) Op(cmd string, raw json.RawMessage, actor string) (any, error) {
 		return map[string]any{"started": true}, nil
 	case "host.lookup":
 		return hostLookup(a.Lookup)
-	// this node's clock, for the clock in the gateway circle (and --show-ntp)
-	case "time.now":
-		return nodeClock(), nil
 	// pause the whole node
 	case "node.status":
 		return m.NodePauseStatus()

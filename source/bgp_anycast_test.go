@@ -70,17 +70,13 @@ func TestMarkAnycastBGPColour(t *testing.T) {
 	anycastGateFn = func(*BGPConfig, string) string { return "" } // the colour is for the moment before the gate's next tick
 	t.Cleanup(func() { anycastGateFn = og })
 	hookLo(t)
-	up := newFakeNTP(t)
 	g := defaultGroup()
-	g.Interface = "ntpdirnone0"
-	d := testNTPCfg(up.addr)
-	d.ListenPort = freeUDPPort(t)
-	g.NTP, g.ExtraVIPs = &d, []string{"127.0.0.9"}
+	g.Interface = "netdirnone0"
+	g.ExtraVIPs = []string{"127.0.0.9"}
 	dc := newDaemonConfig()
 	dc.Groups = []GroupConfig{g}
 	s := NewSupervisor(context.Background(), dc)
 	t.Cleanup(s.StopAll)
-	s.refreshPool(dc, true)
 	s.mu.Lock()
 	s.startGroupLocked(dc.Groups[0])
 	s.mu.Unlock()

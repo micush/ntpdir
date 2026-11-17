@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"netdir/device"
 )
 
 // Mgmt is the management layer the CLI (over the status socket) and the web
@@ -33,7 +35,6 @@ type Mgmt struct {
 	certs    *CertManager
 	upd      *Updater
 	cl       *Cluster
-	croll    chronyRoll // this node's part in the rolling chrony restart
 	sched    *Scheduler // the scheduled tasks of this node (Operate ▸ Scheduler)
 
 	cfgMu sync.Mutex // serialises writes of the config file
@@ -58,7 +59,6 @@ type Mgmt struct {
 	tshootFn  func() map[string]any // what only the status server knows, for the troubleshooting bundle (see tshoot.go)
 	othersFn  func() int            // how many other nodes are in service (tests replace it; nil asks the cluster)
 	lastFn    func() string         // names a gateway only this node serves, "" if none (tests replace it; nil asks the cluster)
-	poolOf    func(gid int) *Pool   // the NTP pool serving a gateway on this node
 	servMu    sync.Mutex
 	servSince map[int]time.Time // when each gateway started being served continuously
 	gwUpMu    sync.Mutex
@@ -71,7 +71,7 @@ type Mgmt struct {
 
 // defaultStateDir holds history, certificates, cluster identity and update
 // files.  It is root-only.
-const defaultStateDir = "/var/lib/ntpdir"
+const defaultStateDir = "/var/lib/netdir"
 
 // NewMgmt builds the management layer for the given initial config.
 func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
@@ -87,11 +87,9 @@ func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
 		return nil, fmt.Errorf("state directory %s: %w", stateDir, err)
 	}
 	m := &Mgmt{confPath: confPath, stateDir: stateDir}
+	device.EntraRefreshed = m.entraRefreshed // a renewed Microsoft sign-in is stored in its login (devsignin.go)
 	m.sched = newScheduler(m, stateDir)
-	m.sched.SetTasks(dc.NTP.Schedule)
-	chrony.mu.Lock()
-	chrony.keyFile = filepath.Join(stateDir, "chrony-applied.key")
-	chrony.mu.Unlock()
+	m.sched.SetTasks(dc.Settings.Schedule)
 	m.bgp = NewBGPManager(stateDir)
 	w := dc.Web
 	m.webPolicy.Store(&w)
@@ -100,7 +98,6 @@ func NewMgmt(confPath, stateDir string, dc *DaemonConfig) (*Mgmt, error) {
 		return nil, err
 	}
 	m.certs = NewCertManager(stateDir, confPath, func() WebConfig { return *m.webPolicy.Load() })
-	ntsCertSource = func() (string, string) { i := m.certs.Status(); return i.CertFile, i.KeyFile } // chrony serves NTS with the GUI certificate
 	if m.upd, err = NewUpdater(stateDir); err != nil {
 		return nil, err
 	}
@@ -130,7 +127,7 @@ func (m *Mgmt) OnConfigLoaded(dc *DaemonConfig) {
 	m.webPolicy.Store(&w)
 	m.bgp.Apply(dc)
 	sysSink.Apply(dc.Syslog)
-	m.sched.SetTasks(dc.NTP.Schedule)
+	m.sched.SetTasks(dc.Settings.Schedule)
 	m.certs.Refresh()
 	if _, raw, err := m.LiveConfig(); err == nil {
 		if _, err := os.Stat(m.confPath); err == nil { // don't version a config that doesn't exist yet
@@ -142,6 +139,12 @@ func (m *Mgmt) OnConfigLoaded(dc *DaemonConfig) {
 		}
 	}
 	m.cl.OnConfig(dc)
+	// the devices or their logins may have changed: the drivers kept open for reads are closed (device/pool.go)
+	device.CacheFlush() // and what was learned about them (device/cache.go, answercache.go)
+	device.Answers.Flush()
+	if n := device.PoolFlush(); n > 0 {
+		debugf("devices: %d kept connection(s) closed: the configuration was loaded", n)
+	}
 }
 
 // keepNodePaused makes dc carry this node's live pause flag.  Whether the whole node is paused is changed only by
@@ -156,6 +159,20 @@ func (m *Mgmt) keepNodePaused(dc *DaemonConfig) {
 // PutConfig validates dc and makes it the node's configuration.  On a replica,
 // a change to the shared settings is first accepted by the primary.
 func (m *Mgmt) PutConfig(dc *DaemonConfig, actor, note string) error {
+	return m.PutConfigBase(dc, actor, note, "")
+}
+
+// ErrConfigChanged is a save refused because the shared settings changed after the copy it was made from was read.
+var ErrConfigChanged = errors.New("the configuration changed after this page loaded it (another page, another user, an import or another node): it was not saved, so nothing is overwritten; the page now shows what is saved, make the change again")
+
+// configBase is the token a page keeps with the configuration it read: it changes whenever the shared settings do (the devices, the
+// gateways, the keys, everything every node shares), and not for what is only this node's own.
+func configBase(dc *DaemonConfig) string { return sharedOf(dc).hash() }
+
+// PutConfigBase is PutConfig for a page that read the configuration earlier: base is the token it got with it (configBase).  When the
+// shared settings are not the ones it read, nothing is saved (ErrConfigChanged): a page that is hours old must not write its old
+// copy over the devices somebody imported since.  An empty base (the CLI, the API, an import file) saves as before.
+func (m *Mgmt) PutConfigBase(dc *DaemonConfig, actor, note, base string) error {
 	if err := dc.Validate(); err != nil {
 		return err
 	}
@@ -165,16 +182,19 @@ func (m *Mgmt) PutConfig(dc *DaemonConfig, actor, note string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkDNSDirAdded(cur, dc); err != nil {
-		return err
+	if base != "" && base != configBase(cur) {
+		return ErrConfigChanged
 	}
 	if err := checkVIPsNotNodes(cur, dc, m.cl); err != nil {
 		return err
 	}
 	if m.cl.Enabled() && m.cl.Snapshot().Role == RoleReplica && sharedOf(dc).hash() != sharedOf(cur).hash() {
-		payload := adminSharedConfig{Shared: sharedOf(dc), Seeds: seedsOf(dc)}
+		payload := adminSharedConfig{Shared: sharedOf(dc), Seeds: seedsOf(dc), Base: base}
 		out, err := m.cl.forwardAdmin("shared-config", actor, payload)
 		if err != nil {
+			if strings.Contains(err.Error(), ErrConfigChanged.Error()) {
+				return ErrConfigChanged // the primary has settings the page never read
+			}
 			return fmt.Errorf("this node is a replica: the change to the shared settings must be accepted by the primary (%s), and that failed: %w",
 				m.cl.Snapshot().PrimaryAddr, err)
 		}
@@ -394,7 +414,7 @@ func (m *Mgmt) UpdateApplyLocal(by string, force bool) (string, error) {
 		return "", errors.New("an update is already in progress on this node")
 	}
 	if ok, why := m.updateSafeToApply(); !ok && !force {
-		return "", fmt.Errorf("not safe to update this node now: %s (to update anyway: ntpdir --update-apply --yes, or confirm in the GUI)", why)
+		return "", fmt.Errorf("not safe to update this node now: %s (to update anyway: netdir --update-apply --yes, or confirm in the GUI)", why)
 	}
 	go func() {
 		if _, err := m.upd.Apply(context.Background(), m.cl.selfAddrForEvents(), by); err != nil {
@@ -417,7 +437,7 @@ var restartRecheck = 2 * time.Second
 // failed.  force skips the wait (the operator confirmed it).
 func (m *Mgmt) scheduleRestart(force bool) {
 	if m.restartFn == nil {
-		warnf("update: installed, but this process cannot restart itself — restart ntpdir to run the new version")
+		warnf("update: installed, but this process cannot restart itself — restart netdir to run the new version")
 		return
 	}
 	go func() {
@@ -494,6 +514,7 @@ func (m *Mgmt) runOnPrimary(op, by string, payload any) (json.RawMessage, error)
 type adminSharedConfig struct {
 	Shared SharedConfig `json:"shared"`
 	Seeds  []GroupSeed  `json:"seeds"`
+	Base   string       `json:"base,omitempty"` // what the page read (configBase): the primary refuses when its own settings are not those
 }
 
 // execAdminOp runs a write on this node, which must be the primary.
@@ -513,6 +534,11 @@ func (m *Mgmt) execAdminOp(op, by string, payload json.RawMessage) (json.RawMess
 		cur, _, err := m.LiveConfig()
 		if err != nil {
 			return nil, err
+		}
+		// The replica checked the page's base against its own copy, which can be behind the primary's (an import made on the primary a
+		// moment ago): only the primary knows what is really saved, so it checks too, or the replica's old copy overwrites it.
+		if p.Base != "" && p.Base != configBase(cur) {
+			return nil, ErrConfigChanged
 		}
 		if _, err := mergeShared(cur, p.Shared, p.Seeds); err != nil {
 			return nil, err
@@ -622,3 +648,6 @@ func (m *Mgmt) localGwIPs() []string {
 	}
 	return m.gwIPsFn()
 }
+
+// closeDevicePool closes the device drivers kept open for reads (the daemon is stopping).
+func closeDevicePool() { device.PoolFlush() }
