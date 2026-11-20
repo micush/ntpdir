@@ -1,5 +1,10 @@
 # Changelog
 
+## [v233] - 2026-11-20 — version bump
+
+### Changed
+- The version is 233. Nothing else changed since v232.
+
 ## [v232] - 2026-11-20 — each node can register its own addresses in DNS
 
 ### Added
