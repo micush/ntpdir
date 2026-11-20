@@ -270,6 +270,13 @@ func (m *Mgmt) TshootNode(capture bool, actor string) ([]byte, error) {
 		}
 	})
 	do(func() {
+		if st, err := m.DNSRegState(); err != nil {
+			b.fail("ntpdir/dnsreg.json", err)
+		} else {
+			b.putJSON("ntpdir/dnsreg.json", st)
+		}
+	})
+	do(func() {
 		if m.anycastFn != nil {
 			b.putJSON("ntpdir/anycast.json", m.anycastFn())
 		}
