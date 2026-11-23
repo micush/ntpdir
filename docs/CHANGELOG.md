@@ -1,5 +1,25 @@
 # Changelog
 
+## [v234] - 2026-11-23 — Gateway names in DNS, popup buttons on the right, a page icon of its own
+
+### Added
+
+- **Every gateway has two new optional fields, VIP FQDN and Anycast FQDN** (Topology ▸ New gateway and Edit gateway, and Configure ▸ Gateways; `fqdn` and `anycast_fqdn` in the file). They are shared by the cluster, checked as host names, and left out of the file when empty, so a configuration that never used them reads the same in older versions. Setting one while a node of the cluster runs an older version is refused, naming the node, because that node would drop the names when the settings reach it.
+- **DNS registration keeps the two names right.** The VIP FQDN gets the gateway's shared addresses (A and AAAA) and the Anycast FQDN its anycast addresses that are not paused. Every address of a name gets a PTR record pointing back at it. Every node with registration turned on does this, so whichever node is up keeps the names right, and **Remove records** (`--dnsreg-remove`) takes out only this node's own records, never the gateway names.
+
+### Changed
+
+- **The buttons of every popup are on the right**, as in filedir (they were on the left).
+- **The page icon (the one on the tab and the bookmark) is now red, a clock face**, so the six products can be told apart in a list of bookmarks. It was the same blue D as dnsdir's.
+
+### Verified
+
+- gofmt, vet, `go test -race ./...`, `node --check` on `app.js` and `help.js`, builds for linux amd64, arm64, arm, 386 and riscv64. New tests: the names survive a save and a read back, reach the primary from a replica, survive a sync between two nodes, an older node refuses a change to them, and a registration run puts both names and their PTR records in a fake DNS server and leaves them when this node's records are removed.
+
+### Not verified
+
+- A live run against a real DNS server and real nodes: the DNS side was tried against the fake server in the tests only. The popups and the icon were looked at in Chromium only through the mock page, not on a running daemon.
+
 ## [v233] - 2026-11-20 — version bump
 
 ### Changed

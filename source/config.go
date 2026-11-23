@@ -121,6 +121,11 @@ type GroupConfig struct {
 	// against the interface) that every running node holds on lo and answers NTP
 	// on, while this gateway's NTP pool is healthy.  Shared across the cluster.
 	ExtraVIPs []string `json:"extra_vips,omitempty"`
+	// FQDN is the DNS name people use for the gateway's shared address, AnycastFQDN the one for its anycast addresses; either may be
+	// empty.  Shared.  DNS registration (dnsreg.go) keeps each pointing at its addresses.  Omitted when empty so a configuration that
+	// never used them stays readable by older versions.
+	FQDN        string `json:"fqdn,omitempty"`
+	AnycastFQDN string `json:"anycast_fqdn,omitempty"`
 	// Piggyback marks the one gateway ntpdir has while dnsdir is installed on the same host: it has no address, interface
 	// or election of its own and answers NTP on every address of dnsdir's gateways (DNSDirVIPs, kept in step with dnsdir's
 	// configuration by the primary, see piggyback.go).  Shared.
@@ -335,6 +340,11 @@ func (g *GroupConfig) Validate() error {
 	}
 	if err := validGatewayName(g.Name); err != nil {
 		return fmt.Errorf("%s: %v", pre, err)
+	}
+	for _, n := range []struct{ k, v string }{{"fqdn", g.FQDN}, {"anycast_fqdn", g.AnycastFQDN}} {
+		if n.v != "" && (strings.Contains(n.v, ":") || strings.Contains(n.v, "/") || !validHostname(n.v)) {
+			return fmt.Errorf("%s: %s %q is not a host name (give the name alone, e.g. files.example.com)", pre, n.k, n.v)
+		}
 	}
 	if g.Piggyback && (g.VIP4 != "" || g.VIP6 != "" || len(g.MoreVIP4)+len(g.MoreVIP6)+len(g.ExtraVIPs) > 0) {
 		return fmt.Errorf("%s: a gateway that answers on AnyName's addresses has no addresses of its own", pre)

@@ -1805,6 +1805,8 @@
       form(g ? "Edit gateway" : "New gateway", [
         { k: "id", l: "Group number", v: String(g ? g.group_id : nextGroupId()), disabled: !!g },
         { k: "name", l: "Name", v: g ? (g.name || "") : "", ph: "optional, e.g. Core" },
+        { k: "fqdn", l: "VIP FQDN", v: g ? (g.fqdn || "") : "", ph: "optional, vip.example.com" },
+        { k: "afqdn", l: "Anycast FQDN", v: g ? (g.anycast_fqdn || "") : "", ph: "optional, any.example.com" },
         { k: "vip4", l: "IPv4 address / prefix", v: g ? g.vip4 : "", ph: "10.0.0.1/24" },
         { k: "vip6", l: "IPv6 address / prefix", v: g ? g.vip6 : "", ph: "optional, 2001:db8::1/64" },
         { k: "more4", l: "More IPv4 addresses", v: g ? (g.more_vip4 || []).join(", ") : "", ph: "optional, same subnet: 10.0.0.2, 10.0.0.3" },
@@ -1833,6 +1835,7 @@
         const dup = fb.find((a) => own.has(shortAddr(normAddr(a))) || own.has(a));
         if (dup) return dup + " is already one of this gateway's servers.";
         if ((v.name || "").length > 40) return "The name can be at most 40 characters.";
+        if ([v.fqdn, v.afqdn].some((n) => n && !/^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$/.test(n.trim()))) return "A name is a host name alone, e.g. vip.example.com.";
         if (!v.vip4 && !v.vip6) return "Give the gateway an IPv4 or IPv6 address, e.g. 10.0.0.1/24.";
         if (v.vip4 && !/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(v.vip4)) return "The IPv4 address needs a prefix length, e.g. 10.0.0.1/24.";
         if (v.vip6 && !(v.vip6.includes(":") && /^[0-9a-fA-F:.]+\/\d+$/.test(v.vip6))) return "The IPv6 address needs a prefix length, e.g. 2001:db8::1/64.";
@@ -1850,6 +1853,8 @@
           if (more4.length) g.more_vip4 = more4; else delete g.more_vip4;
           if (more6.length) g.more_vip6 = more6; else delete g.more_vip6;
           if (v.name.trim()) g.name = v.name.trim(); else delete g.name;
+          if ((v.fqdn || "").trim()) g.fqdn = v.fqdn.trim().toLowerCase(); else delete g.fqdn;
+          if ((v.afqdn || "").trim()) g.anycast_fqdn = v.afqdn.trim().toLowerCase(); else delete g.anycast_fqdn;
           if (fb.join(",") !== fallbackOf(g).join(",")) { ensureNTP(g); if (fb.length) g.ntp.fallback_servers = fb; else delete g.ntp.fallback_servers; }
           if (lbOwn) { ensureNTP(g); g.ntp.lb = lbOwn; }
           else if (g.ntp) { delete g.ntp.lb; Object.assign(g.ntp, LB_DEFAULTS); }   // back to following Settings
@@ -1857,7 +1862,7 @@
         }
         const id = Number(v.id);
         if (!(id >= 1 && id <= 255) || groups().some((x) => x.group_id === id)) return "Pick an unused group number between 1 and 255.";
-        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, ntp: { servers: DEFAULT_SERVERS.map(normAddr), ...(fb.length ? { fallback_servers: fb } : {}), ...(lbOwn ? { lb: lbOwn } : {}) } });
+        groups().push({ ...(v.name.trim() ? { name: v.name.trim() } : {}), ...((v.fqdn || "").trim() ? { fqdn: v.fqdn.trim().toLowerCase() } : {}), ...((v.afqdn || "").trim() ? { anycast_fqdn: v.afqdn.trim().toLowerCase() } : {}), group_id: id, interface: v.iface, vip4: v.vip4, vip6: v.vip6, ...(more4.length ? { more_vip4: more4 } : {}), ...(more6.length ? { more_vip6: more6 } : {}), real_macs: true, ntp: { servers: DEFAULT_SERVERS.map(normAddr), ...(fb.length ? { fallback_servers: fb } : {}), ...(lbOwn ? { lb: lbOwn } : {}) } });
         setGid(id); cv.sel = { kind: "gw" };
         return null;
       }, g ? "Save" : "Add gateway");
@@ -2282,6 +2287,8 @@
     { shared: true, k: "name", l: "Name", t: "text", hint: "Optional label." },
     { shared: true, k: "group_id", l: "Group ID", t: "int", def: 100, min: 1, max: 255 },
     { k: "interface", l: "Interface", t: "text" },
+    { shared: true, k: "fqdn", l: "VIP FQDN", t: "text", hint: "Optional, e.g. vip.example.com." },
+    { shared: true, k: "anycast_fqdn", l: "Anycast FQDN", t: "text", hint: "Optional, e.g. any.example.com." },
     { shared: true, k: "vip4", l: "IPv4 VIP/prefix", t: "text", hint: "e.g. 10.0.0.1/24 — empty to disable" },
     { shared: true, k: "vip6", l: "IPv6 VIP/prefix", t: "text", hint: "e.g. 2001:db8::1/64 — empty to disable" },
     { shared: true, k: "more_vip4", l: "More IPv4 addresses", t: "rows", rows: "morevip4", wide: true, hint: "Same subnet, one per row." },
@@ -3642,7 +3649,7 @@
             section("Syslog", syslog.el, h("div", { class: "toolbar" }, syslogTest, syslogMsg, syslogState),
               h("p", { class: "hint" }, "Every line the log shows is also sent to the server, from this node only: the setting is not copied to the other nodes. A server that is down never holds anything up; the newest messages wait in a queue and the oldest are dropped if it fills.")))],
           ["dns", "DNS", h("div", {}, section("DNS registration", dnsreg.el, h("div", { class: "toolbar" }, dnsBtn("Register now", "/api/dnsreg/now", "Checked."), dnsBtn("Remove records", "/api/dnsreg/remove", "Removed."), dnsMsg, dnsState),
-            h("p", { class: "hint" }, "This node puts its own addresses into DNS: its first address of each family as its host name, every interface as host-interface, and a PTR record for each address. The shared addresses of the gateways are never registered. Register now and Remove records use the saved settings. Turning this off leaves the records where they are; Remove records takes them out (turn this off first, or the next check puts them back). The setting is not copied to the other nodes.")))],
+            h("p", { class: "hint" }, "This node puts its own addresses into DNS: its first address of each family as its host name, every interface as host-interface, and a PTR record for each address. The names given to the gateways are registered too: a gateway's VIP FQDN holds its shared addresses and its Anycast FQDN its anycast addresses, each address with a PTR record back to its name (set them under Topology ▸ Edit gateway); the shared addresses are never registered under this node's own name. Register now and Remove records use the saved settings. Turning this off leaves the records where they are; Remove records takes them out (turn this off first, or the next check puts them back). The setting is not copied to the other nodes.")))],
           ["upgrades", "Upgrades", updatesCard() || section("Upgrades", h("p", { class: "hint" }, "The upgrade settings cannot be read right now."))],
           ["cluster", "Cluster", section("Cluster", cluster.el)],
         ];

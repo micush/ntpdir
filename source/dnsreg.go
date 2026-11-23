@@ -33,14 +33,16 @@ import (
 //
 //	hostname.domain           the node's first address of each family (A and AAAA)
 //	hostname-interface.domain every address of that interface
-//	PTR                       each address points back at the first of its names
+//	PTR                       each address points back at the first of its names (and each address of a gateway name at that name)
 //
 // The zone's primary server comes from the SOA record (or from the setting), the updates go over TCP and are signed with a TSIG
 // key when there is one.  The loop checks the records every interval (plus up to 30 % of jitter, so a rack of nodes does not
 // all ask in the same second) and only sends an update for a record that is wrong or missing.
 //
 // The setting is per node (never replicated): every node registers its own addresses.  The shared addresses of the gateways
-// (VIPs, anycast) are never registered: they move between nodes and are not any one node's.
+// (VIPs, anycast) are never registered under a node's name: they move between nodes and are not any one node's.  The one exception
+// is the gateway names (a gateway's fqdn and anycast_fqdn, when set): each points at the shared addresses of its gateway, and every
+// node keeps them right, so whichever node is up does it.  --dnsreg-remove leaves them (they are the cluster's, not this node's).
 
 const (
 	dnsRegDefaultInterval = 300
@@ -655,12 +657,13 @@ type dnsRegAddr struct {
 }
 
 type dnsReg struct {
-	mu   sync.Mutex
-	cfg  *DNSRegConfig
-	vips map[netip.Addr]bool
-	stop chan struct{}
-	done chan struct{}
-	st   DNSRegStatus
+	mu    sync.Mutex
+	cfg   *DNSRegConfig
+	vips  map[netip.Addr]bool
+	names []dnsRegFwd // the gateway names and what they point at (dnsRegNames)
+	stop  chan struct{}
+	done  chan struct{}
+	st    DNSRegStatus
 
 	runMu sync.Mutex // one run at a time, the loop's or a manual one
 
@@ -709,14 +712,89 @@ func dnsRegVIPs(dc *DaemonConfig) map[netip.Addr]bool {
 	return v
 }
 
+// dnsRegNames are the names the gateways are given (fqdn: the shared addresses of the gateway; anycast_fqdn: its anycast addresses
+// that are not paused on every node) with the addresses each is to hold.  A name given to several gateways holds all of their
+// addresses.
+func dnsRegNames(dc *DaemonConfig) []dnsRegFwd {
+	var out []dnsRegFwd
+	idx := map[string]int{}
+	put := func(name, addr string) {
+		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+		if i := strings.IndexByte(addr, '/'); i >= 0 {
+			addr = addr[:i]
+		}
+		a, err := netip.ParseAddr(strings.TrimSpace(addr))
+		if err != nil || name == "" || !validDNSName(name) {
+			return
+		}
+		a = a.Unmap()
+		typ := uint16(dnsTypeA)
+		if a.Is6() {
+			typ = dnsTypeAAAA
+		}
+		k := name + "/" + strconv.Itoa(int(typ))
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, dnsRegFwd{Name: name, Type: typ})
+		}
+		for _, x := range out[i].Addrs {
+			if x == a {
+				return
+			}
+		}
+		out[i].Addrs = append(out[i].Addrs, a)
+	}
+	for _, g := range dc.Groups {
+		if g.FQDN != "" {
+			for _, a := range append(append([]string{g.VIP4, g.VIP6}, g.MoreVIP4...), g.MoreVIP6...) {
+				put(g.FQDN, a)
+			}
+		}
+		if g.AnycastFQDN != "" {
+			for _, a := range g.ExtraVIPs {
+				if !containsStr(g.PausedVIPs, a) {
+					put(g.AnycastFQDN, a)
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
+}
+
+func sameNames(a, b []dnsRegFwd) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Type != b[i].Type || len(a[i].Addrs) != len(b[i].Addrs) {
+			return false
+		}
+		for j := range a[i].Addrs {
+			if a[i].Addrs[j] != b[i].Addrs[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Apply starts, restarts or stops the loop to match dc.  An unchanged setting does nothing.  Turning registration off leaves
 // the records where they are; --dnsreg-remove takes them out.
 func (r *dnsReg) Apply(dc *DaemonConfig) {
 	c := dc.DNSReg
 	vips := dnsRegVIPs(dc)
+	names := dnsRegNames(dc)
 	r.mu.Lock()
 	on := !c.empty() && c.Enabled && c.Validate() == nil
-	if on && r.stop != nil && r.cfg.same(c) && sameAddrSet(r.vips, vips) {
+	if on && r.stop != nil && r.cfg.same(c) && sameAddrSet(r.vips, vips) && sameNames(r.names, names) {
 		r.mu.Unlock()
 		return
 	}
@@ -726,7 +804,7 @@ func (r *dnsReg) Apply(dc *DaemonConfig) {
 		old = r.done
 		r.stop, r.done = nil, nil
 	}
-	r.cfg, r.vips = c.clone(), vips
+	r.cfg, r.vips, r.names = c.clone(), vips, names
 	r.st.Enabled, r.st.Running = on, false
 	if !on {
 		r.st.NextRun = ""
@@ -787,6 +865,9 @@ func (r *dnsReg) RunNow(dc *DaemonConfig, remove bool) DNSRegStatus {
 	if c == nil {
 		c = &DNSRegConfig{}
 	}
+	r.mu.Lock()
+	r.names = dnsRegNames(dc)
+	r.mu.Unlock()
 	return r.run(*c, dnsRegVIPs(dc), remove)
 }
 
@@ -1243,6 +1324,67 @@ func (r *dnsReg) work(cfg *DNSRegConfig, vips map[netip.Addr]bool, remove bool, 
 			rec(f.Name, typName[f.Type], val, "failed", err)
 		} else {
 			rec(f.Name, typName[f.Type], val, "updated", nil)
+		}
+	}
+
+	// the gateway names: kept right by every node, never removed by one
+	r.mu.Lock()
+	gwNames := append([]dnsRegFwd(nil), r.names...)
+	r.mu.Unlock()
+	nameZones := map[string]dnsZone{}
+	for _, f := range gwNames {
+		if remove {
+			break
+		}
+		want := make([]string, 0, len(f.Addrs))
+		for _, a := range f.Addrs {
+			want = append(want, a.String())
+		}
+		sort.Strings(want)
+		val := strings.Join(want, ", ")
+		z, ok := nameZones[f.Name]
+		if !ok {
+			var zerr error
+			if z, zerr = r.findZone(cfg, f.Name); zerr != nil {
+				rec(f.Name, typName[f.Type], val, "failed", fmt.Errorf("zone: %v", zerr))
+				continue
+			}
+			nameZones[f.Name] = z
+		}
+		have, err := r.current(z, f.Name, f.Type)
+		if err != nil {
+			rec(f.Name, typName[f.Type], val, "failed", err)
+			continue
+		}
+		if sameStrings(have, want) {
+			rec(f.Name, typName[f.Type], val, "ok", nil)
+			continue
+		}
+		ops := []dnsUpdateOp{{Name: f.Name, Type: f.Type}}
+		for _, a := range f.Addrs {
+			ops = append(ops, dnsUpdateOp{Add: true, Name: f.Name, Type: f.Type, TTL: ttl, RData: a.AsSlice()})
+		}
+		if err := r.update(z, ops, key); err != nil {
+			rec(f.Name, typName[f.Type], val, "failed", err)
+		} else {
+			rec(f.Name, typName[f.Type], val, "updated", nil)
+		}
+	}
+
+	// each address of a gateway name points back at that name (the VIP FQDN for the shared addresses, the Anycast FQDN for the anycast
+	// ones); an address in two names points at the first (the names are sorted), and none are removed by one node
+	if !remove {
+		seen := map[netip.Addr]bool{}
+		for _, p := range ptrs {
+			seen[p.Addr] = true
+		}
+		for _, f := range gwNames {
+			for _, a := range f.Addrs {
+				if !seen[a] {
+					seen[a] = true
+					ptrs = append(ptrs, dnsRegPTR{a, f.Name})
+				}
+			}
 		}
 	}
 
