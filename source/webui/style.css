@@ -804,3 +804,11 @@ table.mcpkeytab td input[readonly] { text-overflow: ellipsis; font-family: var(-
 .nav-theme + .nav-footer { margin-top: .3rem; }
 .theme-btn { appearance: none; background: none; border: 0; color: var(--muted); cursor: pointer; padding: .3rem; border-radius: 6px; line-height: 0; }
 .theme-btn:hover { color: var(--text); background: var(--surface-2); }
+
+/* Updates ▸ Nodes: the node name gets the room, the versions are narrow, the pills sit together; all left-aligned */
+table.evencols { table-layout: fixed; width: 100%; }
+table.evencols th.w-cb { width: 3rem; }
+table.evencols th.w-node { width: 26%; }
+table.evencols th.w-ver { width: 11%; }
+table.evencols th.w-pill { width: 15%; }
+table.evencols td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
