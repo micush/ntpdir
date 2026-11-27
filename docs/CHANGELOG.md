@@ -1,9 +1,9 @@
 # Changelog
 
-## [v236] - 2026-11-26 — BGP: AS Prepend from 0 to 8, and BFD on or off
+## [v237] - 2026-11-26 — BGP: AS Prepend from 0 to 8, and BFD on or off
 
 ### Changed
-- **AS Prepend is a drop-down from 0 to 8** (Anycast ▸ BGP, was a tick box that prepended three times). **0 (off)** is the default; 1 to 8 add the local AS that many more times to every anycast announcement (`set as-path prepend ASN …` in both outbound route-maps), so several backup nodes can be given an order. Kept as `as_prepend_count` in the node's config, written only when not 0: a config that does not use it stays readable by v235 and before, but one that does is refused by them (they refuse keys they do not know), so update every node you set it on before going back. A config with the old `"as_prepend": true` reads as 3 (what on did) and is written back with the new key only. CLI: `--as-prepend 0-8` (`on` and `off` still work, as 3 and 0); `--bgp` prints the number.
+- **AS Prepend is a drop-down from 0 to 8** (Anycast ▸ BGP, was a tick box that prepended three times). **0 (off)** is the default; 1 to 8 add the local AS that many more times to every anycast announcement (`set as-path prepend ASN …` in both outbound route-maps), so several backup nodes can be given an order. Kept as `as_prepend_count` in the node's config, written only when not 0: a config that does not use it stays readable by v236 and before, but one that does is refused by them (they refuse keys they do not know), so update every node you set it on before going back. A config with the old `"as_prepend": true` reads as 3 (what on did) and is written back with the new key only. CLI: `--as-prepend 0-8` (`on` and `off` still work, as 3 and 0); `--bgp` prints the number.
 - `--bgp` and the other BGP commands print the daemon's answer fresh: a setting the answer leaves out (because it is the default) no longer shows the value from before the change.
 
 ### Added
